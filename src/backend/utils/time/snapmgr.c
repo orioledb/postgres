@@ -116,6 +116,10 @@ TransactionId RecentXmin = FirstNormalTransactionId;
 /* (table, ctid) => (cmin, cmax) mapping during timetravel */
 static HTAB *tuplecid_data = NULL;
 
+snapshot_hook_type snapshot_register_hook = NULL;
+snapshot_hook_type snapshot_deregister_hook = NULL;
+reset_xmin_hook_type reset_xmin_hook = NULL;
+
 /*
  * Elements of the active snapshot stack.
  *
@@ -298,6 +302,8 @@ GetTransactionSnapshot(void)
 			/* Mark it as "registered" in FirstXactSnapshot */
 			FirstXactSnapshot->regd_count++;
 			pairingheap_add(&RegisteredSnapshots, &FirstXactSnapshot->ph_node);
+			if (snapshot_register_hook)
+				snapshot_register_hook(FirstXactSnapshot);
 		}
 		else
 			CurrentSnapshot = GetSnapshotData(&CurrentSnapshotData);
@@ -438,6 +444,8 @@ GetNonHistoricCatalogSnapshot(Oid relid)
 		 * CatalogSnapshot pointer is already valid.
 		 */
 		pairingheap_add(&RegisteredSnapshots, &CatalogSnapshot->ph_node);
+		if (snapshot_register_hook)
+			snapshot_register_hook(CatalogSnapshot);
 	}
 
 	return CatalogSnapshot;
@@ -459,6 +467,8 @@ InvalidateCatalogSnapshot(void)
 	if (CatalogSnapshot)
 	{
 		pairingheap_remove(&RegisteredSnapshots, &CatalogSnapshot->ph_node);
+		if (snapshot_deregister_hook)
+			snapshot_deregister_hook(CatalogSnapshot);
 		CatalogSnapshot = NULL;
 		SnapshotResetXmin();
 	}
@@ -593,6 +603,8 @@ SetTransactionSnapshot(Snapshot sourcesnap, VirtualTransactionId *sourcevxid,
 		/* Mark it as "registered" in FirstXactSnapshot */
 		FirstXactSnapshot->regd_count++;
 		pairingheap_add(&RegisteredSnapshots, &FirstXactSnapshot->ph_node);
+		if (snapshot_register_hook)
+			snapshot_register_hook(FirstXactSnapshot);
 	}
 
 	FirstSnapshotSet = true;
@@ -855,7 +867,11 @@ RegisterSnapshotOnOwner(Snapshot snapshot, ResourceOwner owner)
 	ResourceOwnerRememberSnapshot(owner, snap);
 
 	if (snap->regd_count == 1)
+	{
 		pairingheap_add(&RegisteredSnapshots, &snap->ph_node);
+		if (snapshot_register_hook)
+			snapshot_register_hook(snap);
+	}
 
 	return snap;
 }
@@ -893,7 +909,11 @@ UnregisterSnapshotFromOwner(Snapshot snapshot, ResourceOwner owner)
 
 	snapshot->regd_count--;
 	if (snapshot->regd_count == 0)
+	{
 		pairingheap_remove(&RegisteredSnapshots, &snapshot->ph_node);
+		if (snapshot_deregister_hook)
+			snapshot_deregister_hook(snapshot);
+	}
 
 	if (snapshot->regd_count == 0 && snapshot->active_count == 0)
 	{
@@ -944,6 +964,9 @@ static void
 SnapshotResetXmin(void)
 {
 	Snapshot	minSnapshot;
+
+	if (reset_xmin_hook)
+		reset_xmin_hook();
 
 	if (ActiveSnapshot != NULL)
 		return;
@@ -1038,6 +1061,8 @@ AtEOXact_Snapshot(bool isCommit, bool resetXmin)
 		Assert(FirstXactSnapshot->regd_count > 0);
 		Assert(!pairingheap_is_empty(&RegisteredSnapshots));
 		pairingheap_remove(&RegisteredSnapshots, &FirstXactSnapshot->ph_node);
+		if (snapshot_deregister_hook)
+			snapshot_deregister_hook(FirstXactSnapshot);
 	}
 	FirstXactSnapshot = NULL;
 
@@ -1069,6 +1094,8 @@ AtEOXact_Snapshot(bool isCommit, bool resetXmin)
 
 			pairingheap_remove(&RegisteredSnapshots,
 							   &esnap->snapshot->ph_node);
+			if (snapshot_deregister_hook)
+				snapshot_deregister_hook(esnap->snapshot);
 		}
 
 		exportedSnapshots = NIL;
@@ -1196,6 +1223,8 @@ ExportSnapshot(Snapshot snapshot)
 
 	snapshot->regd_count++;
 	pairingheap_add(&RegisteredSnapshots, &snapshot->ph_node);
+	if (snapshot_register_hook)
+		snapshot_register_hook(snapshot);
 
 	/*
 	 * Fill buf with a text serialization of the snapshot, plus identification
