@@ -174,7 +174,8 @@ retry:
 
 		PushActiveSnapshot(GetLatestSnapshot());
 
-		res = table_tuple_lock(rel, &(outslot->tts_tid), GetLatestSnapshot(),
+		res = table_tuple_lock(rel, PointerGetDatum(&(outslot->tts_tid)),
+							   GetLatestSnapshot(),
 							   outslot,
 							   GetCurrentCommandId(false),
 							   lockmode,
@@ -351,7 +352,8 @@ retry:
 
 		PushActiveSnapshot(GetLatestSnapshot());
 
-		res = table_tuple_lock(rel, &(outslot->tts_tid), GetLatestSnapshot(),
+		res = table_tuple_lock(rel, PointerGetDatum(&(outslot->tts_tid)),
+							   GetLatestSnapshot(),
 							   outslot,
 							   GetCurrentCommandId(false),
 							   lockmode,
@@ -426,6 +428,7 @@ ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
 	if (!skip_tuple)
 	{
 		List	   *recheckIndexes = NIL;
+		bool		insertIndexes;
 
 		/* Compute stored generated columns */
 		if (rel->rd_att->constr &&
@@ -440,9 +443,10 @@ ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
 			ExecPartitionCheck(resultRelInfo, slot, estate, true);
 
 		/* OK, store the tuple and create index entries for it */
-		simple_table_tuple_insert(resultRelInfo->ri_RelationDesc, slot);
+		simple_table_tuple_insert(resultRelInfo->ri_RelationDesc, slot,
+								  &insertIndexes);
 
-		if (resultRelInfo->ri_NumIndices > 0)
+		if (insertIndexes && resultRelInfo->ri_NumIndices > 0)
 			recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
 												   slot, estate, false, false,
 												   NULL, NIL);
@@ -486,7 +490,7 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 		resultRelInfo->ri_TrigDesc->trig_update_before_row)
 	{
 		if (!ExecBRUpdateTriggers(estate, epqstate, resultRelInfo,
-								  tid, NULL, slot))
+								  PointerGetDatum(tid), NULL, slot))
 			skip_tuple = true;	/* "do nothing" */
 	}
 
@@ -551,7 +555,7 @@ ExecSimpleRelationDelete(ResultRelInfo *resultRelInfo,
 		resultRelInfo->ri_TrigDesc->trig_delete_before_row)
 	{
 		skip_tuple = !ExecBRDeleteTriggers(estate, epqstate, resultRelInfo,
-										   tid, NULL, NULL);
+										   PointerGetDatum(tid), NULL, NULL);
 
 	}
 
