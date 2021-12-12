@@ -1637,6 +1637,9 @@ PerformWalRecovery(void)
 
 		RmgrStartup();
 
+		if (RedoStartHook != NULL)
+			RedoStartHook();
+
 		ereport(LOG,
 				(errmsg("redo starts at %X/%X",
 						LSN_FORMAT_ARGS(xlogreader->ReadRecPtr))));
@@ -1759,6 +1762,8 @@ PerformWalRecovery(void)
 					 * exit with special return code to request shutdown of
 					 * postmaster.  Log messages issued from postmaster.
 					 */
+					if (RedoFinishHook != NULL)
+						RedoFinishHook(false);
 					proc_exit(3);
 
 				case RECOVERY_TARGET_ACTION_PAUSE:
@@ -1783,6 +1788,9 @@ PerformWalRecovery(void)
 			ereport(LOG,
 					(errmsg("last completed transaction was at log time %s",
 							timestamptz_to_str(xtime))));
+
+		if (RedoFinishHook != NULL)
+			RedoFinishHook(true);
 
 		InRedo = false;
 	}
