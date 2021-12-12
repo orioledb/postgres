@@ -316,6 +316,7 @@ static OpClassCacheEnt *LookupOpclassInfo(Oid operatorClassOid,
 										  StrategyNumber numSupport);
 static void RelationCacheInitFileRemoveInDir(const char *tblspcpath);
 static void unlink_initfile(const char *initfilename, int elevel);
+static void release_rd_amcache(Relation rel);
 
 
 /*
@@ -2229,9 +2230,7 @@ RelationReloadIndexInfo(Relation relation)
 	RelationCloseSmgr(relation);
 
 	/* Must free any AM cached data upon relcache flush */
-	if (relation->rd_amcache)
-		pfree(relation->rd_amcache);
-	relation->rd_amcache = NULL;
+	release_rd_amcache(relation);
 
 	/*
 	 * If it's a shared index, we might be called before backend startup has
@@ -2449,8 +2448,7 @@ RelationDestroyRelation(Relation relation, bool remember_tupdesc)
 		pfree(relation->rd_options);
 	if (relation->rd_indextuple)
 		pfree(relation->rd_indextuple);
-	if (relation->rd_amcache)
-		pfree(relation->rd_amcache);
+	release_rd_amcache(relation);
 	if (relation->rd_fdwroutine)
 		pfree(relation->rd_fdwroutine);
 	if (relation->rd_indexcxt)
@@ -2512,9 +2510,7 @@ RelationClearRelation(Relation relation, bool rebuild)
 	RelationCloseSmgr(relation);
 
 	/* Free AM cached data, if any */
-	if (relation->rd_amcache)
-		pfree(relation->rd_amcache);
-	relation->rd_amcache = NULL;
+	release_rd_amcache(relation);
 
 	/*
 	 * Treat nailed-in system relations separately, they always need to be
@@ -6718,5 +6714,20 @@ unlink_initfile(const char *initfilename, int elevel)
 					(errcode_for_file_access(),
 					 errmsg("could not remove cache file \"%s\": %m",
 							initfilename)));
+	}
+}
+
+static void
+release_rd_amcache(Relation rel)
+{
+	if (table_has_extended_am(rel))
+	{
+		table_extended_free_rd_amcache(rel);
+	}
+	else
+	{
+		if (rel->rd_amcache)
+			pfree(rel->rd_amcache);
+		rel->rd_amcache = NULL;
 	}
 }
