@@ -2108,7 +2108,8 @@ heap_prepare_insert(Relation relation, HeapTuple tup, TransactionId xid,
  */
 void
 heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
-				  CommandId cid, int options, BulkInsertState bistate)
+				  CommandId cid, int options, BulkInsertState bistate,
+				  bool *insert_indexes)
 {
 	TransactionId xid = GetCurrentTransactionId();
 	HeapTuple  *heaptuples;
@@ -2347,6 +2348,7 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 			ReleaseBuffer(vmbuffer);
 
 		ndone += nthispage;
+		*insert_indexes = true;
 	}
 
 	/*
@@ -2382,6 +2384,7 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 		slots[i]->tts_tid = heaptuples[i]->t_self;
 
 	pgstat_count_heap_insert(relation, ntuples);
+	*insert_indexes = true;
 }
 
 /*
