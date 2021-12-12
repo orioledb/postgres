@@ -6226,8 +6226,17 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 
 	/* Determine flags */
 	if (!(relkind == RELKIND_FOREIGN_TABLE && row_trigger))
-		new_event.ate_flags = (row_trigger && event == TRIGGER_EVENT_UPDATE) ?
-			AFTER_TRIGGER_2CTID : AFTER_TRIGGER_1CTID;
+	{
+		if (row_trigger && event == TRIGGER_EVENT_UPDATE)
+		{
+			if (relkind == RELKIND_PARTITIONED_TABLE)
+				new_event.ate_flags = AFTER_TRIGGER_CP_UPDATE;
+			else
+				new_event.ate_flags = AFTER_TRIGGER_2CTID;
+		}
+		else
+			new_event.ate_flags = AFTER_TRIGGER_1CTID;
+	}
 
 	switch (event)
 	{
@@ -6480,20 +6489,6 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 		{
 			if (!list_member_oid(recheckIndexes, trigger->tgconstrindid))
 				continue;		/* Uniqueness definitely not violated */
-		}
-
-		/* Determine flags */
-		if (!(relkind == RELKIND_FOREIGN_TABLE && row_trigger))
-		{
-			if (row_trigger && event == TRIGGER_EVENT_UPDATE)
-			{
-				if (relkind == RELKIND_PARTITIONED_TABLE)
-					new_event.ate_flags = AFTER_TRIGGER_CP_UPDATE;
-				else
-					new_event.ate_flags = AFTER_TRIGGER_2CTID;
-			}
-			else
-				new_event.ate_flags = AFTER_TRIGGER_1CTID;
 		}
 
 		/*
