@@ -2438,6 +2438,7 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 	int			nused = buffer->nused;
 	ResultRelInfo *resultRelInfo = buffer->resultRelInfo;
 	TupleTableSlot **slots = buffer->slots;
+	bool		insertIndexes;
 
 	/* Set es_result_relation_info to the ResultRelInfo we're flushing. */
 	estate->es_result_relation_info = resultRelInfo;
@@ -2459,7 +2460,8 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 					   nused,
 					   mycid,
 					   ti_options,
-					   buffer->bistate);
+					   buffer->bistate,
+					   &insertIndexes);
 	MemoryContextSwitchTo(oldcontext);
 
 	for (i = 0; i < nused; i++)
@@ -2468,7 +2470,7 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 		 * If there are any indexes, update them for all the inserted tuples,
 		 * and run AFTER ROW INSERT triggers.
 		 */
-		if (resultRelInfo->ri_NumIndices > 0)
+		if (insertIndexes && resultRelInfo->ri_NumIndices > 0)
 		{
 			List	   *recheckIndexes;
 
@@ -3238,11 +3240,14 @@ CopyFrom(CopyState cstate)
 					}
 					else
 					{
-						/* OK, store the tuple and create index entries for it */
-						table_tuple_insert(resultRelInfo->ri_RelationDesc,
-										   myslot, mycid, ti_options, bistate);
+						bool		insertIndexes;
 
-						if (resultRelInfo->ri_NumIndices > 0)
+						/* OK, store the tuple and create index entries for it */
+						myslot = table_tuple_insert(resultRelInfo->ri_RelationDesc,
+													myslot, mycid, ti_options, bistate,
+													&insertIndexes);
+
+						if (insertIndexes && resultRelInfo->ri_NumIndices > 0)
 							recheckIndexes = ExecInsertIndexTuples(myslot,
 																   estate,
 																   false,

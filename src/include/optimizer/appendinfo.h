@@ -32,4 +32,9 @@ extern Relids adjust_child_relids_multilevel(PlannerInfo *root, Relids relids,
 extern AppendRelInfo **find_appinfos_by_relids(PlannerInfo *root,
 											   Relids relids, int *nappinfos);
 
+typedef bool (*UpdateTargetsHook)(PlannerInfo *root, Index rtindex,
+								  RangeTblEntry *target_rte,
+								  Relation target_relation);
+extern UpdateTargetsHook UpdateTargets_hook;
+
 #endif							/* APPENDINFO_H */
