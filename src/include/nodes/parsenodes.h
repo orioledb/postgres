@@ -1023,6 +1023,7 @@ typedef struct RangeTblEntry
 	char		relkind;		/* relation kind (see pg_class.relkind) */
 	int			rellockmode;	/* lock level that query requires on the rel */
 	struct TableSampleClause *tablesample;	/* sampling info, or NULL */
+	RowRefType	reftype;
 
 	/*
 	 * Fields valid for a subquery RTE (else NULL):
