@@ -53,6 +53,7 @@ extern PGDLLIMPORT bool track_wal_io_timing;
 extern PGDLLIMPORT int wal_decode_buffer_size;
 
 extern PGDLLIMPORT int CheckPointSegments;
+extern PGDLLIMPORT CommitSeqNo startupCommitSeqNo;
 
 /* Archive modes */
 typedef enum ArchiveMode
