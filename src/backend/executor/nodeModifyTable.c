@@ -147,7 +147,7 @@ static void ExecPendingInserts(EState *estate);
 static void ExecCrossPartitionUpdateForeignKey(ModifyTableContext *context,
 											   ResultRelInfo *sourcePartInfo,
 											   ResultRelInfo *destPartInfo,
-											   ItemPointer tupleid,
+											   Datum tupleid,
 											   TupleTableSlot *oldslot,
 											   TupleTableSlot *newslot);
 static bool ExecOnConflictUpdate(ModifyTableContext *context,
@@ -169,12 +169,12 @@ static TupleTableSlot *internalGetUpdateNewTuple(ResultRelInfo *relinfo,
 
 static TupleTableSlot *ExecMerge(ModifyTableContext *context,
 								 ResultRelInfo *resultRelInfo,
-								 ItemPointer tupleid,
+								 Datum tupleid,
 								 bool canSetTag);
 static void ExecInitMerge(ModifyTableState *mtstate, EState *estate);
 static bool ExecMergeMatched(ModifyTableContext *context,
 							 ResultRelInfo *resultRelInfo,
-							 ItemPointer tupleid,
+							 Datum tupleid,
 							 bool canSetTag);
 static void ExecMergeNotMatched(ModifyTableContext *context,
 								ResultRelInfo *resultRelInfo,
@@ -782,6 +782,7 @@ ExecInsert(ModifyTableContext *context,
 	OnConflictAction onconflict = node->onConflictAction;
 	PartitionTupleRouting *proute = mtstate->mt_partition_tuple_routing;
 	MemoryContext oldContext;
+	bool		isExtendedRoutine;
 
 	/*
 	 * If the input result relation is a partitioned table, find the leaf
@@ -800,6 +801,7 @@ ExecInsert(ModifyTableContext *context,
 	ExecMaterializeSlot(slot);
 
 	resultRelationDesc = resultRelInfo->ri_RelationDesc;
+	isExtendedRoutine = table_has_extended_am(resultRelationDesc);
 
 	/*
 	 * Open the table's indexes, if we have not done so already, so that we
@@ -1024,7 +1026,8 @@ ExecInsert(ModifyTableContext *context,
 			  resultRelInfo->ri_TrigDesc->trig_insert_before_row)))
 			ExecPartitionCheck(resultRelInfo, slot, estate, true);
 
-		if (onconflict != ONCONFLICT_NONE && resultRelInfo->ri_NumIndices > 0)
+		if (onconflict != ONCONFLICT_NONE && resultRelInfo->ri_NumIndices > 0 &&
+			!isExtendedRoutine)
 		{
 			/* Perform a speculative insertion. */
 			uint32		specToken;
@@ -1142,6 +1145,21 @@ ExecInsert(ModifyTableContext *context,
 
 			/* Since there was no insertion conflict, we're done */
 		}
+		else if (onconflict != ONCONFLICT_NONE &&
+				 resultRelInfo->ri_NumIndices > 0 &&
+				 isExtendedRoutine)
+		{
+			slot = table_extended_tuple_insert_on_conflict(mtstate, estate,
+														   resultRelInfo, slot);
+
+			if (slot == NULL)
+				return NULL;
+		}
+		else if (isExtendedRoutine)
+		{
+			table_extended_tuple_insert(resultRelationDesc, slot, estate,
+										estate->es_output_cid, 0, NULL);
+		}
 		else
 		{
 			/* insert the tuple normally */
@@ -1171,8 +1189,9 @@ ExecInsert(ModifyTableContext *context,
 		&& mtstate->mt_transition_capture->tcs_update_new_table)
 	{
 		ExecARUpdateTriggers(estate, resultRelInfo,
-							 NULL, NULL,
 							 NULL,
+							 NULL,
+							 PointerGetDatum(NULL),
 							 NULL,
 							 slot,
 							 NULL,
@@ -1315,7 +1334,7 @@ ExecPendingInserts(EState *estate)
  */
 static bool
 ExecDeletePrologue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
-				   ItemPointer tupleid, HeapTuple oldtuple,
+				   Datum tupleid, HeapTuple oldtuple,
 				   TupleTableSlot **epqreturnslot)
 {
 	/* BEFORE ROW DELETE triggers */
@@ -1343,17 +1362,36 @@ ExecDeletePrologue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
  */
 static TM_Result
 ExecDeleteAct(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
-			  ItemPointer tupleid, bool changingPart)
+			  Datum tupleid, bool changingPart)
 {
 	EState	   *estate = context->estate;
 
-	return table_tuple_delete(resultRelInfo->ri_RelationDesc, tupleid,
-							  estate->es_output_cid,
-							  estate->es_snapshot,
-							  estate->es_crosscheck_snapshot,
-							  true /* wait for commit */ ,
-							  &context->tmfd,
-							  changingPart);
+	if (!table_has_extended_am(resultRelInfo->ri_RelationDesc))
+	{
+		return table_tuple_delete(resultRelInfo->ri_RelationDesc,
+								  DatumGetItemPointer(tupleid),
+								  estate->es_output_cid,
+								  estate->es_snapshot,
+								  estate->es_crosscheck_snapshot,
+								  true /* wait for commit */ ,
+								  &context->tmfd,
+								  changingPart);
+	}
+	else
+	{
+		TupleTableSlot *slot = NULL;
+
+		if (resultRelInfo->ri_projectReturning)
+			slot = ExecGetReturningSlot(estate, resultRelInfo);
+		return table_extended_tuple_delete(context->mtstate, resultRelInfo,
+										   estate, tupleid, slot,
+										   estate->es_output_cid,
+										   estate->es_snapshot,
+										   estate->es_crosscheck_snapshot,
+										   true /* wait for commit */ ,
+										   &context->tmfd,
+										   changingPart);
+	}
 }
 
 /*
@@ -1365,7 +1403,7 @@ ExecDeleteAct(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
  */
 static void
 ExecDeleteEpilogue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
-				   ItemPointer tupleid, HeapTuple oldtuple, bool changingPart)
+				   Datum tupleid, HeapTuple oldtuple, bool changingPart)
 {
 	ModifyTableState *mtstate = context->mtstate;
 	EState	   *estate = context->estate;
@@ -1424,7 +1462,7 @@ ExecDeleteEpilogue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 static TupleTableSlot *
 ExecDelete(ModifyTableContext *context,
 		   ResultRelInfo *resultRelInfo,
-		   ItemPointer tupleid,
+		   Datum tupleid,
 		   HeapTuple oldtuple,
 		   bool processReturning,
 		   bool changingPart,
@@ -1558,7 +1596,8 @@ ldelete:;
 					inputslot = EvalPlanQualSlot(context->epqstate, resultRelationDesc,
 												 resultRelInfo->ri_RangeTableIndex);
 
-					result = table_tuple_lock(resultRelationDesc, tupleid,
+					result = table_tuple_lock(resultRelationDesc,
+											  DatumGetItemPointer(tupleid),
 											  estate->es_snapshot,
 											  inputslot, estate->es_output_cid,
 											  LockTupleExclusive, LockWaitBlock,
@@ -1676,9 +1715,11 @@ ldelete:;
 		 */
 		TupleTableSlot *rslot;
 
-		if (resultRelInfo->ri_FdwRoutine)
+		if (resultRelInfo->ri_FdwRoutine ||
+			table_has_extended_am(resultRelationDesc))
 		{
 			/* FDW must have provided a slot containing the deleted row */
+			slot = ExecGetReturningSlot(estate, resultRelInfo);
 			Assert(!TupIsNull(slot));
 		}
 		else
@@ -1690,8 +1731,9 @@ ldelete:;
 			}
 			else
 			{
-				if (!table_tuple_fetch_row_version(resultRelationDesc, tupleid,
-												   SnapshotAny, slot))
+				if (!table_extended_tuple_fetch_row_version(resultRelationDesc,
+															tupleid,
+															SnapshotAny, slot))
 					elog(ERROR, "failed to fetch deleted tuple for DELETE RETURNING");
 			}
 		}
@@ -1732,7 +1774,7 @@ ldelete:;
 static bool
 ExecCrossPartitionUpdate(ModifyTableContext *context,
 						 ResultRelInfo *resultRelInfo,
-						 ItemPointer tupleid, HeapTuple oldtuple,
+						 Datum tupleid, HeapTuple oldtuple,
 						 TupleTableSlot *slot,
 						 bool canSetTag,
 						 UpdateContext *updateCxt,
@@ -1838,10 +1880,10 @@ ExecCrossPartitionUpdate(ModifyTableContext *context,
 			if (unlikely(!resultRelInfo->ri_projectNewInfoValid))
 				ExecInitUpdateProjection(mtstate, resultRelInfo);
 			oldSlot = resultRelInfo->ri_oldTupleSlot;
-			if (!table_tuple_fetch_row_version(resultRelInfo->ri_RelationDesc,
-											   tupleid,
-											   SnapshotAny,
-											   oldSlot))
+			if (!table_extended_tuple_fetch_row_version(resultRelInfo->ri_RelationDesc,
+														tupleid,
+														SnapshotAny,
+														oldSlot))
 				elog(ERROR, "failed to fetch tuple being updated");
 			/* and project the new tuple to retry the UPDATE with */
 			context->cpUpdateRetrySlot =
@@ -1887,7 +1929,7 @@ ExecCrossPartitionUpdate(ModifyTableContext *context,
  */
 static bool
 ExecUpdatePrologue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
-				   ItemPointer tupleid, HeapTuple oldtuple, TupleTableSlot *slot)
+				   Datum tupleid, HeapTuple oldtuple, TupleTableSlot *slot)
 {
 	Relation	resultRelationDesc = resultRelInfo->ri_RelationDesc;
 
@@ -1962,7 +2004,7 @@ ExecUpdatePrepareSlot(ResultRelInfo *resultRelInfo,
  */
 static TM_Result
 ExecUpdateAct(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
-			  ItemPointer tupleid, HeapTuple oldtuple, TupleTableSlot *slot,
+			  Datum tupleid, HeapTuple oldtuple, TupleTableSlot *slot,
 			  bool canSetTag, UpdateContext *updateCxt)
 {
 	EState	   *estate = context->estate;
@@ -2011,6 +2053,7 @@ lreplace:;
 	 * If a partition check failed, try to move the row into the right
 	 * partition.
 	 */
+ex_partition_constraint_failed:
 	if (partition_constraint_failed)
 	{
 		TupleTableSlot *inserted_tuple;
@@ -2091,13 +2134,41 @@ lreplace:;
 	 * for referential integrity updates in transaction-snapshot mode
 	 * transactions.
 	 */
-	result = table_tuple_update(resultRelationDesc, tupleid, slot,
-								estate->es_output_cid,
-								estate->es_snapshot,
-								estate->es_crosscheck_snapshot,
-								true /* wait for commit */ ,
-								&context->tmfd, &updateCxt->lockmode,
-								&updateCxt->updateIndexes);
+	if (!table_has_extended_am(resultRelationDesc))
+	{
+		result = table_tuple_update(resultRelationDesc,
+									DatumGetItemPointer(tupleid), slot,
+									estate->es_output_cid,
+									estate->es_snapshot,
+									estate->es_crosscheck_snapshot,
+									true /* wait for commit */ ,
+									&context->tmfd, &updateCxt->lockmode,
+									&updateCxt->updateIndexes);
+	}
+	else
+	{
+		result = table_extended_tuple_update(context->mtstate, resultRelInfo,
+											 estate,
+											 tupleid,
+											 slot,
+											 estate->es_output_cid,
+											 estate->es_snapshot,
+											 estate->es_crosscheck_snapshot,
+											 true /* wait for commit */ ,
+											 &context->tmfd,
+											 &updateCxt->lockmode,
+											 &updateCxt->updateIndexes);
+		if (result == TM_Updated)
+		{
+			/*
+			 * table_extended_tuple_update() returns TM_Updated iff
+				* partition constraint failed.
+				*/
+			partition_constraint_failed = true;
+			goto ex_partition_constraint_failed;
+		}
+	}
+
 	if (result == TM_Ok)
 		updateCxt->updated = true;
 
@@ -2112,7 +2183,7 @@ lreplace:;
  */
 static void
 ExecUpdateEpilogue(ModifyTableContext *context, UpdateContext *updateCxt,
-				   ResultRelInfo *resultRelInfo, ItemPointer tupleid,
+				   ResultRelInfo *resultRelInfo, Datum tupleid,
 				   HeapTuple oldtuple, TupleTableSlot *slot,
 				   List *recheckIndexes)
 {
@@ -2158,7 +2229,7 @@ static void
 ExecCrossPartitionUpdateForeignKey(ModifyTableContext *context,
 								   ResultRelInfo *sourcePartInfo,
 								   ResultRelInfo *destPartInfo,
-								   ItemPointer tupleid,
+								   Datum tupleid,
 								   TupleTableSlot *oldslot,
 								   TupleTableSlot *newslot)
 {
@@ -2247,7 +2318,7 @@ ExecCrossPartitionUpdateForeignKey(ModifyTableContext *context,
  */
 static TupleTableSlot *
 ExecUpdate(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
-		   ItemPointer tupleid, HeapTuple oldtuple, TupleTableSlot *slot,
+		   Datum tupleid, HeapTuple oldtuple, TupleTableSlot *slot,
 		   bool canSetTag)
 {
 	EState	   *estate = context->estate;
@@ -2373,7 +2444,8 @@ redo_act:
 					inputslot = EvalPlanQualSlot(context->epqstate, resultRelationDesc,
 												 resultRelInfo->ri_RangeTableIndex);
 
-					result = table_tuple_lock(resultRelationDesc, tupleid,
+					result = table_tuple_lock(resultRelationDesc,
+											  DatumGetItemPointer(tupleid),
 											  estate->es_snapshot,
 											  inputslot, estate->es_output_cid,
 											  updateCxt.lockmode, LockWaitBlock,
@@ -2401,7 +2473,7 @@ redo_act:
 							/* Fetch the most recent version of old tuple. */
 							oldSlot = resultRelInfo->ri_oldTupleSlot;
 							if (!table_tuple_fetch_row_version(resultRelationDesc,
-															   tupleid,
+															   DatumGetItemPointer(tupleid),
 															   SnapshotAny,
 															   oldSlot))
 								elog(ERROR, "failed to fetch tuple being updated");
@@ -2680,7 +2752,7 @@ ExecOnConflictUpdate(ModifyTableContext *context,
 
 	/* Execute UPDATE with projection */
 	*returning = ExecUpdate(context, resultRelInfo,
-							conflictTid, NULL,
+							PointerGetDatum(conflictTid), NULL,
 							resultRelInfo->ri_onConflict->oc_ProjSlot,
 							canSetTag);
 
@@ -2698,7 +2770,7 @@ ExecOnConflictUpdate(ModifyTableContext *context,
  */
 static TupleTableSlot *
 ExecMerge(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
-		  ItemPointer tupleid, bool canSetTag)
+		  Datum tupleid, bool canSetTag)
 {
 	bool		matched;
 
@@ -2745,7 +2817,7 @@ ExecMerge(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	 * from ExecMergeNotMatched to ExecMergeMatched, there is no risk of a
 	 * livelock.
 	 */
-	matched = tupleid != NULL;
+	matched = DatumGetPointer(tupleid) != NULL;
 	if (matched)
 		matched = ExecMergeMatched(context, resultRelInfo, tupleid, canSetTag);
 
@@ -2784,7 +2856,7 @@ ExecMerge(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
  */
 static bool
 ExecMergeMatched(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
-				 ItemPointer tupleid, bool canSetTag)
+				 Datum tupleid, bool canSetTag)
 {
 	ModifyTableState *mtstate = context->mtstate;
 	TupleTableSlot *newslot;
@@ -2821,10 +2893,10 @@ lmerge_matched:;
 	 * MVCC snapshot.
 	 */
 
-	if (!table_tuple_fetch_row_version(resultRelInfo->ri_RelationDesc,
-									   tupleid,
-									   SnapshotAny,
-									   resultRelInfo->ri_oldTupleSlot))
+	if (!table_extended_tuple_fetch_row_version(resultRelInfo->ri_RelationDesc,
+												tupleid,
+												SnapshotAny,
+												resultRelInfo->ri_oldTupleSlot))
 		elog(ERROR, "failed to fetch the target tuple");
 
 	foreach(l, resultRelInfo->ri_matchedMergeAction)
@@ -3007,7 +3079,8 @@ lmerge_matched:;
 					inputslot = EvalPlanQualSlot(epqstate, resultRelationDesc,
 												 resultRelInfo->ri_RangeTableIndex);
 
-					result = table_tuple_lock(resultRelationDesc, tupleid,
+					result = table_tuple_lock(resultRelationDesc,
+											  DatumGetItemPointer(tupleid),
 											  estate->es_snapshot,
 											  inputslot, estate->es_output_cid,
 											  lockmode, LockWaitBlock,
@@ -3060,7 +3133,7 @@ lmerge_matched:;
 							 * Update tupleid to that of the new tuple, for
 							 * the refetch we do at the top.
 							 */
-							ItemPointerCopy(&context->tmfd.ctid, tupleid);
+							ItemPointerCopy(&context->tmfd.ctid, DatumGetItemPointer(tupleid));
 							goto lmerge_matched;
 
 						case TM_Deleted:
@@ -3581,7 +3654,7 @@ ExecModifyTable(PlanState *pstate)
 	ItemPointerData tuple_ctid;
 	HeapTupleData oldtupdata;
 	HeapTuple	oldtuple;
-	ItemPointer tupleid;
+	Datum		tupleid;
 
 	CHECK_FOR_INTERRUPTS();
 
@@ -3630,6 +3703,8 @@ ExecModifyTable(PlanState *pstate)
 	 */
 	for (;;)
 	{
+		RowRefType	refType;
+
 		/*
 		 * Reset the per-output-tuple exprcontext.  This is needed because
 		 * triggers expect to use that context as workspace.  It's a bit ugly
@@ -3679,7 +3754,7 @@ ExecModifyTable(PlanState *pstate)
 				{
 					EvalPlanQualSetSlot(&node->mt_epqstate, context.planSlot);
 
-					ExecMerge(&context, node->resultRelInfo, NULL, node->canSetTag);
+					ExecMerge(&context, node->resultRelInfo, PointerGetDatum(NULL), node->canSetTag);
 					continue;	/* no RETURNING support yet */
 				}
 
@@ -3715,7 +3790,8 @@ ExecModifyTable(PlanState *pstate)
 		EvalPlanQualSetSlot(&node->mt_epqstate, context.planSlot);
 		slot = context.planSlot;
 
-		tupleid = NULL;
+		refType = resultRelInfo->ri_RowRefType;
+		tupleid = PointerGetDatum(NULL);
 		oldtuple = NULL;
 
 		/*
@@ -3757,16 +3833,29 @@ ExecModifyTable(PlanState *pstate)
 					{
 						EvalPlanQualSetSlot(&node->mt_epqstate, context.planSlot);
 
-						ExecMerge(&context, node->resultRelInfo, NULL, node->canSetTag);
+						ExecMerge(&context, node->resultRelInfo, PointerGetDatum(NULL), node->canSetTag);
 						continue;	/* no RETURNING support yet */
 					}
 
 					elog(ERROR, "ctid is NULL");
 				}
 
-				tupleid = (ItemPointer) DatumGetPointer(datum);
-				tuple_ctid = *tupleid;	/* be sure we don't free ctid!! */
-				tupleid = &tuple_ctid;
+				if (refType == ROW_REF_TID)
+				{
+						/* shouldn't ever get a null result... */
+					if (isNull)
+						elog(ERROR, "ctid is NULL");
+
+					tuple_ctid = *((ItemPointer) DatumGetPointer(datum));	/* be sure we don't free ctid!! */
+					tupleid = PointerGetDatum(&tuple_ctid);
+				}
+				else
+				{
+					Assert(refType == ROW_REF_ROWID);
+					tupleid = datumCopy(datum, false, -1);
+					if (isNull)
+						elog(ERROR, "rowid is NULL");
+				}
 			}
 
 			/*
@@ -3843,9 +3932,10 @@ ExecModifyTable(PlanState *pstate)
 					/* Fetch the most recent version of old tuple. */
 					Relation	relation = resultRelInfo->ri_RelationDesc;
 
-					if (!table_tuple_fetch_row_version(relation, tupleid,
-													   SnapshotAny,
-													   oldSlot))
+					if (!table_extended_tuple_fetch_row_version(relation,
+																tupleid,
+																SnapshotAny,
+																oldSlot))
 						elog(ERROR, "failed to fetch tuple being updated");
 				}
 				slot = internalGetUpdateNewTuple(resultRelInfo, context.planSlot,
@@ -3871,6 +3961,9 @@ ExecModifyTable(PlanState *pstate)
 				elog(ERROR, "unknown operation");
 				break;
 		}
+
+		if (refType == ROW_REF_ROWID && DatumGetPointer(tupleid) != NULL)
+			pfree(DatumGetPointer(tupleid));
 
 		/*
 		 * If we got a RETURNING result, return it to caller.  We'll continue
@@ -4078,6 +4171,9 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	for (i = 0; i < nrels; i++)
 	{
 		resultRelInfo = &mtstate->resultRelInfo[i];
+		rel = resultRelInfo->ri_RelationDesc;
+
+		resultRelInfo->ri_RowRefType = table_get_row_ref_type(rel);
 
 		/* Let FDWs init themselves for foreign-table result rels */
 		if (!resultRelInfo->ri_usesFdwDirectModify &&
@@ -4109,10 +4205,20 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 				relkind == RELKIND_MATVIEW ||
 				relkind == RELKIND_PARTITIONED_TABLE)
 			{
-				resultRelInfo->ri_RowIdAttNo =
-					ExecFindJunkAttributeInTlist(subplan->targetlist, "ctid");
-				if (!AttributeNumberIsValid(resultRelInfo->ri_RowIdAttNo))
-					elog(ERROR, "could not find junk ctid column");
+				if (resultRelInfo->ri_RowRefType == ROW_REF_TID)
+				{
+					resultRelInfo->ri_RowIdAttNo =
+						ExecFindJunkAttributeInTlist(subplan->targetlist, "ctid");
+					if (!AttributeNumberIsValid(resultRelInfo->ri_RowIdAttNo))
+						elog(ERROR, "could not find junk ctid column");
+				}
+				else
+				{
+					resultRelInfo->ri_RowIdAttNo =
+						ExecFindJunkAttributeInTlist(subplan->targetlist, "rowid");
+					if (!AttributeNumberIsValid(resultRelInfo->ri_RowIdAttNo))
+						elog(ERROR, "could not find junk rowid column");
+				}
 			}
 			else if (relkind == RELKIND_FOREIGN_TABLE)
 			{
@@ -4420,6 +4526,16 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 			resultRelInfo->ri_BatchSize = 1;
 	}
 
+	{
+		for (i = 0; i < nrels; i++)
+		{
+			resultRelInfo = &mtstate->resultRelInfo[i];
+			rel = resultRelInfo->ri_RelationDesc;
+			if (table_has_extended_am(rel))
+				table_extended_init_modify(mtstate, resultRelInfo);
+		}
+	}
+
 	/*
 	 * Lastly, if this is not the primary (canSetTag) ModifyTable node, add it
 	 * to estate->es_auxmodifytables so that it will be run to completion by
@@ -4432,6 +4548,8 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	if (!mtstate->canSetTag)
 		estate->es_auxmodifytables = lcons(mtstate,
 										   estate->es_auxmodifytables);
+
+
 
 	return mtstate;
 }
