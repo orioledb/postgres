@@ -260,7 +260,12 @@ toast_get_compression_id(struct varlena *attr)
 	 * the external toast pointer.  If compressed inline, fetch it from the
 	 * toast compression header.
 	 */
-	if (VARATT_IS_EXTERNAL_ONDISK(attr))
+	if (VARATT_IS_EXTERNAL_ORIOLEDB(attr))
+	{
+		OToastExternal *toasted = (OToastExternal*) VARDATA_EXTERNAL(attr);
+		cmid = toasted->formatFlags >> ORIOLEDB_EXT_FORMAT_FLAGS_BITS;
+	}
+	else if (VARATT_IS_EXTERNAL_ONDISK(attr))
 	{
 		struct varatt_external toast_pointer;
 
