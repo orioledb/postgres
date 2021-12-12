@@ -212,4 +212,9 @@ extern void AtEOXact_TypeCache(void);
 
 extern void AtEOSubXact_TypeCache(void);
 
+typedef void (*load_typcache_tupdesc_hook_type)(TypeCacheEntry *typentry);
+extern PGDLLIMPORT load_typcache_tupdesc_hook_type load_typcache_tupdesc_hook;
+typedef void (*load_enum_cache_data_hook_type)(TypeCacheEntry *tcache);
+extern PGDLLIMPORT load_enum_cache_data_hook_type load_enum_cache_data_hook;
+
 #endif							/* TYPCACHE_H */
