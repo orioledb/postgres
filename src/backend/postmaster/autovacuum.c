@@ -465,6 +465,7 @@ AutoVacLauncherMain(const void *startup_data, size_t startup_data_len)
 		 * transaction.
 		 */
 		LWLockReleaseAll();
+		CustomErrorCleanup();
 		pgstat_report_wait_end();
 		pgaio_error_cleanup();
 		UnlockBuffers();
