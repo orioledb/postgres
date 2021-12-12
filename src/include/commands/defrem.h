@@ -162,4 +162,7 @@ extern int	defGetTypeLength(DefElem *def);
 extern List *defGetStringList(DefElem *def);
 pg_noreturn extern void errorConflictingDefElem(DefElem *defel, ParseState *pstate);
 
+typedef Oid (*GetDefaultOpClass_hook_type)(Oid type_id, Oid am_id);
+extern PGDLLIMPORT GetDefaultOpClass_hook_type GetDefaultOpClass_hook;
+
 #endif							/* DEFREM_H */
