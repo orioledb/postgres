@@ -5119,7 +5119,7 @@ pg_column_toast_chunk_id(PG_FUNCTION_ARGS)
 
 	attr = (struct varlena *) DatumGetPointer(PG_GETARG_DATUM(0));
 
-	if (!VARATT_IS_EXTERNAL_ONDISK(attr))
+	if (!(VARATT_IS_EXTERNAL_ONDISK(attr) || VARATT_IS_EXTERNAL_ORIOLEDB(attr)))
 		PG_RETURN_NULL();
 
 	VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
