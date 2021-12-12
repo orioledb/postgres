@@ -98,6 +98,7 @@ static void
 ShutdownAuxiliaryProcess(int code, Datum arg)
 {
 	LWLockReleaseAll();
+	CustomErrorCleanup();
 	ConditionVariableCancelSleep();
 	pgstat_report_wait_end();
 }
