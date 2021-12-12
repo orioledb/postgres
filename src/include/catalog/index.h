@@ -211,4 +211,6 @@ itemptr_decode(ItemPointer itemptr, int64 encoded)
 	ItemPointerSet(itemptr, block, offset);
 }
 
+extern void index_update_stats(Relation rel, bool hasindex, double reltuples);
+
 #endif							/* INDEX_H */
