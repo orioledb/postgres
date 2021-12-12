@@ -50,6 +50,7 @@ extern PGDLLIMPORT int postmaster_alive_fds[2];
 
 extern PGDLLIMPORT const char *progname;
 
+extern bool IsFatalError(void);
 extern void PostmasterMain(int argc, char *argv[]) pg_attribute_noreturn();
 extern void ClosePostmasterPorts(bool am_syslogger);
 extern void InitProcessGlobals(void);
