@@ -21,6 +21,7 @@
 
 typedef void (*SyscacheCallbackFunction) (Datum arg, int cacheid, uint32 hashvalue);
 typedef void (*RelcacheCallbackFunction) (Datum arg, Oid relid);
+typedef void (*UsercacheCallbackFunction) (Datum arg, Oid arg1, Oid arg2, Oid arg3);
 
 
 extern void AcceptInvalidationMessages(void);
@@ -56,6 +57,9 @@ extern void CacheRegisterSyscacheCallback(int cacheid,
 										  Datum arg);
 
 extern void CacheRegisterRelcacheCallback(RelcacheCallbackFunction func,
+										  Datum arg);
+
+extern void CacheRegisterUsercacheCallback(UsercacheCallbackFunction func,
 										  Datum arg);
 
 extern void CallSyscacheCallbacks(int cacheid, uint32 hashvalue);
