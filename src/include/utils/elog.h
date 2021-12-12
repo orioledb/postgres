@@ -542,4 +542,10 @@ extern void write_stderr(const char *fmt,...) pg_attribute_printf(1, 2);
  */
 extern void write_stderr_signal_safe(const char *fmt);
 
+typedef void (*CustomErrorCleanupHookType) (void);
+
+extern CustomErrorCleanupHookType CustomErrorCleanupHook;
+
+extern void CustomErrorCleanup(void);
+
 #endif							/* ELOG_H */
