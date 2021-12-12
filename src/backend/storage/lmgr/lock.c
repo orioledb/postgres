@@ -784,7 +784,7 @@ LockAcquireExtended(const LOCKTAG *locktag,
 					bool reportMemoryError,
 					LOCALLOCK **locallockp)
 {
-	LOCKMETHODID lockmethodid = locktag->locktag_lockmethodid;
+	LOCKMETHODID lockmethodid;
 	LockMethod	lockMethodTable;
 	LOCALLOCKTAG localtag;
 	LOCALLOCK  *locallock;
@@ -796,6 +796,15 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	LWLock	   *partitionLock;
 	bool		found_conflict;
 	bool		log_lock = false;
+	bool		no_log_lock = false;
+
+	if (locktag->locktag_lockmethodid == NO_LOG_LOCKMETHOD)
+	{
+		((LOCKTAG *)locktag)->locktag_lockmethodid = DEFAULT_LOCKMETHOD;
+		no_log_lock = true;
+	}
+
+	lockmethodid = locktag->locktag_lockmethodid;
 
 	if (lockmethodid <= 0 || lockmethodid >= lengthof(LockMethods))
 		elog(ERROR, "unrecognized lock method: %d", lockmethodid);
@@ -910,7 +919,8 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	if (lockmode >= AccessExclusiveLock &&
 		locktag->locktag_type == LOCKTAG_RELATION &&
 		!RecoveryInProgress() &&
-		XLogStandbyInfoActive())
+		XLogStandbyInfoActive() &&
+		!no_log_lock)
 	{
 		LogAccessExclusiveLockPrepare();
 		log_lock = true;
