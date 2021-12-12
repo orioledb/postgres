@@ -26,7 +26,6 @@ static struct varlena *toast_fetch_datum(struct varlena *attr);
 static struct varlena *toast_fetch_datum_slice(struct varlena *attr,
 											   int32 sliceoffset,
 											   int32 slicelength);
-static struct varlena *toast_decompress_datum(struct varlena *attr);
 static struct varlena *toast_decompress_datum_slice(struct varlena *attr, int32 slicelength);
 
 /* ----------
@@ -46,7 +45,7 @@ detoast_external_attr(struct varlena *attr)
 {
 	struct varlena *result;
 
-	if (VARATT_IS_EXTERNAL_ONDISK(attr))
+	if (VARATT_IS_EXTERNAL_ONDISK(attr) || VARATT_IS_EXTERNAL_ORIOLEDB(attr))
 	{
 		/*
 		 * This is an external stored plain value
@@ -115,7 +114,7 @@ detoast_external_attr(struct varlena *attr)
 struct varlena *
 detoast_attr(struct varlena *attr)
 {
-	if (VARATT_IS_EXTERNAL_ONDISK(attr))
+	if (VARATT_IS_EXTERNAL_ONDISK(attr) || VARATT_IS_EXTERNAL_ORIOLEDB(attr))
 	{
 		/*
 		 * This is an externally stored datum --- fetch it back from there
@@ -332,6 +331,20 @@ detoast_attr_slice(struct varlena *attr,
 	return result;
 }
 
+static ToastFunc o_detoast_func = NULL;
+
+void
+register_o_detoast_func(ToastFunc func)
+{
+	o_detoast_func = func;
+}
+
+void
+deregister_o_detoast_func()
+{
+	o_detoast_func = NULL;
+}
+
 /* ----------
  * toast_fetch_datum -
  *
@@ -346,6 +359,17 @@ toast_fetch_datum(struct varlena *attr)
 	struct varlena *result;
 	struct varatt_external toast_pointer;
 	int32		attrsize;
+
+	if (VARATT_IS_EXTERNAL_ORIOLEDB(attr))
+	{
+		if (o_detoast_func != NULL)
+		{
+			result = o_detoast_func(attr);
+			if (result == NULL)
+				elog(ERROR, "unexpected NULL detoast result");
+			return result;
+		}
+	}
 
 	if (!VARATT_IS_EXTERNAL_ONDISK(attr))
 		elog(ERROR, "toast_fetch_datum shouldn't be called for non-ondisk datums");
@@ -467,7 +491,7 @@ toast_fetch_datum_slice(struct varlena *attr, int32 sliceoffset,
  *
  * Decompress a compressed version of a varlena datum
  */
-static struct varlena *
+struct varlena *
 toast_decompress_datum(struct varlena *attr)
 {
 	ToastCompressionId cmid;
@@ -547,10 +571,16 @@ toast_raw_datum_size(Datum value)
 	struct varlena *attr = (struct varlena *) DatumGetPointer(value);
 	Size		result;
 
-	if (VARATT_IS_EXTERNAL_ONDISK(attr))
+	if (VARATT_IS_EXTERNAL_ORIOLEDB(attr))
 	{
-		/* va_rawsize is the size of the original datum -- including header */
+		OToastExternal *toasted = (OToastExternal*) VARDATA_EXTERNAL(attr);
+		result = toasted->raw_size + VARHDRSZ;
+	}
+	else if (VARATT_IS_EXTERNAL_ONDISK(attr))
+	{
 		struct varatt_external toast_pointer;
+
+		/* va_rawsize is the size of the original datum -- including header */
 
 		VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
 		result = toast_pointer.va_rawsize;
