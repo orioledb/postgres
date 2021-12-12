@@ -3510,3 +3510,12 @@ trace_recovery(int trace_level)
 
 	return trace_level;
 }
+
+CustomErrorCleanupHookType CustomErrorCleanupHook = NULL;
+
+void
+CustomErrorCleanup(void)
+{
+	if (CustomErrorCleanupHook)
+		CustomErrorCleanupHook();
+}
