@@ -75,8 +75,7 @@ GetTableAmRoutine(Oid amhandler)
 	 * Could be made optional, but would require throwing error during
 	 * parse-analysis.
 	 */
-	Assert(routine->tuple_insert_speculative != NULL);
-	Assert(routine->tuple_complete_speculative != NULL);
+	Assert(routine->tuple_insert_with_arbiter != NULL);
 
 	Assert(routine->multi_insert != NULL);
 	Assert(routine->tuple_delete != NULL);
@@ -104,7 +103,27 @@ GetTableAmRoutine(Oid amhandler)
 	Assert(routine->scan_sample_next_block != NULL);
 	Assert(routine->scan_sample_next_tuple != NULL);
 
+	Assert(routine->tuple_is_current != NULL);
+
 	return routine;
+}
+
+const TableAmRoutine *
+GetTableAmRoutineByAmOid(Oid amoid)
+{
+	HeapTuple				ht_am;
+	Form_pg_am				amrec;
+	const TableAmRoutine   *tableam = NULL;
+
+	ht_am = SearchSysCache1(AMOID, ObjectIdGetDatum(amoid));
+	if (!HeapTupleIsValid(ht_am))
+		elog(ERROR, "cache lookup failed for access method %u",
+			 amoid);
+	amrec = (Form_pg_am)GETSTRUCT(ht_am);
+
+	tableam = GetTableAmRoutine(amrec->amhandler);
+	ReleaseSysCache(ht_am);
+	return tableam;
 }
 
 /* check_hook: validate new default_table_access_method */
