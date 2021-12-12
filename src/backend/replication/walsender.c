@@ -327,6 +327,7 @@ void
 WalSndErrorCleanup(void)
 {
 	LWLockReleaseAll();
+	CustomErrorCleanup();
 	ConditionVariableCancelSleep();
 	pgstat_report_wait_end();
 
