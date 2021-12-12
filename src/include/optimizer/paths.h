@@ -64,6 +64,14 @@ extern void create_partial_bitmap_paths(PlannerInfo *root, RelOptInfo *rel,
 extern void generate_partitionwise_join_paths(PlannerInfo *root,
 											  RelOptInfo *rel);
 
+/* Data structure for collecting qual clauses that match an index */
+typedef struct
+{
+	bool		nonempty;		/* True if lists are not all empty */
+	/* Lists of IndexClause nodes, one list per index column */
+	List	   *indexclauses[INDEX_MAX_KEYS];
+} IndexClauseSet;
+
 /*
  * indxpath.c
  *	  routines to generate index paths
@@ -78,6 +86,10 @@ extern bool indexcol_is_bool_constant_for_query(PlannerInfo *root,
 extern bool match_index_to_operand(Node *operand, int indexcol,
 								   IndexOptInfo *index);
 extern void check_index_predicates(PlannerInfo *root, RelOptInfo *rel);
+
+extern void match_restriction_clauses_to_index(PlannerInfo *root,
+											   IndexOptInfo *index,
+											   IndexClauseSet *clauseset);
 
 /*
  * tidpath.c
