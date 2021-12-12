@@ -90,6 +90,7 @@ extern PGDLLIMPORT const char *progname;
 extern PGDLLIMPORT bool redirection_done;
 extern PGDLLIMPORT bool LoadedSSL;
 
+extern bool IsFatalError(void);
 pg_noreturn extern void PostmasterMain(int argc, char *argv[]);
 extern void ClosePostmasterPorts(bool am_syslogger);
 extern void InitProcessGlobals(void);
