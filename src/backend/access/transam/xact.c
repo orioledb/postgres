@@ -322,6 +322,7 @@ typedef struct SubXactCallbackItem
 
 static SubXactCallbackItem *SubXact_callbacks = NULL;
 
+xact_redo_hook_type xact_redo_hook = NULL;
 
 /* local function prototypes */
 static void AssignTransactionId(TransactionState s);
@@ -5974,6 +5975,9 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 {
 	TransactionId max_xid;
 	TimestampTz commit_time;
+
+	if (xact_redo_hook)
+		xact_redo_hook(xid, lsn);
 
 	Assert(TransactionIdIsValid(xid));
 
