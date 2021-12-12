@@ -239,7 +239,7 @@ toast_save_datum(Relation rel, Datum value,
 		{
 			struct varatt_external old_toast_pointer;
 
-			Assert(VARATT_IS_EXTERNAL_ONDISK(oldexternal));
+			Assert(VARATT_IS_EXTERNAL_ONDISK(oldexternal) || VARATT_IS_EXTERNAL_ORIOLEDB(oldexternal));
 			/* Must copy to access aligned fields */
 			VARATT_EXTERNAL_GET_POINTER(old_toast_pointer, oldexternal);
 			if (old_toast_pointer.va_toastrelid == rel->rd_toastoid)
@@ -395,7 +395,7 @@ toast_delete_datum(Relation rel, Datum value, bool is_speculative)
 	int			validIndex;
 	SnapshotData SnapshotToast;
 
-	if (!VARATT_IS_EXTERNAL_ONDISK(attr))
+	if (!VARATT_IS_EXTERNAL_ONDISK(attr) && !VARATT_IS_EXTERNAL_ORIOLEDB(attr))
 		return;
 
 	/* Must copy to access aligned fields */
