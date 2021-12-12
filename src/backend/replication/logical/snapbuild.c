@@ -419,6 +419,17 @@ SnapBuildCurrentState(SnapBuild *builder)
 }
 
 /*
+ * An which transaction id the next phase of initial snapshot building will
+ * happen?
+ */
+TransactionId
+SnapBuildNextPhaseAt(SnapBuild *builder)
+{
+	return builder->next_phase_at;
+}
+
+
+/*
  * Return the LSN at which the two-phase decoding was first enabled.
  */
 XLogRecPtr
