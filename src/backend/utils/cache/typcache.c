@@ -321,7 +321,6 @@ static void TypeCacheRelCallback(Datum arg, Oid relid);
 static void TypeCacheTypCallback(Datum arg, int cacheid, uint32 hashvalue);
 static void TypeCacheOpcCallback(Datum arg, int cacheid, uint32 hashvalue);
 static void TypeCacheConstrCallback(Datum arg, int cacheid, uint32 hashvalue);
-static void load_enum_cache_data(TypeCacheEntry *tcache);
 static EnumItem *find_enumitem(TypeCacheEnumData *enumdata, Oid arg);
 static int	enum_oid_cmp(const void *left, const void *right);
 static void shared_record_typmod_registry_detach(dsm_segment *segment,
@@ -329,7 +328,6 @@ static void shared_record_typmod_registry_detach(dsm_segment *segment,
 static TupleDesc find_or_make_matching_shared_tupledesc(TupleDesc tupdesc);
 static dsa_pointer share_tupledesc(dsa_area *area, TupleDesc tupdesc,
 								   uint32 typmod);
-
 
 /*
  * lookup_type_cache
@@ -2546,7 +2544,7 @@ compare_values_of_enum(TypeCacheEntry *tcache, Oid arg1, Oid arg2)
 /*
  * Load (or re-load) the enumData member of the typcache entry.
  */
-static void
+void
 load_enum_cache_data(TypeCacheEntry *tcache)
 {
 	TypeCacheEnumData *enumdata;

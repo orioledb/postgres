@@ -77,6 +77,7 @@ static Expr *build_bound_expr(Expr *elemExpr, Datum val,
 							  TypeCacheEntry *typeCache,
 							  Oid opfamily, Oid rng_collation);
 
+range_cmp_hook_type range_cmp_hook = NULL;
 
 /*
  *----------------------------------------------------------
@@ -1250,7 +1251,7 @@ range_cmp(PG_FUNCTION_ARGS)
 {
 	RangeType  *r1 = PG_GETARG_RANGE_P(0);
 	RangeType  *r2 = PG_GETARG_RANGE_P(1);
-	TypeCacheEntry *typcache;
+	TypeCacheEntry *typcache = NULL;
 	RangeBound	lower1,
 				lower2;
 	RangeBound	upper1,
@@ -1265,7 +1266,11 @@ range_cmp(PG_FUNCTION_ARGS)
 	if (RangeTypeGetOid(r1) != RangeTypeGetOid(r2))
 		elog(ERROR, "range types do not match");
 
-	typcache = range_get_typcache(fcinfo, RangeTypeGetOid(r1));
+	if (range_cmp_hook)
+		typcache = range_cmp_hook(fcinfo, RangeTypeGetOid(r1),
+								  fcinfo->flinfo->fn_mcxt);
+	if (!typcache)
+		typcache = range_get_typcache(fcinfo, RangeTypeGetOid(r1));
 
 	range_deserialize(typcache, r1, &lower1, &upper1, &empty1);
 	range_deserialize(typcache, r2, &lower2, &upper2, &empty2);

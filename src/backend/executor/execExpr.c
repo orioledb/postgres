@@ -48,6 +48,8 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/jsonfuncs.h"
+#include "utils/json.h"
+#include "utils/jsonb.h"
 #include "utils/jsonpath.h"
 #include "utils/lsyscache.h"
 #include "utils/typcache.h"
@@ -2178,19 +2180,36 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				MinMaxExpr *minmaxexpr = (MinMaxExpr *) node;
 				int			nelems = list_length(minmaxexpr->args);
 				TypeCacheEntry *typentry;
+				TypeCacheEntry *hook_typentry = NULL;
 				FmgrInfo   *finfo;
 				FunctionCallInfo fcinfo;
 				ListCell   *lc;
 				int			off;
 
-				/* Look up the btree comparison function for the datatype */
-				typentry = lookup_type_cache(minmaxexpr->minmaxtype,
-											 TYPECACHE_CMP_PROC);
-				if (!OidIsValid(typentry->cmp_proc))
-					ereport(ERROR,
-							(errcode(ERRCODE_UNDEFINED_FUNCTION),
-							 errmsg("could not identify a comparison function for type %s",
-									format_type_be(minmaxexpr->minmaxtype))));
+				if (type_elements_cmp_hook)
+				{
+					hook_typentry =
+						type_elements_cmp_hook(minmaxexpr->minmaxtype,
+											   CurrentMemoryContext);
+					if (hook_typentry)
+					{
+						typentry = hook_typentry;
+						finfo = &typentry->cmp_proc_finfo;
+					}
+				}
+
+				if (!hook_typentry)
+				{
+					/* Look up the btree comparison function for the datatype */
+					typentry = lookup_type_cache(minmaxexpr->minmaxtype,
+												TYPECACHE_CMP_PROC);
+					if (!OidIsValid(typentry->cmp_proc))
+						ereport(ERROR,
+								(errcode(ERRCODE_UNDEFINED_FUNCTION),
+								errmsg("could not identify a comparison function for type %s",
+										format_type_be(minmaxexpr->minmaxtype))));
+					finfo = palloc0(sizeof(FmgrInfo));
+				}
 
 				/*
 				 * If we enforced permissions checks on index support
@@ -2200,12 +2219,17 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				 */
 
 				/* Perform function lookup */
-				finfo = palloc0(sizeof(FmgrInfo));
 				fcinfo = palloc0(SizeForFunctionCallInfo(2));
-				fmgr_info(typentry->cmp_proc, finfo);
+
+				if (!hook_typentry)
+				{
+					fmgr_info(typentry->cmp_proc, finfo);
+				}
+
 				fmgr_info_set_expr((Node *) node, finfo);
 				InitFunctionCallInfoData(*fcinfo, finfo, 2,
-										 minmaxexpr->inputcollid, NULL, NULL);
+										 minmaxexpr->inputcollid,
+										 NULL, NULL);
 
 				scratch.opcode = EEOP_MINMAX;
 				/* allocate space to store arguments */
