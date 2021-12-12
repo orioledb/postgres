@@ -3753,3 +3753,12 @@ write_stderr(const char *fmt,...)
 #endif
 	va_end(ap);
 }
+
+CustomErrorCleanupHookType CustomErrorCleanupHook = NULL;
+
+void
+CustomErrorCleanup(void)
+{
+	if (CustomErrorCleanupHook)
+		CustomErrorCleanupHook();
+}
