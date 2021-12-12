@@ -55,6 +55,7 @@ extern PGDLLIMPORT const char *progname;
 extern PGDLLIMPORT bool redirection_done;
 extern PGDLLIMPORT bool LoadedSSL;
 
+extern bool IsFatalError(void);
 extern void PostmasterMain(int argc, char *argv[]) pg_attribute_noreturn();
 extern void ClosePostmasterPorts(bool am_syslogger);
 extern void InitProcessGlobals(void);
