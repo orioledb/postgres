@@ -484,7 +484,7 @@ ExecSimpleRelationUpdate(EState *estate, EPQState *epqstate,
 		resultRelInfo->ri_TrigDesc->trig_update_before_row)
 	{
 		if (!ExecBRUpdateTriggers(estate, epqstate, resultRelInfo,
-								  tid, NULL, slot))
+								  PointerGetDatum(tid), NULL, slot))
 			skip_tuple = true;	/* "do nothing" */
 	}
 
@@ -513,7 +513,7 @@ ExecSimpleRelationUpdate(EState *estate, EPQState *epqstate,
 
 		/* AFTER ROW UPDATE Triggers */
 		ExecARUpdateTriggers(estate, resultRelInfo,
-							 tid, NULL, slot,
+							 PointerGetDatum(tid), NULL, slot,
 							 recheckIndexes, NULL);
 
 		list_free(recheckIndexes);
@@ -542,7 +542,7 @@ ExecSimpleRelationDelete(EState *estate, EPQState *epqstate,
 		resultRelInfo->ri_TrigDesc->trig_delete_before_row)
 	{
 		skip_tuple = !ExecBRDeleteTriggers(estate, epqstate, resultRelInfo,
-										   tid, NULL, NULL);
+										   PointerGetDatum(tid), NULL, NULL);
 
 	}
 
@@ -553,7 +553,7 @@ ExecSimpleRelationDelete(EState *estate, EPQState *epqstate,
 
 		/* AFTER ROW DELETE Triggers */
 		ExecARDeleteTriggers(estate, resultRelInfo,
-							 tid, NULL, NULL);
+							 PointerGetDatum(tid), NULL, NULL);
 	}
 }
 

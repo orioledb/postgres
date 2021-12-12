@@ -23,6 +23,7 @@
 #include "access/relation.h"
 #include "access/sysattr.h"
 #include "access/table.h"
+#include "access/tableam.h"
 #include "catalog/dependency.h"
 #include "catalog/pg_type.h"
 #include "commands/trigger.h"
@@ -1478,17 +1479,32 @@ rewriteTargetListUD(Query *parsetree, RangeTblEntry *target_rte,
 		target_relation->rd_rel->relkind == RELKIND_MATVIEW ||
 		target_relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
+		RowRefType refType = refType = table_get_row_ref_type(target_relation);
+
 		/*
 		 * Emit CTID so that executor can find the row to update or delete.
 		 */
-		var = makeVar(parsetree->resultRelation,
-					  SelfItemPointerAttributeNumber,
-					  TIDOID,
-					  -1,
-					  InvalidOid,
-					  0);
-
-		attrname = "ctid";
+		if (refType == ROW_REF_TID)
+		{
+			var = makeVar(parsetree->resultRelation,
+						  SelfItemPointerAttributeNumber,
+						  TIDOID,
+						  -1,
+						  InvalidOid,
+						  0);
+			attrname = "ctid";
+		}
+		else
+		{
+			Assert(refType == ROW_REF_ROWID);
+			var = makeVar(parsetree->resultRelation,
+						  RowIdAttributeNumber,
+						  BYTEAOID,
+						  -1,
+						  InvalidOid,
+						  0);
+			attrname = "rowid";
+		}
 	}
 	else if (target_relation->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
 	{
