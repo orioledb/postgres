@@ -97,7 +97,6 @@ static void compute_index_stats(Relation onerel, double totalrows,
 static VacAttrStats *examine_attribute(Relation onerel, int attnum,
 									   Node *index_expr);
 static int	compare_rows(const void *a, const void *b, void *arg);
->>>>>>> Extended tableAM + support for bytea rowid
 static int	acquire_inherited_sample_rows(Relation onerel, int elevel,
 										  HeapTuple *rows, int targrows,
 										  double *totalrows, double *totaldeadrows);
