@@ -122,6 +122,13 @@ typedef struct SnapshotData *Snapshot;
 
 #define InvalidSnapshot		((Snapshot) NULL)
 
+typedef struct
+{
+	uint64		undoLocation;		/* undo log location retained by this snapshot */
+	uint64		xmin;
+	pairingheap_node ph_node;
+} RetainUndoLocationPHNode;
+
 /*
  * Struct representing all kind of possible snapshots.
  *
@@ -201,6 +208,12 @@ typedef struct SnapshotData
 
 	TimestampTz whenTaken;		/* timestamp when snapshot was taken */
 	XLogRecPtr	lsn;			/* position in the WAL stream when taken */
+
+	uint64		xidCSN;			/* snapshot CSN */
+	RetainUndoLocationPHNode undoLocationPhNode;
+	CommitSeqNo	snapshotcsn;
 } SnapshotData;
+
+typedef void (*snapshot_hook_type) (Snapshot snapshot);
 
 #endif							/* SNAPSHOT_H */
