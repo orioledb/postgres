@@ -15,7 +15,9 @@
 #define TRANSAM_H
 
 #include "access/xlogdefs.h"
-
+#ifndef FRONTEND
+#include "port/atomics.h"
+#endif
 
 /* ----------------
  *		Special transaction ID values
@@ -268,6 +270,11 @@ typedef struct VariableCacheData
 	 */
 	TransactionId oldestClogXid;	/* oldest it's safe to look up in clog */
 
+#ifndef FRONTEND
+	pg_atomic_uint64 nextCommitSeqNo;
+#else
+	CommitSeqNo nextCommitSeqNo;
+#endif
 } VariableCacheData;
 
 typedef VariableCacheData *VariableCache;
@@ -310,6 +317,7 @@ extern void AdvanceOldestClogXid(TransactionId oldest_datfrozenxid);
 extern bool ForceTransactionIdLimitUpdate(void);
 extern Oid	GetNewObjectId(void);
 extern void StopGeneratingPinnedObjectIds(void);
+extern CommitSeqNo GetCurrentCSN(void);
 
 #ifdef USE_ASSERT_CHECKING
 extern void AssertTransactionIdInAllowableRange(TransactionId xid);
