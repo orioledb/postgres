@@ -985,7 +985,7 @@ _outPlanRowMark(StringInfo str, const PlanRowMark *node)
 	WRITE_UINT_FIELD(prti);
 	WRITE_UINT_FIELD(rowmarkId);
 	WRITE_ENUM_FIELD(markType, RowMarkType);
-	WRITE_INT_FIELD(allMarkTypes);
+	WRITE_INT_FIELD(allRefTypes);
 	WRITE_ENUM_FIELD(strength, LockClauseStrength);
 	WRITE_ENUM_FIELD(waitPolicy, LockWaitPolicy);
 	WRITE_BOOL_FIELD(isParent);
@@ -3254,6 +3254,7 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 			WRITE_CHAR_FIELD(relkind);
 			WRITE_INT_FIELD(rellockmode);
 			WRITE_NODE_FIELD(tablesample);
+			WRITE_ENUM_FIELD(reftype, RowRefType);
 			break;
 		case RTE_SUBQUERY:
 			WRITE_NODE_FIELD(subquery);
