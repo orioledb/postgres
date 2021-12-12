@@ -3749,7 +3749,6 @@ write_stderr(const char *fmt,...)
 	va_end(ap);
 }
 
-
 /*
  * Write a message to STDERR using only async-signal-safe functions.  This can
  * be used to safely emit a message from a signal handler.
@@ -3801,4 +3800,13 @@ trace_recovery(int trace_level)
 		return LOG;
 
 	return trace_level;
+}
+
+CustomErrorCleanupHookType CustomErrorCleanupHook = NULL;
+
+void
+CustomErrorCleanup(void)
+{
+	if (CustomErrorCleanupHook)
+		CustomErrorCleanupHook();
 }
