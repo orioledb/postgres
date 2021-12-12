@@ -121,6 +121,16 @@ typedef struct
 								 * RelationSyncCache */
 } SharedInvalRelSyncMsg;
 
+#define SHAREDINVALUSERCACHE_ID	(-7)
+
+typedef struct
+{
+	int8		id;				/* type field --- must be first */
+	Oid			arg1;			/* user-specific values */
+	Oid			arg2;
+	Oid			arg3;
+} SharedInvalUserMsg;
+
 typedef union
 {
 	int8		id;				/* type field --- must be first */
@@ -131,6 +141,7 @@ typedef union
 	SharedInvalRelmapMsg rm;
 	SharedInvalSnapshotMsg sn;
 	SharedInvalRelSyncMsg rs;
+	SharedInvalUserMsg usr;
 } SharedInvalidationMessage;
 
 
