@@ -90,11 +90,7 @@ static void ComputeIndexAttrs(IndexInfo *indexInfo,
 							  Oid ddl_userid,
 							  int ddl_sec_context,
 							  int *ddl_save_nestlevel);
-static char *ChooseIndexName(const char *tabname, Oid namespaceId,
-							 const List *colnames, const List *exclusionOpNames,
-							 bool primary, bool isconstraint);
 static char *ChooseIndexNameAddition(const List *colnames);
-static List *ChooseIndexColumnNames(const List *indexElems);
 static void ReindexIndex(const ReindexStmt *stmt, const ReindexParams *params,
 						 bool isTopLevel);
 static void RangeVarCallbackForReindexIndex(const RangeVar *relation,
@@ -2531,7 +2527,7 @@ ChooseRelationName(const char *name1, const char *name2,
  *
  * The argument list is pretty ad-hoc :-(
  */
-static char *
+char *
 ChooseIndexName(const char *tabname, Oid namespaceId,
 				const List *colnames, const List *exclusionOpNames,
 				bool primary, bool isconstraint)
@@ -2620,7 +2616,7 @@ ChooseIndexNameAddition(const List *colnames)
  *
  * Returns a List of plain strings (char *, not String nodes).
  */
-static List *
+List *
 ChooseIndexColumnNames(const List *indexElems)
 {
 	List	   *result = NIL;
