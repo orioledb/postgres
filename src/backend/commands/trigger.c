@@ -75,7 +75,7 @@ static void SetTriggerFlags(TriggerDesc *trigdesc, Trigger *trigger);
 static bool GetTupleForTrigger(EState *estate,
 							   EPQState *epqstate,
 							   ResultRelInfo *relinfo,
-							   ItemPointer tid,
+							   Datum tupleid,
 							   LockTupleMode lockmode,
 							   TupleTableSlot *oldslot,
 							   TupleTableSlot **newSlot);
@@ -2517,7 +2517,7 @@ ExecASDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
 bool
 ExecBRDeleteTriggers(EState *estate, EPQState *epqstate,
 					 ResultRelInfo *relinfo,
-					 ItemPointer tupleid,
+					 Datum tupleid,
 					 HeapTuple fdw_trigtuple,
 					 TupleTableSlot **epqslot)
 {
@@ -2529,7 +2529,7 @@ ExecBRDeleteTriggers(EState *estate, EPQState *epqstate,
 	bool		should_free = false;
 	int			i;
 
-	Assert(HeapTupleIsValid(fdw_trigtuple) ^ ItemPointerIsValid(tupleid));
+	Assert(HeapTupleIsValid(fdw_trigtuple) ^ (DatumGetPointer(tupleid) != NULL));
 	if (fdw_trigtuple == NULL)
 	{
 		TupleTableSlot *epqslot_candidate = NULL;
@@ -2601,7 +2601,7 @@ ExecBRDeleteTriggers(EState *estate, EPQState *epqstate,
 
 void
 ExecARDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
-					 ItemPointer tupleid,
+					 Datum tupleid,
 					 HeapTuple fdw_trigtuple,
 					 TransitionCaptureState *transition_capture)
 {
@@ -2612,7 +2612,7 @@ ExecARDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
 	{
 		TupleTableSlot *slot = ExecGetTriggerOldSlot(estate, relinfo);
 
-		Assert(HeapTupleIsValid(fdw_trigtuple) ^ ItemPointerIsValid(tupleid));
+		Assert(HeapTupleIsValid(fdw_trigtuple) ^ (DatumGetPointer(tupleid) != NULL));
 		if (fdw_trigtuple == NULL)
 			GetTupleForTrigger(estate,
 							   NULL,
@@ -2754,7 +2754,7 @@ ExecASUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 bool
 ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 					 ResultRelInfo *relinfo,
-					 ItemPointer tupleid,
+					 Datum tupleid,
 					 HeapTuple fdw_trigtuple,
 					 TupleTableSlot *newslot)
 {
@@ -2772,7 +2772,7 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 	/* Determine lock mode to use */
 	lockmode = ExecUpdateLockMode(estate, relinfo);
 
-	Assert(HeapTupleIsValid(fdw_trigtuple) ^ ItemPointerIsValid(tupleid));
+	Assert(HeapTupleIsValid(fdw_trigtuple) ^ (DatumGetPointer(tupleid) != NULL));
 	if (fdw_trigtuple == NULL)
 	{
 		TupleTableSlot *epqslot_candidate = NULL;
@@ -2885,7 +2885,7 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 
 void
 ExecARUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
-					 ItemPointer tupleid,
+					 Datum tupleid,
 					 HeapTuple fdw_trigtuple,
 					 TupleTableSlot *newslot,
 					 List *recheckIndexes,
@@ -2906,7 +2906,7 @@ ExecARUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 		 */
 		TupleTableSlot *oldslot = ExecGetTriggerOldSlot(estate, relinfo);
 
-		if (fdw_trigtuple == NULL && ItemPointerIsValid(tupleid))
+		if (fdw_trigtuple == NULL && (DatumGetPointer(tupleid) != NULL))
 			GetTupleForTrigger(estate,
 							   NULL,
 							   relinfo,
@@ -3057,7 +3057,7 @@ static bool
 GetTupleForTrigger(EState *estate,
 				   EPQState *epqstate,
 				   ResultRelInfo *relinfo,
-				   ItemPointer tid,
+				   Datum tupleid,
 				   LockTupleMode lockmode,
 				   TupleTableSlot *oldslot,
 				   TupleTableSlot **epqslot)
@@ -3080,11 +3080,25 @@ GetTupleForTrigger(EState *estate,
 		 */
 		if (!IsolationUsesXactSnapshot())
 			lockflags |= TUPLE_LOCK_FLAG_FIND_LAST_VERSION;
-		test = table_tuple_lock(relation, tid, estate->es_snapshot, oldslot,
-								estate->es_output_cid,
-								lockmode, LockWaitBlock,
-								lockflags,
-								&tmfd);
+
+		if (!table_has_extended_am(relation))
+		{
+			test = table_tuple_lock(relation, DatumGetItemPointer(tupleid),
+									estate->es_snapshot, oldslot,
+									estate->es_output_cid,
+									lockmode, LockWaitBlock,
+									lockflags,
+									&tmfd);
+		}
+		else
+		{
+			test = table_extended_tuple_lock(relation, tupleid,
+											 estate->es_snapshot,
+											 oldslot, estate->es_output_cid,
+											 lockmode, LockWaitBlock,
+											 lockflags,
+											 &tmfd);
+		}
 
 		switch (test)
 		{
@@ -3158,8 +3172,8 @@ GetTupleForTrigger(EState *estate,
 		 * We expect the tuple to be present, thus very simple error handling
 		 * suffices.
 		 */
-		if (!table_tuple_fetch_row_version(relation, tid, SnapshotAny,
-										   oldslot))
+		if (!table_extended_tuple_fetch_row_version(relation, tupleid,
+													SnapshotAny, oldslot))
 			elog(ERROR, "failed to fetch tuple for trigger");
 	}
 
@@ -3411,7 +3425,7 @@ typedef struct AfterTriggerEventDataZeroCtids
 	 sizeof(AfterTriggerEventData) : \
 		((evt)->ate_flags & AFTER_TRIGGER_TUP_BITS) == AFTER_TRIGGER_1CTID ? \
 		sizeof(AfterTriggerEventDataOneCtid) : \
-			sizeof(AfterTriggerEventDataZeroCtids))
+			sizeof(AfterTriggerEventData))
 
 #define GetTriggerSharedData(evt) \
 	((AfterTriggerShared) ((char *) (evt) + ((evt)->ate_flags & AFTER_TRIGGER_OFFSET)))
@@ -3977,15 +3991,17 @@ AfterTriggerExecute(EState *estate,
 			{
 				Tuplestorestate *fdw_tuplestore = GetCurrentFDWTuplestore();
 
-				if (!tuplestore_gettupleslot(fdw_tuplestore, true, false,
-											 trig_tuple_slot1))
+				if (!tuplestore_force_gettupleslot(fdw_tuplestore, true, false,
+												   trig_tuple_slot1))
 					elog(ERROR, "failed to fetch tuple1 for AFTER trigger");
 
 				if ((evtshared->ats_event & TRIGGER_EVENT_OPMASK) ==
 					TRIGGER_EVENT_UPDATE &&
-					!tuplestore_gettupleslot(fdw_tuplestore, true, false,
-											 trig_tuple_slot2))
+					!tuplestore_force_gettupleslot(fdw_tuplestore, true, false,
+												   trig_tuple_slot2))
 					elog(ERROR, "failed to fetch tuple2 for AFTER trigger");
+				trig_tuple_slot1->tts_tid = event->ate_ctid1;
+				trig_tuple_slot2->tts_tid = event->ate_ctid2;
 			}
 			/* fall through */
 		case AFTER_TRIGGER_FDW_REUSE:
@@ -4285,6 +4301,7 @@ afterTriggerInvokeEvents(AfterTriggerEventList *events,
 					trigdesc = rInfo->ri_TrigDesc;
 					finfo = rInfo->ri_TrigFunctions;
 					instr = rInfo->ri_TrigInstrument;
+
 					if (slot1 != NULL)
 					{
 						ExecDropSingleTupleTableSlot(slot1);
@@ -4297,6 +4314,12 @@ afterTriggerInvokeEvents(AfterTriggerEventList *events,
 														 &TTSOpsMinimalTuple);
 						slot2 = MakeSingleTupleTableSlot(rel->rd_att,
 														 &TTSOpsMinimalTuple);
+					}
+					else if (table_has_extended_am(rel))
+					{
+						const TupleTableSlotOps *ops = table_slot_callbacks(rel);
+						slot1 = MakeSingleTupleTableSlot(rel->rd_att, ops);
+						slot2 = MakeSingleTupleTableSlot(rel->rd_att, ops);
 					}
 					if (trigdesc == NULL)	/* should not happen */
 						elog(ERROR, "relation %u has no triggers",
@@ -5527,7 +5550,11 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 	int			tgtype_event;
 	int			tgtype_level;
 	int			i;
+	bool		storeTuple;
 	Tuplestorestate *fdw_tuplestore = NULL;
+
+	storeTuple = (relkind == RELKIND_FOREIGN_TABLE && row_trigger) ||
+					table_has_extended_am(rel);
 
 	/*
 	 * Check state.  We use a normal test not Assert because it is possible to
@@ -5710,7 +5737,7 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 			break;
 	}
 
-	if (!(relkind == RELKIND_FOREIGN_TABLE && row_trigger))
+	if (!storeTuple)
 		new_event.ate_flags = (row_trigger && event == TRIGGER_EVENT_UPDATE) ?
 			AFTER_TRIGGER_2CTID : AFTER_TRIGGER_1CTID;
 	/* else, we'll initialize ate_flags for each trigger */
@@ -5729,18 +5756,6 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 		if (!TriggerEnabled(estate, relinfo, trigger, event,
 							modifiedCols, oldslot, newslot))
 			continue;
-
-		if (relkind == RELKIND_FOREIGN_TABLE && row_trigger)
-		{
-			if (fdw_tuplestore == NULL)
-			{
-				fdw_tuplestore = GetCurrentFDWTuplestore();
-				new_event.ate_flags = AFTER_TRIGGER_FDW_FETCH;
-			}
-			else
-				/* subsequent event for the same tuple */
-				new_event.ate_flags = AFTER_TRIGGER_FDW_REUSE;
-		}
 
 		/*
 		 * If the trigger is a foreign key enforcement trigger, there are
@@ -5786,6 +5801,18 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 		{
 			if (!list_member_oid(recheckIndexes, trigger->tgconstrindid))
 				continue;		/* Uniqueness definitely not violated */
+		}
+
+		if (storeTuple)
+		{
+			if (fdw_tuplestore == NULL)
+			{
+				fdw_tuplestore = GetCurrentFDWTuplestore();
+				new_event.ate_flags = AFTER_TRIGGER_FDW_FETCH;
+			}
+			else
+				/* subsequent event for the same tuple */
+				new_event.ate_flags = AFTER_TRIGGER_FDW_REUSE;
 		}
 
 		/*
