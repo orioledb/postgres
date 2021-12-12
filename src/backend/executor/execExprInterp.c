@@ -5128,7 +5128,9 @@ ExecEvalSysVar(ExprState *state, ExprEvalStep *op, ExprContext *econtext,
 						op->resnull);
 	*op->resvalue = d;
 	/* this ought to be unreachable, but it's cheap enough to check */
-	if (unlikely(*op->resnull))
+	if (op->d.var.attnum != RowIdAttributeNumber &&
+		op->d.var.attnum != SelfItemPointerAttributeNumber &&
+		unlikely(*op->resnull))
 		elog(ERROR, "failed to fetch attribute from slot");
 }
 
