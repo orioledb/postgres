@@ -2332,4 +2332,11 @@ typedef struct OnConflictExpr
 	List	   *exclRelTlist;	/* tlist of the EXCLUDED pseudo relation */
 } OnConflictExpr;
 
+typedef enum RowRefType
+{
+	ROW_REF_TID,
+	ROW_REF_ROWID,
+	ROW_REF_COPY
+} RowRefType;
+
 #endif							/* PRIMNODES_H */
