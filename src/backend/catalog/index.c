@@ -119,9 +119,6 @@ static void UpdateIndexRelation(Oid indexoid, Oid heapoid,
 								bool immediate,
 								bool isvalid,
 								bool isready);
-static void index_update_stats(Relation rel,
-							   bool hasindex,
-							   double reltuples);
 static void IndexCheckExclusion(Relation heapRelation,
 								Relation indexRelation,
 								IndexInfo *indexInfo);
@@ -2778,7 +2775,7 @@ FormIndexDatum(IndexInfo *indexInfo,
  * index.  When updating an index, it's important because some index AMs
  * expect a relcache flush to occur after REINDEX.
  */
-static void
+void
 index_update_stats(Relation rel,
 				   bool hasindex,
 				   double reltuples)
