@@ -164,16 +164,12 @@ static MergeJoin *create_mergejoin_plan(PlannerInfo *root, MergePath *best_path)
 static HashJoin *create_hashjoin_plan(PlannerInfo *root, HashPath *best_path);
 static Node *replace_nestloop_params(PlannerInfo *root, Node *expr);
 static Node *replace_nestloop_params_mutator(Node *node, PlannerInfo *root);
-static void fix_indexqual_references(PlannerInfo *root, IndexPath *index_path,
-									 List **stripped_indexquals_p,
-									 List **fixed_indexquals_p);
 static List *fix_indexorderby_references(PlannerInfo *root, IndexPath *index_path);
 static Node *fix_indexqual_clause(PlannerInfo *root,
 								  IndexOptInfo *index, int indexcol,
 								  Node *clause, List *indexcolnos);
 static Node *fix_indexqual_operand(Node *node, IndexOptInfo *index, int indexcol);
 static List *get_switched_clauses(List *clauses, Relids outerrelids);
-static List *order_qual_clauses(PlannerInfo *root, List *clauses);
 static void copy_generic_path_info(Plan *dest, Path *src);
 static void copy_plan_costsize(Plan *dest, Plan *src);
 static void label_sort_with_costsize(PlannerInfo *root, Sort *plan,
@@ -4897,6 +4893,14 @@ replace_nestloop_params(PlannerInfo *root, Node *expr)
 	return replace_nestloop_params_mutator(expr, root);
 }
 
+Node *
+replace_nestloop_params_compat(PlannerInfo *root, Node *expr)
+{
+	/* No setup needed for tree walk, so away we go */
+	return replace_nestloop_params_mutator(expr, root);
+}
+
+
 static Node *
 replace_nestloop_params_mutator(Node *node, PlannerInfo *root)
 {
@@ -4977,7 +4981,7 @@ replace_nestloop_params_mutator(Node *node, PlannerInfo *root)
  * are subplans in it (we need two separate copies of the subplan tree, or
  * things will go awry).
  */
-static void
+void
 fix_indexqual_references(PlannerInfo *root, IndexPath *index_path,
 						 List **stripped_indexquals_p, List **fixed_indexquals_p)
 {
@@ -5270,7 +5274,7 @@ get_switched_clauses(List *clauses, Relids outerrelids)
  * instead of bare clauses.  This is another reason why trying to consider
  * selectivity in the ordering would likely do the wrong thing.
  */
-static List *
+List *
 order_qual_clauses(PlannerInfo *root, List *clauses)
 {
 	typedef struct
