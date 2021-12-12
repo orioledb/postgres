@@ -33,6 +33,7 @@
 #include "access/htup_details.h"
 #include "access/multixact.h"
 #include "access/parallel.h"
+#include "access/relation.h"
 #include "access/reloptions.h"
 #include "access/sysattr.h"
 #include "access/table.h"
@@ -320,6 +321,7 @@ static OpClassCacheEnt *LookupOpclassInfo(Oid operatorClassOid,
 										  StrategyNumber numSupport);
 static void RelationCacheInitFileRemoveInDir(const char *tblspcpath);
 static void unlink_initfile(const char *initfilename, int elevel);
+static void release_rd_amcache(Relation rel);
 
 
 /*
@@ -467,8 +469,9 @@ AllocateRelationDesc(Form_pg_class relp)
 static void
 RelationParseRelOptions(Relation relation, HeapTuple tuple)
 {
-	bytea	   *options;
-	amoptions_function amoptsfn;
+	bytea				   *options;
+	amoptions_function		amoptsfn;
+	const TableAmRoutine   *tableam = NULL;
 
 	relation->rd_options = NULL;
 
@@ -480,9 +483,10 @@ RelationParseRelOptions(Relation relation, HeapTuple tuple)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_TOASTVALUE:
-		case RELKIND_VIEW:
 		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
 		case RELKIND_PARTITIONED_TABLE:
+			tableam = relation->rd_tableam;
 			amoptsfn = NULL;
 			break;
 		case RELKIND_INDEX:
@@ -494,11 +498,12 @@ RelationParseRelOptions(Relation relation, HeapTuple tuple)
 	}
 
 	/*
-	 * Fetch reloptions from tuple; have to use a hardwired descriptor because
-	 * we might not have any other for pg_class yet (consider executing this
-	 * code for pg_class itself)
-	 */
-	options = extractRelOptions(tuple, GetPgClassDescriptor(), amoptsfn);
+	* Fetch reloptions from tuple; have to use a hardwired descriptor because
+	* we might not have any other for pg_class yet (consider executing this
+	* code for pg_class itself)
+	*/
+	options = extractRelOptions(tuple, GetPgClassDescriptor(),
+								tableam, amoptsfn);
 
 	/*
 	 * Copy parsed data into CacheMemoryContext.  To guard against the
@@ -2490,8 +2495,7 @@ RelationDestroyRelation(Relation relation, bool remember_tupdesc)
 		pfree(relation->rd_options);
 	if (relation->rd_indextuple)
 		pfree(relation->rd_indextuple);
-	if (relation->rd_amcache)
-		pfree(relation->rd_amcache);
+	release_rd_amcache(relation);
 	if (relation->rd_fdwroutine)
 		pfree(relation->rd_fdwroutine);
 	if (relation->rd_indexcxt)
@@ -2529,9 +2533,7 @@ RelationInvalidateRelation(Relation relation)
 	RelationCloseSmgr(relation);
 
 	/* Free AM cached data, if any */
-	if (relation->rd_amcache)
-		pfree(relation->rd_amcache);
-	relation->rd_amcache = NULL;
+	release_rd_amcache(relation);
 
 	relation->rd_isvalid = false;
 }
@@ -6994,4 +6996,10 @@ ResOwnerReleaseRelation(Datum res)
 	rel->rd_refcnt -= 1;
 
 	RelationCloseCleanup((Relation) res);
+}
+
+static void
+release_rd_amcache(Relation rel)
+{
+	table_free_rd_amcache(rel);
 }
