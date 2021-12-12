@@ -312,6 +312,7 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 	int			nused = buffer->nused;
 	ResultRelInfo *resultRelInfo = buffer->resultRelInfo;
 	TupleTableSlot **slots = buffer->slots;
+	bool		insertIndexes;
 
 	/*
 	 * Print error context information correctly, if one of the operations
@@ -330,7 +331,8 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 					   nused,
 					   mycid,
 					   ti_options,
-					   buffer->bistate);
+					   buffer->bistate,
+					   &insertIndexes);
 	MemoryContextSwitchTo(oldcontext);
 
 	for (i = 0; i < nused; i++)
@@ -339,7 +341,7 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 		 * If there are any indexes, update them for all the inserted tuples,
 		 * and run AFTER ROW INSERT triggers.
 		 */
-		if (resultRelInfo->ri_NumIndices > 0)
+		if (insertIndexes && resultRelInfo->ri_NumIndices > 0)
 		{
 			List	   *recheckIndexes;
 
@@ -1093,11 +1095,14 @@ CopyFrom(CopyFromState cstate)
 					}
 					else
 					{
+						bool		insertIndexes;
+
 						/* OK, store the tuple and create index entries for it */
 						table_tuple_insert(resultRelInfo->ri_RelationDesc,
-										   myslot, mycid, ti_options, bistate);
+										   myslot, mycid, ti_options, bistate,
+										   &insertIndexes);
 
-						if (resultRelInfo->ri_NumIndices > 0)
+						if (insertIndexes && resultRelInfo->ri_NumIndices > 0)
 							recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
 																   myslot,
 																   estate,
