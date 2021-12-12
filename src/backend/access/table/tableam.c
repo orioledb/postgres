@@ -308,7 +308,7 @@ simple_table_tuple_delete(Relation rel, ItemPointer tid, Snapshot snapshot,
 	if (oldSlot)
 		options |= TABLE_MODIFY_FETCH_OLD_TUPLE;
 
-	result = table_tuple_delete(rel, tid,
+	result = table_tuple_delete(rel, PointerGetDatum(tid),
 								GetCurrentCommandId(true),
 								snapshot, InvalidSnapshot,
 								options,
@@ -364,7 +364,7 @@ simple_table_tuple_update(Relation rel, ItemPointer otid,
 	if (oldSlot)
 		options |= TABLE_MODIFY_FETCH_OLD_TUPLE;
 
-	result = table_tuple_update(rel, otid, slot,
+	result = table_tuple_update(rel, PointerGetDatum(otid), slot,
 								GetCurrentCommandId(true),
 								snapshot, InvalidSnapshot,
 								options,
