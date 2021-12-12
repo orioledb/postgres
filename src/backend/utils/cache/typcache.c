@@ -292,6 +292,8 @@ static int32 NextRecordTypmod = 0;	/* number of entries used */
  * as identifiers, so we start the counter at INVALID_TUPLEDESC_IDENTIFIER.
  */
 static uint64 tupledesc_id_counter = INVALID_TUPLEDESC_IDENTIFIER;
+load_typcache_tupdesc_hook_type load_typcache_tupdesc_hook = NULL;
+load_enum_cache_data_hook_type load_enum_cache_data_hook = NULL;
 
 static void load_typcache_tupdesc(TypeCacheEntry *typentry);
 static void load_rangetype_info(TypeCacheEntry *typentry);
@@ -880,6 +882,12 @@ static void
 load_typcache_tupdesc(TypeCacheEntry *typentry)
 {
 	Relation	rel;
+
+	if (load_typcache_tupdesc_hook)
+	{
+		load_typcache_tupdesc_hook(typentry);
+		return;
+	}
 
 	if (!OidIsValid(typentry->typrelid))	/* should not happen */
 		elog(ERROR, "invalid typrelid for composite type %u",
@@ -2562,6 +2570,12 @@ load_enum_cache_data(TypeCacheEntry *tcache)
 	MemoryContext oldcxt;
 	int			bm_size,
 				start_pos;
+
+	if (load_enum_cache_data_hook)
+	{
+		load_enum_cache_data_hook(tcache);
+		return;
+	}
 
 	/* Check that this is actually an enum */
 	if (tcache->typtype != TYPTYPE_ENUM)
