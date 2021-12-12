@@ -55,6 +55,8 @@ typedef struct OToastExternal
 	char		data[FLEXIBLE_ARRAY_MEMBER]; /* data (primary index tuple) */
 } OToastExternal;
 
+#define ORIOLEDB_EXT_FORMAT_FLAGS_BITS 6
+
 /*
  * These macros define the "saved size" portion of va_extinfo.  This value has
  * been chosen to avoid integer wraparound; see detoast_external_attr().  The
