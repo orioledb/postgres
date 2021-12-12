@@ -107,6 +107,14 @@ extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
 						   const instr_time *planduration,
 						   const BufferUsage *bufusage,
 						   const MemoryContextCounters *mem_counters);
+extern void ExplainNode(PlanState *planstate, List *ancestors,
+						const char *relationship, const char *plan_name,
+						ExplainState *es);
+extern void show_scan_qual(List *qual, const char *qlabel,
+						   PlanState *planstate, List *ancestors,
+						   ExplainState *es);
+extern void show_instrumentation_count(const char *qlabel, int which,
+									   PlanState *planstate, ExplainState *es);
 
 extern void ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc);
 extern void ExplainPrintTriggers(ExplainState *es, QueryDesc *queryDesc);
