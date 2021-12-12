@@ -949,6 +949,7 @@ ProcKill(int code, Datum arg)
 	 * facility by releasing our PGPROC ...
 	 */
 	LWLockReleaseAll();
+	CustomErrorCleanup();
 
 	/* Cancel any pending condition variable sleep, too */
 	ConditionVariableCancelSleep();
@@ -1088,6 +1089,7 @@ AuxiliaryProcKill(int code, Datum arg)
 
 	/* Release any LW locks I am holding (see notes above) */
 	LWLockReleaseAll();
+	CustomErrorCleanup();
 
 	/* Cancel any pending condition variable sleep, too */
 	ConditionVariableCancelSleep();
