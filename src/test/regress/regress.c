@@ -606,7 +606,7 @@ make_tuple_indirect(PG_FUNCTION_ARGS)
 			continue;
 
 		/* copy datum, so it still lives later */
-		if (VARATT_IS_EXTERNAL_ONDISK(attr))
+		if (VARATT_IS_EXTERNAL_ONDISK(attr) || VARATT_IS_EXTERNAL_ORIOLEDB(attr))
 			attr = detoast_external_attr(attr);
 		else
 		{

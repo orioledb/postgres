@@ -72,10 +72,10 @@ toast_tuple_init(ToastTupleContext *ttc)
 			 * we have to delete it later.
 			 */
 			if (att->attlen == -1 && !ttc->ttc_oldisnull[i] &&
-				VARATT_IS_EXTERNAL_ONDISK(old_value))
+				(VARATT_IS_EXTERNAL_ONDISK(old_value) || VARATT_IS_EXTERNAL_ORIOLEDB(old_value)))
 			{
 				if (ttc->ttc_isnull[i] ||
-					!VARATT_IS_EXTERNAL_ONDISK(new_value) ||
+					!(VARATT_IS_EXTERNAL_ONDISK(new_value) || VARATT_IS_EXTERNAL_ORIOLEDB(new_value)) ||
 					memcmp((char *) old_value, (char *) new_value,
 						   VARSIZE_EXTERNAL(old_value)) != 0)
 				{
@@ -331,7 +331,7 @@ toast_delete_external(Relation rel, Datum *values, bool *isnull,
 
 			if (isnull[i])
 				continue;
-			else if (VARATT_IS_EXTERNAL_ONDISK(value))
+			else if (VARATT_IS_EXTERNAL_ONDISK(value) || VARATT_IS_EXTERNAL_ORIOLEDB(value))
 				toast_delete_datum(rel, value, is_speculative);
 		}
 	}
