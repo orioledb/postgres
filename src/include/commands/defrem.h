@@ -41,6 +41,10 @@ extern char *makeObjectName(const char *name1, const char *name2,
 extern char *ChooseRelationName(const char *name1, const char *name2,
 								const char *label, Oid namespaceid,
 								bool isconstraint);
+extern List *ChooseIndexColumnNames(const List *indexElems);
+extern char *ChooseIndexName(const char *tabname, Oid namespaceId,
+							 const List *colnames, const List *exclusionOpNames,
+							 bool primary, bool isconstraint);
 extern bool CheckIndexCompatible(Oid oldId,
 								 const char *accessMethodName,
 								 const List *attributeList,
