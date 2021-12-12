@@ -994,7 +994,7 @@ heap_entry_is_visible(BtreeCheckState *state, ItemPointer tid)
 	TupleTableSlot *slot = table_slot_create(state->heaprel, NULL);
 
 	tid_visible = table_tuple_fetch_row_version(state->heaprel,
-												tid, state->snapshot, slot);
+												PointerGetDatum(tid), state->snapshot, slot);
 	if (slot != NULL)
 		ExecDropSingleTupleTableSlot(slot);
 
