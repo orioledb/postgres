@@ -251,6 +251,7 @@ int			debug_discard_caches = 0;
 
 #define MAX_SYSCACHE_CALLBACKS 64
 #define MAX_RELCACHE_CALLBACKS 10
+#define MAX_USERCACHE_CALLBACKS 10
 
 static struct SYSCACHECALLBACK
 {
@@ -271,6 +272,14 @@ static struct RELCACHECALLBACK
 }			relcache_callback_list[MAX_RELCACHE_CALLBACKS];
 
 static int	relcache_callback_count = 0;
+
+static struct USERCACHECALLBACK
+{
+	UsercacheCallbackFunction function;
+	Datum		arg;
+}			usercache_callback_list[MAX_RELCACHE_CALLBACKS];
+
+static int	usercache_callback_count = 0;
 
 /* ----------------------------------------------------------------
  *				Invalidation subgroup support functions
@@ -692,6 +701,16 @@ InvalidateSystemCachesExtended(bool debug_discard)
 
 		ccitem->function(ccitem->arg, InvalidOid);
 	}
+
+	for (i = 0; i < usercache_callback_count; i++)
+	{
+		struct USERCACHECALLBACK *ccitem = usercache_callback_list + i;
+
+		ccitem->function(ccitem->arg,
+						 InvalidOid,
+						 InvalidOid,
+						 InvalidOid);
+	}
 }
 
 /*
@@ -772,6 +791,19 @@ LocalExecuteInvalidationMessage(SharedInvalidationMessage *msg)
 			InvalidateCatalogSnapshot();
 		else if (msg->sn.dbId == MyDatabaseId)
 			InvalidateCatalogSnapshot();
+	}
+	else if (msg->id == SHAREDINVALUSERCACHE_ID)
+	{
+		int			i;
+		for (i = 0; i < usercache_callback_count; i++)
+		{
+			struct USERCACHECALLBACK *ccitem = usercache_callback_list + i;
+
+			ccitem->function(ccitem->arg,
+							 msg->usr.arg1,
+							 msg->usr.arg2,
+							 msg->usr.arg3);
+		}
 	}
 	else
 		elog(FATAL, "unrecognized SI message ID: %d", msg->id);
@@ -1565,6 +1597,22 @@ CacheRegisterRelcacheCallback(RelcacheCallbackFunction func,
 	relcache_callback_list[relcache_callback_count].arg = arg;
 
 	++relcache_callback_count;
+}
+
+/*
+ * CacheRegisterUsercacheCallback
+ */
+void
+CacheRegisterUsercacheCallback(UsercacheCallbackFunction func,
+							   Datum arg)
+{
+	if (usercache_callback_count >= MAX_USERCACHE_CALLBACKS)
+		elog(FATAL, "out of usercache_callback_list slots");
+
+	usercache_callback_list[usercache_callback_count].function = func;
+	usercache_callback_list[usercache_callback_count].arg = arg;
+
+	++usercache_callback_count;
 }
 
 /*
