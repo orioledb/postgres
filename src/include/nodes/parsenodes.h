@@ -1074,6 +1074,7 @@ typedef struct RangeTblEntry
 	int			rellockmode;	/* lock level that query requires on the rel */
 	struct TableSampleClause *tablesample;	/* sampling info, or NULL */
 	Index		perminfoindex;
+	RowRefType	reftype;
 
 	/*
 	 * Fields valid for a subquery RTE (else NULL):

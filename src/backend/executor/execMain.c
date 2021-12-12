@@ -839,13 +839,15 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 			Oid			relid;
 			Relation	relation;
 			ExecRowMark *erm;
+			RangeTblEntry *rangeEntry;
 
 			/* ignore "parent" rowmarks; they are irrelevant at runtime */
 			if (rc->isParent)
 				continue;
 
 			/* get relation's OID (will produce InvalidOid if subquery) */
-			relid = exec_rt_fetch(rc->rti, estate)->relid;
+			rangeEntry = exec_rt_fetch(rc->rti, estate);
+			relid = rangeEntry->relid;
 
 			/* open relation, if we need to access it for this mark type */
 			switch (rc->markType)
@@ -878,6 +880,10 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 			erm->prti = rc->prti;
 			erm->rowmarkId = rc->rowmarkId;
 			erm->markType = rc->markType;
+			if (erm->markType == ROW_MARK_COPY)
+				erm->refType = ROW_REF_COPY;
+			else
+				erm->refType = rangeEntry->reftype;
 			erm->strength = rc->strength;
 			erm->waitPolicy = rc->waitPolicy;
 			erm->ermActive = false;
@@ -1265,6 +1271,8 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 	resultRelInfo->ri_ChildToRootMap = NULL;
 	resultRelInfo->ri_ChildToRootMapValid = false;
 	resultRelInfo->ri_CopyMultiInsertBuffer = NULL;
+
+	resultRelInfo->ri_RowRefType = table_get_row_ref_type(resultRelationDesc);
 }
 
 /*
@@ -2399,10 +2407,20 @@ ExecBuildAuxRowMark(ExecRowMark *erm, List *targetlist)
 	aerm->rowmark = erm;
 
 	/* Look up the resjunk columns associated with this rowmark */
-	if (erm->markType != ROW_MARK_COPY)
+	if (erm->refType == ROW_REF_TID)
 	{
+		Assert(erm->markType != ROW_MARK_COPY);
 		/* need ctid for all methods other than COPY */
 		snprintf(resname, sizeof(resname), "ctid%u", erm->rowmarkId);
+		aerm->ctidAttNo = ExecFindJunkAttributeInTlist(targetlist,
+													   resname);
+		if (!AttributeNumberIsValid(aerm->ctidAttNo))
+			elog(ERROR, "could not find junk %s column", resname);
+	} else if (erm->refType == ROW_REF_ROWID)
+	{
+		Assert(erm->markType != ROW_MARK_COPY);
+		/* need ctid for all methods other than COPY */
+		snprintf(resname, sizeof(resname), "rowid%u", erm->rowmarkId);
 		aerm->ctidAttNo = ExecFindJunkAttributeInTlist(targetlist,
 													   resname);
 		if (!AttributeNumberIsValid(aerm->ctidAttNo))
@@ -2410,6 +2428,7 @@ ExecBuildAuxRowMark(ExecRowMark *erm, List *targetlist)
 	}
 	else
 	{
+		Assert(erm->markType == ROW_MARK_COPY);
 		/* need wholerow if COPY */
 		snprintf(resname, sizeof(resname), "wholerow%u", erm->rowmarkId);
 		aerm->wholeAttNo = ExecFindJunkAttributeInTlist(targetlist,
@@ -2679,8 +2698,9 @@ EvalPlanQualFetchRowMark(EPQState *epqstate, Index rti, TupleTableSlot *slot)
 		{
 			/* ordinary table, fetch the tuple */
 			if (!table_tuple_fetch_row_version(erm->relation,
-											   (ItemPointer) DatumGetPointer(datum),
-											   SnapshotAny, slot))
+											   datum,
+											   SnapshotAny,
+											   slot))
 				elog(ERROR, "failed to fetch tuple for EvalPlanQual recheck");
 			return true;
 		}
