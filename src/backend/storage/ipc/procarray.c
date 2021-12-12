@@ -309,6 +309,8 @@ static GlobalVisState GlobalVisTempRels;
  */
 static TransactionId ComputeXidHorizonsResultLastXmin;
 
+snapshot_hook_type snapshot_hook = NULL;
+
 #ifdef XIDCACHE_DEBUG
 
 /* counters for XidCache measurement */
@@ -762,6 +764,7 @@ ProcArrayEndTransactionInternal(PGPROC *proc, TransactionId latestXid)
 	proc->delayChkptEnd = false;
 
 	proc->recoveryConflictPending = false;
+	proc->lastCommittedCSN = pg_atomic_fetch_add_u64(&ShmemVariableCache->nextCommitSeqNo, 1);
 
 	/* must be cleared with xid/xmin: */
 	/* avoid unnecessarily dirtying shared cachelines */
@@ -2297,6 +2300,8 @@ GetSnapshotData(Snapshot snapshot)
 
 	if (GetSnapshotDataReuse(snapshot))
 	{
+		if (snapshot_hook)
+			snapshot_hook(snapshot);
 		LWLockRelease(ProcArrayLock);
 		return snapshot;
 	}
@@ -2477,6 +2482,9 @@ GetSnapshotData(Snapshot snapshot)
 
 	if (!TransactionIdIsValid(MyProc->xmin))
 		MyProc->xmin = TransactionXmin = xmin;
+
+	if (snapshot_hook)
+		snapshot_hook(snapshot);
 
 	LWLockRelease(ProcArrayLock);
 
