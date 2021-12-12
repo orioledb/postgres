@@ -3106,6 +3106,7 @@ BufferSync(int flags)
 		BufferDesc *bufHdr = NULL;
 		CkptTsStatus *ts_stat = (CkptTsStatus *)
 			DatumGetPointer(binaryheap_first(ts_heap));
+		double progress;
 
 		buf_id = CkptBufferIds[ts_stat->index].buf_id;
 		Assert(buf_id != -1);
@@ -3160,7 +3161,10 @@ BufferSync(int flags)
 		 *
 		 * (This will check for barrier events even if it doesn't sleep.)
 		 */
-		CheckpointWriteDelay(flags, (double) num_processed / num_to_scan);
+		progress = (double) num_processed / num_to_scan;
+		progress = CheckPointProgress + progress * (1 - CheckPointProgress);
+
+		CheckpointWriteDelay(flags, progress);
 	}
 
 	/*
