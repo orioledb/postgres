@@ -32,8 +32,10 @@
 
 #include "access/nbtree.h"
 #include "catalog/objectaccess.h"
+#include "catalog/pg_language.h"
 #include "catalog/pg_type.h"
 #include "executor/execExpr.h"
+#include "executor/functions.h"
 #include "executor/nodeSubplan.h"
 #include "funcapi.h"
 #include "jit/jit.h"
@@ -46,6 +48,7 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
+#include "utils/fmgrtab.h"
 #include "utils/lsyscache.h"
 #include "utils/typcache.h"
 
@@ -58,8 +61,6 @@ typedef struct LastAttnumInfo
 } LastAttnumInfo;
 
 static void ExecReadyExpr(ExprState *state);
-static void ExecInitExprRec(Expr *node, ExprState *state,
-							Datum *resv, bool *resnull);
 static void ExecInitFunc(ExprEvalStep *scratch, Expr *node, List *args,
 						 Oid funcid, Oid inputcollid,
 						 ExprState *state);
@@ -83,6 +84,7 @@ static void ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 								  int transno, int setno, int setoff, bool ishash,
 								  bool nullcheck);
 
+ExecInitFuncHookType ExecInitFuncHook = NULL;
 
 /*
  * ExecInitExpr: prepare an expression tree for execution
@@ -673,7 +675,7 @@ ExecReadyExpr(ExprState *state)
  * state - ExprState to whose ->steps to append the necessary operations
  * resv / resnull - where to store the result of the node into
  */
-static void
+void
 ExecInitExprRec(Expr *node, ExprState *state,
 				Datum *resv, bool *resnull)
 {
@@ -2195,6 +2197,10 @@ ExecInitFunc(ExprEvalStep *scratch, Expr *node, List *args, Oid funcid,
 	FunctionCallInfo fcinfo;
 	int			argno;
 	ListCell   *lc;
+
+	if (ExecInitFuncHook &&
+		ExecInitFuncHook(scratch, node, args, funcid, inputcollid, state))
+		return;
 
 	/* Check permission to call function */
 	aclresult = pg_proc_aclcheck(funcid, GetUserId(), ACL_EXECUTE);
