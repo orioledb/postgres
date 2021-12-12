@@ -52,6 +52,7 @@
 #ifndef SORTSUPPORT_H
 #define SORTSUPPORT_H
 
+#include "fmgr.h"
 #include "access/attnum.h"
 #include "utils/relcache.h"
 
@@ -272,5 +273,15 @@ extern void PrepareSortSupportComparisonShim(Oid cmpFunc, SortSupport ssup);
 extern void PrepareSortSupportFromOrderingOp(Oid orderingOp, SortSupport ssup);
 extern void PrepareSortSupportFromIndexRel(Relation indexRel, int16 strategy,
 										   SortSupport ssup);
+
+/* Info needed to use an old-style comparison function as a sort comparator */
+typedef struct
+{
+	FmgrInfo	flinfo;			/* lookup data for comparison function */
+	FunctionCallInfoBaseData fcinfo;	/* reusable callinfo structure */
+} SortShimExtra;
+
+#define SizeForSortShimExtra(nargs) (offsetof(SortShimExtra, fcinfo) + SizeForFunctionCallInfo(nargs))
+extern int comparison_shim(Datum x, Datum y, SortSupport ssup);
 
 #endif							/* SORTSUPPORT_H */
