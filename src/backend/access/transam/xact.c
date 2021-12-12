@@ -2809,6 +2809,7 @@ AbortTransaction(void)
 	 * while cleaning up!
 	 */
 	LWLockReleaseAll();
+	CustomErrorCleanup();
 
 	/*
 	 * Cleanup waiting for LSN if any.
@@ -5229,6 +5230,7 @@ AbortSubTransaction(void)
 	 * Buffer locks, for example?  I don't think so but I'm not sure.
 	 */
 	LWLockReleaseAll();
+	CustomErrorCleanup();
 
 	pgstat_report_wait_end();
 	pgstat_progress_end_command();
