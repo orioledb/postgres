@@ -38,6 +38,23 @@ typedef struct varatt_external
 	Oid			va_toastrelid;	/* RelID of TOAST table containing it */
 }			varatt_external;
 
+typedef struct OToastExternal
+{
+	uint16		data_size; /* length of OToastExternal data */
+	int16		attnum;
+	int32		raw_size; /* original data size */
+	int32		toasted_size; /* compressed original data size */
+	/* for fetching data from TOAST tree */
+	CommitSeqNo	csn;
+	/* for finding TOAST tree */
+	Oid			datoid;
+	Oid			relid;
+	Oid			relnode;
+	/* for storing primary index tuple */
+	uint8		formatFlags; /* primary index tuple flags */
+	char		data[FLEXIBLE_ARRAY_MEMBER]; /* data (primary index tuple) */
+} OToastExternal;
+
 /*
  * These macros define the "saved size" portion of va_extinfo.  Its remaining
  * two high-order bits identify the compression method.
@@ -86,17 +103,21 @@ typedef enum vartag_external
 	VARTAG_INDIRECT = 1,
 	VARTAG_EXPANDED_RO = 2,
 	VARTAG_EXPANDED_RW = 3,
-	VARTAG_ONDISK = 18
+	VARTAG_ONDISK = 18,
+	VARTAG_ORIOLEDB = 34
 } vartag_external;
 
 /* this test relies on the specific tag values above */
 #define VARTAG_IS_EXPANDED(tag) \
 	(((tag) & ~1) == VARTAG_EXPANDED_RO)
 
+#define O_TOAST_EXTERNAL_SZ offsetof(OToastExternal, data)
+
 #define VARTAG_SIZE(tag) \
 	((tag) == VARTAG_INDIRECT ? sizeof(varatt_indirect) : \
 	 VARTAG_IS_EXPANDED(tag) ? sizeof(varatt_expanded) : \
 	 (tag) == VARTAG_ONDISK ? sizeof(varatt_external) : \
+	 (tag) == VARTAG_ORIOLEDB ? O_TOAST_EXTERNAL_SZ : \
 	 (AssertMacro(false), 0))
 
 /*
@@ -282,11 +303,16 @@ typedef struct
 #define VARDATA_SHORT(PTR)					VARDATA_1B(PTR)
 
 #define VARTAG_EXTERNAL(PTR)				VARTAG_1B_E(PTR)
-#define VARSIZE_EXTERNAL(PTR)				(VARHDRSZ_EXTERNAL + VARTAG_SIZE(VARTAG_EXTERNAL(PTR)))
+#define VARSIZE_EXTERNAL(PTR)				(VARHDRSZ_EXTERNAL + VARTAG_SIZE(VARTAG_EXTERNAL(PTR)) \
+												+ (VARATT_IS_EXTERNAL_ORIOLEDB(PTR) ? \
+												  *((uint16 *) VARDATA_1B_E(PTR)) \
+												  : 0))
+
 #define VARDATA_EXTERNAL(PTR)				VARDATA_1B_E(PTR)
 
 #define VARATT_IS_COMPRESSED(PTR)			VARATT_IS_4B_C(PTR)
 #define VARATT_IS_EXTERNAL(PTR)				VARATT_IS_1B_E(PTR)
+
 #define VARATT_IS_EXTERNAL_ONDISK(PTR) \
 	(VARATT_IS_EXTERNAL(PTR) && VARTAG_EXTERNAL(PTR) == VARTAG_ONDISK)
 #define VARATT_IS_EXTERNAL_INDIRECT(PTR) \
@@ -299,6 +325,9 @@ typedef struct
 	(VARATT_IS_EXTERNAL(PTR) && VARTAG_IS_EXPANDED(VARTAG_EXTERNAL(PTR)))
 #define VARATT_IS_EXTERNAL_NON_EXPANDED(PTR) \
 	(VARATT_IS_EXTERNAL(PTR) && !VARTAG_IS_EXPANDED(VARTAG_EXTERNAL(PTR)))
+#define VARATT_IS_EXTERNAL_ORIOLEDB(PTR) \
+	(VARATT_IS_EXTERNAL(PTR) && VARTAG_EXTERNAL(PTR) == VARTAG_ORIOLEDB)
+
 #define VARATT_IS_SHORT(PTR)				VARATT_IS_1B(PTR)
 #define VARATT_IS_EXTENDED(PTR)				(!VARATT_IS_4B_U(PTR))
 
