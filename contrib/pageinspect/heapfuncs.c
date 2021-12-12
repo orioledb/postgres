@@ -364,6 +364,7 @@ tuple_data_split_internal(Oid relid, char *tupdata,
 				 */
 				if (VARATT_IS_EXTERNAL(tupdata + off) &&
 					!VARATT_IS_EXTERNAL_ONDISK(tupdata + off) &&
+					!VARATT_IS_EXTERNAL_ORIOLEDB(tupdata + off) &&
 					!VARATT_IS_EXTERNAL_INDIRECT(tupdata + off))
 					ereport(ERROR,
 							(errcode(ERRCODE_DATA_CORRUPTED),

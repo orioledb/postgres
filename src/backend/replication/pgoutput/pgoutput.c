@@ -1315,8 +1315,8 @@ pgoutput_row_filter(Relation relation, TupleTableSlot *old_slot,
 		 * VARTAG_INDIRECT. See ReorderBufferToastReplace.
 		 */
 		if (att->attlen == -1 &&
-			VARATT_IS_EXTERNAL_ONDISK(new_slot->tts_values[i]) &&
-			!VARATT_IS_EXTERNAL_ONDISK(old_slot->tts_values[i]))
+			(VARATT_IS_EXTERNAL_ONDISK(new_slot->tts_values[i]) || VARATT_IS_EXTERNAL_ORIOLEDB(new_slot->tts_values[i])) &&
+			!(VARATT_IS_EXTERNAL_ONDISK(old_slot->tts_values[i]) || VARATT_IS_EXTERNAL_ORIOLEDB(old_slot->tts_values[i])) )
 		{
 			if (!tmp_new_slot)
 			{
