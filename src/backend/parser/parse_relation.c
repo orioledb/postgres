@@ -20,6 +20,7 @@
 #include "access/relation.h"
 #include "access/sysattr.h"
 #include "access/table.h"
+#include "access/tableam.h"
 #include "catalog/heap.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_type.h"
@@ -1503,6 +1504,7 @@ addRangeTableEntry(ParseState *pstate,
 	rte->inh = inh;
 	rte->relkind = rel->rd_rel->relkind;
 	rte->rellockmode = lockmode;
+	rte->reftype = table_get_row_ref_type(rel);
 
 	/*
 	 * Build the list of effective column names using user-supplied aliases
@@ -1588,6 +1590,7 @@ addRangeTableEntryForRelation(ParseState *pstate,
 	rte->inh = inh;
 	rte->relkind = rel->rd_rel->relkind;
 	rte->rellockmode = lockmode;
+	rte->reftype = table_get_row_ref_type(rel);
 
 	/*
 	 * Build the list of effective column names using user-supplied aliases
@@ -1656,6 +1659,7 @@ addRangeTableEntryForSubquery(ParseState *pstate,
 	rte->rtekind = RTE_SUBQUERY;
 	rte->subquery = subquery;
 	rte->alias = alias;
+	rte->reftype = ROW_REF_COPY;
 
 	eref = alias ? copyObject(alias) : makeAlias("unnamed_subquery", NIL);
 	numaliases = list_length(eref->colnames);
@@ -1763,6 +1767,7 @@ addRangeTableEntryForFunction(ParseState *pstate,
 	rte->functions = NIL;		/* we'll fill this list below */
 	rte->funcordinality = rangefunc->ordinality;
 	rte->alias = alias;
+	rte->reftype = ROW_REF_COPY;
 
 	/*
 	 * Choose the RTE alias name.  We default to using the first function's
@@ -2079,6 +2084,7 @@ addRangeTableEntryForTableFunc(ParseState *pstate,
 	rte->coltypmods = tf->coltypmods;
 	rte->colcollations = tf->colcollations;
 	rte->alias = alias;
+	rte->reftype = ROW_REF_COPY;
 
 	refname = alias ? alias->aliasname :
 		pstrdup(tf->functype == TFT_XMLTABLE ? "xmltable" : "json_table");
@@ -2156,6 +2162,7 @@ addRangeTableEntryForValues(ParseState *pstate,
 	rte->coltypmods = coltypmods;
 	rte->colcollations = colcollations;
 	rte->alias = alias;
+	rte->reftype = ROW_REF_COPY;
 
 	eref = alias ? copyObject(alias) : makeAlias(refname, NIL);
 
@@ -2252,6 +2259,7 @@ addRangeTableEntryForJoin(ParseState *pstate,
 	rte->joinrightcols = rightcols;
 	rte->join_using_alias = join_using_alias;
 	rte->alias = alias;
+	rte->reftype = ROW_REF_COPY;
 
 	eref = alias ? copyObject(alias) : makeAlias("unnamed_join", NIL);
 	numaliases = list_length(eref->colnames);
@@ -2332,6 +2340,7 @@ addRangeTableEntryForCTE(ParseState *pstate,
 	rte->rtekind = RTE_CTE;
 	rte->ctename = cte->ctename;
 	rte->ctelevelsup = levelsup;
+	rte->reftype = ROW_REF_COPY;
 
 	/* Self-reference if and only if CTE's parse analysis isn't completed */
 	rte->self_reference = !IsA(cte->ctequery, Query);
@@ -2494,6 +2503,7 @@ addRangeTableEntryForENR(ParseState *pstate,
 	 * if they access transition tables linked to a table that is altered.
 	 */
 	rte->relid = enrmd->reliddesc;
+	rte->reftype = ROW_REF_COPY;
 
 	/*
 	 * Build the list of effective column names using user-supplied aliases
@@ -3261,6 +3271,9 @@ get_rte_attribute_name(RangeTblEntry *rte, AttrNumber attnum)
 	if (rte->alias &&
 		attnum > 0 && attnum <= list_length(rte->alias->colnames))
 		return strVal(list_nth(rte->alias->colnames, attnum - 1));
+
+	if (attnum == RowIdAttributeNumber)
+		return "rowid";
 
 	/*
 	 * If the RTE is a relation, go to the system catalogs not the

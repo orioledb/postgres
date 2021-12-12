@@ -48,7 +48,8 @@ extern PlannerInfo *subquery_planner(PlannerGlobal *glob, Query *parse,
 									 SetOperationStmt *setops);
 
 extern RowMarkType select_rowmark_type(RangeTblEntry *rte,
-									   LockClauseStrength strength);
+									   LockClauseStrength strength,
+									   RowRefType *refType);
 
 extern bool limit_needed(Query *parse);
 
