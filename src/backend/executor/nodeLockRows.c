@@ -27,6 +27,7 @@
 #include "executor/nodeLockRows.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
+#include "utils/datum.h"
 #include "utils/rel.h"
 
 
@@ -157,7 +158,16 @@ lnext:
 		}
 
 		/* okay, try to lock (and fetch) the tuple */
-		tid = *((ItemPointer) DatumGetPointer(datum));
+		if (erm->refType == ROW_REF_TID)
+		{
+			tid = *((ItemPointer) DatumGetPointer(datum));
+			datum = PointerGetDatum(&tid);
+		}
+		else
+		{
+			Assert(erm->refType = ROW_REF_ROWID);
+			datum = datumCopy(datum, false, -1);
+		}
 		switch (erm->markType)
 		{
 			case ROW_MARK_EXCLUSIVE:
@@ -182,11 +192,14 @@ lnext:
 		if (!IsolationUsesXactSnapshot())
 			lockflags |= TUPLE_LOCK_FLAG_FIND_LAST_VERSION;
 
-		test = table_tuple_lock(erm->relation, &tid, estate->es_snapshot,
+		test = table_tuple_lock(erm->relation, datum, estate->es_snapshot,
 								markSlot, estate->es_output_cid,
 								lockmode, erm->waitPolicy,
 								lockflags,
 								&tmfd);
+
+		if (erm->refType == ROW_REF_ROWID)
+			pfree(DatumGetPointer(datum));
 
 		switch (test)
 		{
