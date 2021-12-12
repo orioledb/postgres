@@ -166,6 +166,7 @@ BackgroundWriterMain(void)
 		 * about in bgwriter, but we do have LWLocks, buffers, and temp files.
 		 */
 		LWLockReleaseAll();
+		CustomErrorCleanup();
 		ConditionVariableCancelSleep();
 		UnlockBuffers();
 		ReleaseAuxProcessResources(false);
