@@ -134,6 +134,8 @@ static TransactionId latestObservedXid = InvalidTransactionId;
  */
 static TransactionId standbySnapshotPendingXmin;
 
+snapshot_hook_type snapshot_hook = NULL;
+
 #ifdef XIDCACHE_DEBUG
 
 /* counters for XidCache measurement */
@@ -487,6 +489,7 @@ ProcArrayEndTransactionInternal(PGPROC *proc, PGXACT *pgxact,
 	proc->delayChkptEnd = false;
 
 	proc->recoveryConflictPending = false;
+	proc->lastCommittedCSN = pg_atomic_fetch_add_u64(&ShmemVariableCache->nextCommitSeqNo, 1);
 
 	/* Clear the subtransaction-XID cache too while holding the lock */
 	pgxact->nxids = 0;
@@ -496,6 +499,7 @@ ProcArrayEndTransactionInternal(PGPROC *proc, PGXACT *pgxact,
 	if (TransactionIdPrecedes(ShmemVariableCache->latestCompletedXid,
 							  latestXid))
 		ShmemVariableCache->latestCompletedXid = latestXid;
+	ShmemVariableCache->xidCSN++;
 }
 
 /*
@@ -1503,6 +1507,9 @@ GetMaxSnapshotSubxidCount(void)
 	return TOTAL_MAX_CACHED_SUBXIDS;
 }
 
+SnapshotData	cachedSnapshot;
+bool			haveCachedSnapshot = false;
+
 /*
  * GetSnapshotData -- returns information about running transactions.
  *
@@ -1553,8 +1560,7 @@ GetSnapshotData(Snapshot snapshot)
 	TransactionId replication_slot_xmin = InvalidTransactionId;
 	TransactionId replication_slot_catalog_xmin = InvalidTransactionId;
 
-	Assert(snapshot != NULL);
-
+ 
 	/*
 	 * Allocating space for maxProcs xids is usually overkill; numProcs would
 	 * be sufficient.  But it seems better to do the malloc while not holding
@@ -1588,10 +1594,54 @@ GetSnapshotData(Snapshot snapshot)
 	}
 
 	/*
+	 * Restore cached snapshot if no new xids were committed since previous
+	 * snapshot.
+	 */
+	if (haveCachedSnapshot &&
+		cachedSnapshot.xidCSN == ShmemVariableCache->xidCSN &&
+		snapshot->snapshot_type == cachedSnapshot.snapshot_type)
+	{
+		snapshot->xmin = cachedSnapshot.xmin;
+		snapshot->xmax = cachedSnapshot.xmax;
+		snapshot->xcnt = 0;
+		snapshot->subxcnt = 0;
+		snapshot->suboverflowed = cachedSnapshot.suboverflowed;
+		snapshot->takenDuringRecovery = cachedSnapshot.takenDuringRecovery;
+		snapshot->copied = cachedSnapshot.copied;
+		snapshot->curcid = GetCurrentCommandId(false);
+		/*
+		 * This is a new snapshot, so set both refcounts are zero, and mark it as
+		 * not copied in persistent memory.
+		 */
+		snapshot->active_count = 0;
+		snapshot->regd_count = 0;
+		snapshot->copied = false;
+		if (old_snapshot_threshold < 0)
+		{
+			snapshot->lsn = InvalidXLogRecPtr;
+			snapshot->whenTaken = 0;
+		}
+		else
+		{
+			snapshot->lsn = cachedSnapshot.lsn;
+			snapshot->whenTaken = cachedSnapshot.whenTaken;
+			MaintainOldSnapshotTimeMapping(snapshot->whenTaken, snapshot->xmin);
+		}
+		if (!TransactionIdIsValid(MyPgXact->xmin))
+			MyPgXact->xmin = TransactionXmin = snapshot->xmin;
+		if (snapshot_hook)
+			snapshot_hook(snapshot);
+		return snapshot;
+	}
+	Assert(snapshot != NULL);
+
+	/*
 	 * It is sufficient to get shared lock on ProcArrayLock, even if we are
 	 * going to set MyPgXact->xmin.
 	 */
 	LWLockAcquire(ProcArrayLock, LW_SHARED);
+
+	snapshot->xidCSN = ShmemVariableCache->xidCSN;
 
 	/* xmax is always latestCompletedXid + 1 */
 	xmax = ShmemVariableCache->latestCompletedXid;
@@ -1747,6 +1797,9 @@ GetSnapshotData(Snapshot snapshot)
 	if (!TransactionIdIsValid(MyPgXact->xmin))
 		MyPgXact->xmin = TransactionXmin = xmin;
 
+	if (snapshot_hook)
+		snapshot_hook(snapshot);
+
 	LWLockRelease(ProcArrayLock);
 
 	/*
@@ -1815,6 +1868,13 @@ GetSnapshotData(Snapshot snapshot)
 		snapshot->lsn = GetXLogInsertRecPtr();
 		snapshot->whenTaken = GetSnapshotCurrentTimestamp();
 		MaintainOldSnapshotTimeMapping(snapshot->whenTaken, xmin);
+	}
+
+	/* Cache empty snapshot */
+	if (snapshot->subxcnt == 0 && snapshot->xcnt == 0)
+	{
+		haveCachedSnapshot = true;
+		cachedSnapshot = *snapshot;
 	}
 
 	return snapshot;
