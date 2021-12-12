@@ -17,9 +17,12 @@
 #ifndef TABLEAM_H
 #define TABLEAM_H
 
+#include "access/amapi.h"
 #include "access/relscan.h"
 #include "access/sdir.h"
 #include "access/xact.h"
+#include "nodes/execnodes.h"
+#include "storage/bufmgr.h"
 #include "utils/guc.h"
 #include "utils/rel.h"
 #include "utils/snapshot.h"
@@ -38,6 +41,16 @@ struct SampleScanState;
 struct TBMIterateResult;
 struct VacuumParams;
 struct ValidateIndexState;
+
+typedef int (*AcquireSampleRowsFunc) (Relation relation, int elevel,
+									  HeapTuple *rows, int targrows,
+									  double *totalrows,
+									  double *totaldeadrows);
+
+/* in commands/analyze.c */
+extern int acquire_sample_rows(Relation onerel, int elevel,
+							   HeapTuple *rows, int targrows,
+							   double *totalrows, double *totaldeadrows);
 
 /*
  * Bitmask values for the flags argument to the scan_begin callback.
@@ -282,6 +295,9 @@ typedef struct TableAmRoutine
 	 */
 	const TupleTableSlotOps *(*slot_callbacks) (Relation rel);
 
+	RowRefType	(*get_row_ref_type) (Relation rel);
+
+	void		(*free_rd_amcache) (Relation rel);
 
 	/* ------------------------------------------------------------------------
 	 * Table scan callbacks.
@@ -451,7 +467,7 @@ typedef struct TableAmRoutine
 	 * test, returns true, false otherwise.
 	 */
 	bool		(*tuple_fetch_row_version) (Relation rel,
-											ItemPointer tid,
+											Datum tupleid,
 											Snapshot snapshot,
 											TupleTableSlot *slot);
 
@@ -487,31 +503,29 @@ typedef struct TableAmRoutine
 	 */
 
 	/* see table_tuple_insert() for reference about parameters */
-	void		(*tuple_insert) (Relation rel, TupleTableSlot *slot,
+	TupleTableSlot *(*tuple_insert) (Relation rel, TupleTableSlot *slot,
 								 CommandId cid, int options,
-								 struct BulkInsertStateData *bistate);
+								 struct BulkInsertStateData *bistate,
+								 bool *insert_indexes);
 
-	/* see table_tuple_insert_speculative() for reference about parameters */
-	void		(*tuple_insert_speculative) (Relation rel,
-											 TupleTableSlot *slot,
-											 CommandId cid,
-											 int options,
-											 struct BulkInsertStateData *bistate,
-											 uint32 specToken);
-
-	/* see table_tuple_complete_speculative() for reference about parameters */
-	void		(*tuple_complete_speculative) (Relation rel,
-											   TupleTableSlot *slot,
-											   uint32 specToken,
-											   bool succeeded);
+	TupleTableSlot *(*tuple_insert_with_arbiter) (ResultRelInfo *resultRelInfo,
+								 TupleTableSlot *slot,
+								 CommandId cid, int options,
+								 struct BulkInsertStateData *bistate,
+								 List *arbiterIndexes,
+								 EState *estate,
+								 LockTupleMode lockmode,
+								 TupleTableSlot *lockedSlot,
+								 TupleTableSlot *tempSlot);
 
 	/* see table_multi_insert() for reference about parameters */
 	void		(*multi_insert) (Relation rel, TupleTableSlot **slots, int nslots,
-								 CommandId cid, int options, struct BulkInsertStateData *bistate);
+								 CommandId cid, int options, struct BulkInsertStateData *bistate,
+								 bool *insert_indexes);
 
 	/* see table_tuple_delete() for reference about parameters */
 	TM_Result	(*tuple_delete) (Relation rel,
-								 ItemPointer tid,
+								 Datum tupleid,
 								 CommandId cid,
 								 Snapshot snapshot,
 								 Snapshot crosscheck,
@@ -522,7 +536,7 @@ typedef struct TableAmRoutine
 
 	/* see table_tuple_update() for reference about parameters */
 	TM_Result	(*tuple_update) (Relation rel,
-								 ItemPointer otid,
+								 Datum tupleid,
 								 TupleTableSlot *slot,
 								 CommandId cid,
 								 Snapshot snapshot,
@@ -535,7 +549,7 @@ typedef struct TableAmRoutine
 
 	/* see table_tuple_lock() for reference about parameters */
 	TM_Result	(*tuple_lock) (Relation rel,
-							   ItemPointer tid,
+							   Datum tupleid,
 							   Snapshot snapshot,
 							   TupleTableSlot *slot,
 							   CommandId cid,
@@ -855,6 +869,24 @@ typedef struct TableAmRoutine
 										   struct SampleScanState *scanstate,
 										   TupleTableSlot *slot);
 
+	/* Check if tuple in the slot belongs to the current transaction */
+	bool		(*tuple_is_current) (Relation rel, TupleTableSlot *slot);
+
+	void		(*analyze_table) (Relation relation,
+								  AcquireSampleRowsFunc *func,
+								  BlockNumber *totalpages);
+
+	bool		(*define_index_validate) (Relation rel, IndexStmt *stmt,
+										  bool skip_build, void **arg);
+
+	bool		(*define_index) (Relation rel, Oid indoid, bool reindex,
+								 bool skip_constraint_checks, bool skip_build,
+								 void *arg);
+
+	bytea	   *(*reloptions) (char relkind, Datum reloptions, bool validate);
+
+	bytea	   *(*indexoptions) (amoptions_function amoptions, char relkind,
+								 Datum reloptions, bool validate);
 } TableAmRoutine;
 
 
@@ -1262,7 +1294,7 @@ extern bool table_index_fetch_tuple_check(Relation rel,
  */
 static inline bool
 table_tuple_fetch_row_version(Relation rel,
-							  ItemPointer tid,
+							  Datum tupleid,
 							  Snapshot snapshot,
 							  TupleTableSlot *slot)
 {
@@ -1274,7 +1306,7 @@ table_tuple_fetch_row_version(Relation rel,
 	if (unlikely(TransactionIdIsValid(CheckXidAlive) && !bsysscan))
 		elog(ERROR, "unexpected table_tuple_fetch_row_version call during logical decoding");
 
-	return rel->rd_tableam->tuple_fetch_row_version(rel, tid, snapshot, slot);
+	return rel->rd_tableam->tuple_fetch_row_version(rel, tupleid, snapshot, slot);
 }
 
 /*
@@ -1374,45 +1406,34 @@ table_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
  * insertion. But note that any toasting of fields within the slot is NOT
  * reflected in the slots contents.
  */
-static inline void
+static inline TupleTableSlot *
 table_tuple_insert(Relation rel, TupleTableSlot *slot, CommandId cid,
-				   int options, struct BulkInsertStateData *bistate)
+				   int options, struct BulkInsertStateData *bistate,
+				   bool *insert_indexes)
 {
-	rel->rd_tableam->tuple_insert(rel, slot, cid, options,
-								  bistate);
+	return rel->rd_tableam->tuple_insert(rel, slot, cid, options,
+										 bistate, insert_indexes);
 }
 
-/*
- * Perform a "speculative insertion". These can be backed out afterwards
- * without aborting the whole transaction.  Other sessions can wait for the
- * speculative insertion to be confirmed, turning it into a regular tuple, or
- * aborted, as if it never existed.  Speculatively inserted tuples behave as
- * "value locks" of short duration, used to implement INSERT .. ON CONFLICT.
- *
- * A transaction having performed a speculative insertion has to either abort,
- * or finish the speculative insertion with
- * table_tuple_complete_speculative(succeeded = ...).
- */
-static inline void
-table_tuple_insert_speculative(Relation rel, TupleTableSlot *slot,
-							   CommandId cid, int options,
-							   struct BulkInsertStateData *bistate,
-							   uint32 specToken)
+static inline TupleTableSlot *
+table_tuple_insert_with_arbiter(ResultRelInfo *resultRelInfo,
+								TupleTableSlot *slot,
+								CommandId cid, int options,
+								struct BulkInsertStateData *bistate,
+								List *arbiterIndexes,
+								EState *estate,
+								LockTupleMode lockmode,
+								TupleTableSlot *lockedSlot,
+								TupleTableSlot *tempSlot)
 {
-	rel->rd_tableam->tuple_insert_speculative(rel, slot, cid, options,
-											  bistate, specToken);
-}
+	Relation	rel = resultRelInfo->ri_RelationDesc;
 
-/*
- * Complete "speculative insertion" started in the same transaction. If
- * succeeded is true, the tuple is fully inserted, if false, it's removed.
- */
-static inline void
-table_tuple_complete_speculative(Relation rel, TupleTableSlot *slot,
-								 uint32 specToken, bool succeeded)
-{
-	rel->rd_tableam->tuple_complete_speculative(rel, slot, specToken,
-												succeeded);
+	return rel->rd_tableam->tuple_insert_with_arbiter(resultRelInfo,
+													  slot, cid, options,
+													  bistate, arbiterIndexes,
+													  estate,
+													  lockmode, lockedSlot,
+													  tempSlot);
 }
 
 /*
@@ -1431,10 +1452,11 @@ table_tuple_complete_speculative(Relation rel, TupleTableSlot *slot,
  */
 static inline void
 table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
-				   CommandId cid, int options, struct BulkInsertStateData *bistate)
+				   CommandId cid, int options, struct BulkInsertStateData *bistate,
+				   bool *insert_indexes)
 {
 	rel->rd_tableam->multi_insert(rel, slots, nslots,
-								  cid, options, bistate);
+								  cid, options, bistate, insert_indexes);
 }
 
 /*
@@ -1474,12 +1496,12 @@ table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
  * struct TM_FailureData for additional info.
  */
 static inline TM_Result
-table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
+table_tuple_delete(Relation rel, Datum tupleid, CommandId cid,
 				   Snapshot snapshot, Snapshot crosscheck, int options,
 				   TM_FailureData *tmfd, bool changingPart,
 				   TupleTableSlot *oldSlot)
 {
-	return rel->rd_tableam->tuple_delete(rel, tid, cid,
+	return rel->rd_tableam->tuple_delete(rel, tupleid, cid,
 										 snapshot, crosscheck,
 										 options, tmfd, changingPart,
 										 oldSlot);
@@ -1530,13 +1552,13 @@ table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
  * for additional info.
  */
 static inline TM_Result
-table_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slot,
+table_tuple_update(Relation rel, Datum tupleid, TupleTableSlot *slot,
 				   CommandId cid, Snapshot snapshot, Snapshot crosscheck,
 				   int options, TM_FailureData *tmfd, LockTupleMode *lockmode,
 				   bool *update_indexes,
 				   TupleTableSlot *oldSlot)
 {
-	return rel->rd_tableam->tuple_update(rel, otid, slot,
+	return rel->rd_tableam->tuple_update(rel, tupleid, slot,
 										 cid, snapshot, crosscheck,
 										 options, tmfd,
 										 lockmode, update_indexes,
@@ -1577,12 +1599,12 @@ table_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slot,
  * comments for struct TM_FailureData for additional info.
  */
 static inline TM_Result
-table_tuple_lock(Relation rel, ItemPointer tid, Snapshot snapshot,
+table_tuple_lock(Relation rel, Datum tupleid, Snapshot snapshot,
 				 TupleTableSlot *slot, CommandId cid, LockTupleMode mode,
 				 LockWaitPolicy wait_policy, uint8 flags,
 				 TM_FailureData *tmfd)
 {
-	return rel->rd_tableam->tuple_lock(rel, tid, snapshot, slot,
+	return rel->rd_tableam->tuple_lock(rel, tupleid, snapshot, slot,
 									   cid, mode, wait_policy,
 									   flags, tmfd);
 }
@@ -2047,13 +2069,19 @@ table_scan_sample_next_tuple(TableScanDesc scan,
 														   slot);
 }
 
+static inline bool
+table_tuple_is_current(Relation rel, TupleTableSlot *slot)
+{
+	return rel->rd_tableam->tuple_is_current(rel, slot);
+}
 
 /* ----------------------------------------------------------------------------
  * Functions to make modifications a bit simpler.
  * ----------------------------------------------------------------------------
  */
 
-extern void simple_table_tuple_insert(Relation rel, TupleTableSlot *slot);
+extern void simple_table_tuple_insert(Relation rel, TupleTableSlot *slot,
+									  bool *insert_indexes);
 extern void simple_table_tuple_delete(Relation rel, ItemPointer tid,
 									  Snapshot snapshot,
 									  TupleTableSlot *oldSlot);
@@ -2101,8 +2129,100 @@ extern void table_block_relation_estimate_size(Relation rel,
  */
 
 extern const TableAmRoutine *GetTableAmRoutine(Oid amhandler);
+extern const TableAmRoutine *GetTableAmRoutineByAmOid(Oid amoid);
 extern const TableAmRoutine *GetHeapamTableAmRoutine(void);
 extern bool check_default_table_access_method(char **newval, void **extra,
 											  GucSource source);
+
+static inline RowRefType
+table_get_row_ref_type(Relation rel)
+{
+	if (rel->rd_tableam)
+		return rel->rd_tableam->get_row_ref_type(rel);
+	else
+		return ROW_REF_TID;
+}
+
+static inline bool
+table_define_index_validate(Relation rel, IndexStmt *stmt,
+									 bool skip_build, void **arg)
+{
+	if (rel->rd_tableam && rel->rd_tableam->define_index_validate)
+		return rel->rd_tableam->define_index_validate(rel, stmt,
+													  skip_build, arg);
+	else
+		return true;
+}
+
+static inline bool
+table_define_index(Relation rel, Oid indoid, bool reindex,
+				   bool skip_constraint_checks, bool skip_build,
+				   void *arg)
+{
+	if (rel->rd_tableam && rel->rd_tableam->define_index)
+		return rel->rd_tableam->define_index(rel, indoid, reindex,
+											 skip_constraint_checks,
+											 skip_build, arg);
+	else
+		return true;
+}
+
+static inline void
+table_free_rd_amcache(Relation rel)
+{
+	if (rel->rd_tableam)
+	{
+		rel->rd_tableam->free_rd_amcache(rel);
+	}
+	else
+	{
+		if (rel->rd_amcache)
+			pfree(rel->rd_amcache);
+		rel->rd_amcache = NULL;
+	}
+}
+
+static inline void
+table_analyze(Relation relation, AcquireSampleRowsFunc *func,
+			  BlockNumber *totalpages)
+{
+	if (relation->rd_tableam->analyze_table)
+	{
+		relation->rd_tableam->analyze_table(relation, func, totalpages);
+	}
+	else
+	{
+		*func = acquire_sample_rows;
+		*totalpages = RelationGetNumberOfBlocks(relation);
+	}
+}
+
+static inline bytea *
+table_reloptions(Relation rel, char relkind,
+				 Datum reloptions, bool validate)
+{
+	return rel->rd_tableam->reloptions(relkind, reloptions, validate);
+}
+
+static inline bytea *
+tableam_reloptions(const TableAmRoutine *tableam, char relkind,
+				   Datum reloptions, bool validate)
+{
+	return tableam->reloptions(relkind, reloptions, validate);
+}
+
+extern bytea *index_reloptions(amoptions_function amoptions, Datum reloptions,
+							   bool validate);
+
+static inline bytea *
+tableam_indexoptions(const TableAmRoutine *tableam,
+					 amoptions_function amoptions, char relkind,
+					 Datum reloptions, bool validate)
+{
+	if (tableam)
+		return tableam->indexoptions(amoptions, relkind, reloptions, validate);
+	else
+		return index_reloptions(amoptions, reloptions, validate);
+}
 
 #endif							/* TABLEAM_H */
