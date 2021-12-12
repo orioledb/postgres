@@ -209,7 +209,8 @@ retry:
 
 		PushActiveSnapshot(GetLatestSnapshot());
 
-		res = table_tuple_lock(rel, &(outslot->tts_tid), GetActiveSnapshot(),
+		res = table_tuple_lock(rel, PointerGetDatum(&(outslot->tts_tid)),
+							   GetActiveSnapshot(),
 							   outslot,
 							   GetCurrentCommandId(false),
 							   lockmode,
@@ -393,7 +394,8 @@ retry:
 
 		PushActiveSnapshot(GetLatestSnapshot());
 
-		res = table_tuple_lock(rel, &(outslot->tts_tid), GetActiveSnapshot(),
+		res = table_tuple_lock(rel, PointerGetDatum(&(outslot->tts_tid)),
+							   GetActiveSnapshot(),
 							   outslot,
 							   GetCurrentCommandId(false),
 							   lockmode,
@@ -532,7 +534,7 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 		resultRelInfo->ri_TrigDesc->trig_update_before_row)
 	{
 		if (!ExecBRUpdateTriggers(estate, epqstate, resultRelInfo,
-								  tid, NULL, slot, NULL, NULL))
+								  PointerGetDatum(tid), NULL, slot, NULL, NULL))
 			skip_tuple = true;	/* "do nothing" */
 	}
 
@@ -599,7 +601,7 @@ ExecSimpleRelationDelete(ResultRelInfo *resultRelInfo,
 		resultRelInfo->ri_TrigDesc->trig_delete_before_row)
 	{
 		skip_tuple = !ExecBRDeleteTriggers(estate, epqstate, resultRelInfo,
-										   tid, NULL, NULL, NULL, NULL);
+										   PointerGetDatum(tid), NULL, NULL, NULL, NULL);
 	}
 
 	if (!skip_tuple)

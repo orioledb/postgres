@@ -247,6 +247,7 @@ RI_FKey_check(TriggerData *trigdata)
 	TupleTableSlot *newslot;
 	RI_QueryKey qkey;
 	SPIPlanPtr	qplan;
+	Relation	rel = trigdata->tg_relation;
 
 	riinfo = ri_FetchConstraintInfo(trigdata->tg_trigger,
 									trigdata->tg_relation, false);
@@ -264,7 +265,7 @@ RI_FKey_check(TriggerData *trigdata)
 	 * and lock on the buffer to call HeapTupleSatisfiesVisibility.  Caller
 	 * should be holding pin, but not lock.
 	 */
-	if (!table_tuple_satisfies_snapshot(trigdata->tg_relation, newslot, SnapshotSelf))
+	if (!table_tuple_satisfies_snapshot(rel, newslot, SnapshotSelf))
 		return PointerGetDatum(NULL);
 
 	/*
@@ -1263,9 +1264,6 @@ RI_FKey_fk_upd_check_required(Trigger *trigger, Relation fk_rel,
 {
 	const RI_ConstraintInfo *riinfo;
 	int			ri_nullcheck;
-	Datum		xminDatum;
-	TransactionId xmin;
-	bool		isnull;
 
 	/*
 	 * AfterTriggerSaveEvent() handles things such that this function is never
@@ -1333,10 +1331,7 @@ RI_FKey_fk_upd_check_required(Trigger *trigger, Relation fk_rel,
 	 * this if we knew the INSERT trigger already fired, but there is no easy
 	 * way to know that.)
 	 */
-	xminDatum = slot_getsysattr(oldslot, MinTransactionIdAttributeNumber, &isnull);
-	Assert(!isnull);
-	xmin = DatumGetTransactionId(xminDatum);
-	if (TransactionIdIsCurrentTransactionId(xmin))
+	if (table_tuple_is_current(fk_rel, oldslot))
 		return true;
 
 	/* If all old and new key values are equal, no check is needed */
