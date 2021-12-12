@@ -2314,6 +2314,7 @@ preprocess_rowmarks(PlannerInfo *root)
 		RowMarkClause *rc = lfirst_node(RowMarkClause, l);
 		RangeTblEntry *rte = rt_fetch(rc->rti, parse->rtable);
 		PlanRowMark *newrc;
+		RowRefType refType;
 
 		/*
 		 * Currently, it is syntactically impossible to have FOR UPDATE et al
@@ -2336,8 +2337,8 @@ preprocess_rowmarks(PlannerInfo *root)
 		newrc = makeNode(PlanRowMark);
 		newrc->rti = newrc->prti = rc->rti;
 		newrc->rowmarkId = ++(root->glob->lastRowMarkId);
-		newrc->markType = select_rowmark_type(rte, rc->strength);
-		newrc->allMarkTypes = (1 << newrc->markType);
+		newrc->markType = select_rowmark_type(rte, rc->strength, &refType);
+		newrc->allRefTypes = (1 << refType);
 		newrc->strength = rc->strength;
 		newrc->waitPolicy = rc->waitPolicy;
 		newrc->isParent = false;
@@ -2353,6 +2354,7 @@ preprocess_rowmarks(PlannerInfo *root)
 	{
 		RangeTblEntry *rte = lfirst_node(RangeTblEntry, l);
 		PlanRowMark *newrc;
+		RowRefType refType = ROW_REF_TID;
 
 		i++;
 		if (!bms_is_member(i, rels))
@@ -2361,8 +2363,8 @@ preprocess_rowmarks(PlannerInfo *root)
 		newrc = makeNode(PlanRowMark);
 		newrc->rti = newrc->prti = i;
 		newrc->rowmarkId = ++(root->glob->lastRowMarkId);
-		newrc->markType = select_rowmark_type(rte, LCS_NONE);
-		newrc->allMarkTypes = (1 << newrc->markType);
+		newrc->markType = select_rowmark_type(rte, LCS_NONE, &refType);
+		newrc->allRefTypes = (1 << refType);
 		newrc->strength = LCS_NONE;
 		newrc->waitPolicy = LockWaitBlock;	/* doesn't matter */
 		newrc->isParent = false;
@@ -2377,11 +2379,13 @@ preprocess_rowmarks(PlannerInfo *root)
  * Select RowMarkType to use for a given table
  */
 RowMarkType
-select_rowmark_type(RangeTblEntry *rte, LockClauseStrength strength)
+select_rowmark_type(RangeTblEntry *rte, LockClauseStrength strength,
+					RowRefType *refType)
 {
 	if (rte->rtekind != RTE_RELATION)
 	{
 		/* If it's not a table at all, use ROW_MARK_COPY */
+		*refType = ROW_REF_COPY;
 		return ROW_MARK_COPY;
 	}
 	else if (rte->relkind == RELKIND_FOREIGN_TABLE)
@@ -2392,10 +2396,12 @@ select_rowmark_type(RangeTblEntry *rte, LockClauseStrength strength)
 		if (fdwroutine->GetForeignRowMarkType != NULL)
 			return fdwroutine->GetForeignRowMarkType(rte, strength);
 		/* Otherwise, use ROW_MARK_COPY by default */
+		*refType = ROW_REF_COPY;
 		return ROW_MARK_COPY;
 	}
 	else
 	{
+		*refType = rte->reftype;
 		/* Regular table, apply the appropriate lock type */
 		switch (strength)
 		{
