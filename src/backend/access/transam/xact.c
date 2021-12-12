@@ -2636,6 +2636,7 @@ AbortTransaction(void)
 	 * while cleaning up!
 	 */
 	LWLockReleaseAll();
+	CustomErrorCleanup();
 
 	/* Clear wait information and command progress indicator */
 	pgstat_report_wait_end();
@@ -4964,6 +4965,7 @@ AbortSubTransaction(void)
 	 * Buffer locks, for example?  I don't think so but I'm not sure.
 	 */
 	LWLockReleaseAll();
+	CustomErrorCleanup();
 
 	pgstat_report_wait_end();
 	pgstat_progress_end_command();
