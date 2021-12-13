@@ -1250,7 +1250,7 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 	 * If InHotStandby we set lock waits slightly later for clarity with other
 	 * code.
 	 */
-	if (!InHotStandby)
+	if (!InHotStandby && !InRecovery)
 	{
 		if (LockTimeout > 0)
 		{
@@ -1539,7 +1539,7 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 	 * already caused QueryCancelPending to become set, we want the cancel to
 	 * be reported as a lock timeout, not a user cancel.
 	 */
-	if (!InHotStandby)
+	if (!InHotStandby && !InRecovery)
 	{
 		if (LockTimeout > 0)
 		{
