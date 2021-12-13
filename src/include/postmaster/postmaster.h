@@ -64,6 +64,10 @@ extern int	MaxLivePostmasterChildren(void);
 
 extern bool PostmasterMarkPIDForWorkerNotify(int);
 
+typedef void (*base_init_startup_hook_type)(void);
+
+extern PGDLLIMPORT base_init_startup_hook_type base_init_startup_hook;
+
 #ifdef WIN32
 extern void pgwin32_register_deadchild_callback(HANDLE procHandle, DWORD procId);
 #endif
