@@ -65,6 +65,10 @@ extern bool PostmasterMarkPIDForWorkerNotify(int);
 
 extern void processCancelRequest(int backendPID, int32 cancelAuthCode);
 
+typedef void (*base_init_startup_hook_type)(void);
+
+extern PGDLLIMPORT base_init_startup_hook_type base_init_startup_hook;
+
 #ifdef EXEC_BACKEND
 extern Size ShmemBackendArraySize(void);
 extern void ShmemBackendArrayAllocation(void);
