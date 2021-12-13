@@ -1170,7 +1170,8 @@ LockAcquireExtended(const LOCKTAG *locktag,
 			LOCK_PRINT("LockAcquire: INCONSISTENT", lock, lockmode);
 			/* Should we retry ? */
 			LWLockRelease(partitionLock);
-			elog(ERROR, "LockAcquire failed");
+
+			return LOCKACQUIRE_NOT_AVAIL;
 		}
 		PROCLOCK_PRINT("LockAcquire: granted", proclock);
 		LOCK_PRINT("LockAcquire: granted", lock, lockmode);
@@ -4672,8 +4673,8 @@ VirtualXactLock(VirtualTransactionId vxid, bool wait)
 	LWLockRelease(&proc->fpInfoLock);
 
 	/* Time to wait. */
-	(void) LockAcquire(&tag, ShareLock, false, false);
-
+	if (LockAcquire(&tag, ShareLock, false, false) == LOCKACQUIRE_NOT_AVAIL)
+		return false;
 	LockRelease(&tag, ShareLock, false);
 	return XactLockForVirtualXact(vxid, xid, wait);
 }
