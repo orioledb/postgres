@@ -1266,6 +1266,19 @@ LockAcquireExtended(const LOCKTAG *locktag,
 			DeadLockReport();
 			/* DeadLockReport() will not return */
 		}
+		else if (!(proclock->holdMask & LOCKBIT_ON(lockmode)))
+		{
+			/*
+			 * We've been removed from the queue without obtaining a lock.
+			 * That's OK, we're going to return LOCKACQUIRE_NOT_AVAIL.
+			 */
+			AbortStrongLockAcquire();
+			if (locallock->nLocks == 0)
+				RemoveLocalLock(locallock);
+			if (locallockp)
+				*locallockp = NULL;
+			return LOCKACQUIRE_NOT_AVAIL;
+		}
 	}
 	else
 		LWLockRelease(partitionLock);
@@ -4840,8 +4853,8 @@ VirtualXactLock(VirtualTransactionId vxid, bool wait)
 	LWLockRelease(&proc->fpInfoLock);
 
 	/* Time to wait. */
-	(void) LockAcquire(&tag, ShareLock, false, false);
-
+	if (LockAcquire(&tag, ShareLock, false, false) == LOCKACQUIRE_NOT_AVAIL)
+		return false;
 	LockRelease(&tag, ShareLock, false);
 	return XactLockForVirtualXact(vxid, xid, wait);
 }
