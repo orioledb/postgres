@@ -83,6 +83,7 @@ int			min_parallel_index_scan_size;
 
 /* Hook for plugins to get control in set_rel_pathlist() */
 set_rel_pathlist_hook_type set_rel_pathlist_hook = NULL;
+set_plain_rel_pathlist_hook_type set_plain_rel_pathlist_hook = NULL;
 
 /* Hook for plugins to replace standard_join_search() */
 join_search_hook_type join_search_hook = NULL;
@@ -772,19 +773,25 @@ set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 	 */
 	required_outer = rel->lateral_relids;
 
-	/*
-	 * Consider TID scans.
-	 *
-	 * If create_tidscan_paths returns true, then a TID scan path is forced.
-	 * This happens when rel->baserestrictinfo contains CurrentOfExpr, because
-	 * the executor can't handle any other type of path for such queries.
-	 * Hence, we return without adding any other paths.
-	 */
-	if (create_tidscan_paths(root, rel))
-		return;
-
 	/* Consider sequential scan */
 	add_path(rel, create_seqscan_path(root, rel, required_outer, 0));
+	if (!set_plain_rel_pathlist_hook ||
+		set_plain_rel_pathlist_hook(root, rel, rte))
+	{
+		/*
+		 * Consider TID scans.
+		 *
+		 * If create_tidscan_paths returns true, then a TID scan path is forced.
+		 * This happens when rel->baserestrictinfo contains CurrentOfExpr, because
+		 * the executor can't handle any other type of path for such queries.
+		 * Hence, we return without adding any other paths.
+		 */
+		if (create_tidscan_paths(root, rel))
+			return;
+
+		/* Consider sequential scan */
+		add_path(rel, create_seqscan_path(root, rel, required_outer, 0));
+	}
 
 	/* If appropriate, consider parallel sequential scan */
 	if (rel->consider_parallel && required_outer == NULL)
