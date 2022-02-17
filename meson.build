@@ -153,6 +153,7 @@ cdata.set('PG_VERSION_NUM', pg_version_num)
 # PG_VERSION_STR is built later, it depends on compiler test results
 cdata.set_quoted('CONFIGURE_ARGS', '')
 
+orioledb_patchset_version = '22'
 
 
 ###############################################################
