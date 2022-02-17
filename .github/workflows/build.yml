@@ -1,0 +1,31 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on:
+     - ubuntu-20.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [clang, gcc]
+        check_type: [normal, debug]
+    env:
+      LLVM_VER: 10
+      COMPILER: ${{ matrix.compiler }}
+      CHECK_TYPE: ${{ matrix.check_type }}
+    steps:
+      - name: Checkout code into workspace directory
+        uses: actions/checkout@v2
+      - name: Setup prerequisites
+        run: bash ./ci/prerequisites.sh
+      - name: Build
+        run: bash ./ci/build.sh
+      - name: Check
+        run: bash ./ci/check.sh
+      - name: Check output
+        run: bash ./ci/check_output.sh
+        if: ${{ success() || failure() }}
