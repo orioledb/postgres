@@ -16,8 +16,11 @@
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "storage/predicate_internals.h"
+#include "storage/proc.h"
+#include "storage/procarray.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/wait_event.h"
 
 
 /*
