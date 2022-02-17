@@ -37,6 +37,7 @@ pgxs_kv = {
   'PACKAGE_VERSION': pg_version,
   'PG_MAJORVERSION': pg_version_major,
   'PG_VERSION_NUM': pg_version_num,
+  'ORIOLEDB_PATCHSET_VERSION': orioledb_patchset_version,
   'configure_input': 'meson',
 
   'vpath_build': 'yes',
