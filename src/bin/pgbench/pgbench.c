@@ -211,6 +211,11 @@ double		throttle_delay = 0;
 int64		latency_limit = 0;
 
 /*
+ * tableam selection
+ */
+char	   *tableam = NULL;
+
+/*
  * tablespace selection
  */
 char	   *tablespace = NULL;
@@ -893,6 +898,7 @@ usage(void)
 		   "  --partition-method=(range|hash)\n"
 		   "                           partition pgbench_accounts with this method (default: range)\n"
 		   "  --partitions=NUM         partition pgbench_accounts into NUM parts (default: 0)\n"
+		   "  --tableam=TABLEAM        create tables using the specified tableam\n"
 		   "  --tablespace=TABLESPACE  create tables in the specified tablespace\n"
 		   "  --unlogged-tables        create tables as unlogged tables\n"
 		   "\nOptions to select what to run:\n"
@@ -4778,14 +4784,34 @@ createPartitions(PGconn *con)
 				appendPQExpBufferStr(&query, "maxvalue");
 
 			appendPQExpBufferChar(&query, ')');
+
+			if (tableam != NULL)
+			{
+				char	   *escape_tableam;
+
+				escape_tableam = PQescapeIdentifier(con, tableam, strlen(tableam));
+				appendPQExpBuffer(&query, " using %s", escape_tableam);
+				PQfreemem(escape_tableam);
+			}
 		}
 		else if (partition_method == PART_HASH)
+		{
 			printfPQExpBuffer(&query,
 							  "create%s table pgbench_accounts_%d\n"
 							  "  partition of pgbench_accounts\n"
 							  "  for values with (modulus %d, remainder %d)",
 							  unlogged_tables ? " unlogged" : "", p,
 							  partitions, p - 1);
+
+			if (tableam != NULL)
+			{
+				char	   *escape_tableam;
+
+				escape_tableam = PQescapeIdentifier(con, tableam, strlen(tableam));
+				appendPQExpBuffer(&query, " using %s", escape_tableam);
+				PQfreemem(escape_tableam);
+			}
+		}
 		else					/* cannot get there */
 			Assert(0);
 
@@ -4872,10 +4898,20 @@ initCreateTables(PGconn *con)
 		if (partition_method != PART_NONE && strcmp(ddl->table, "pgbench_accounts") == 0)
 			appendPQExpBuffer(&query,
 							  " partition by %s (aid)", PARTITION_METHOD[partition_method]);
-		else if (ddl->declare_fillfactor)
+		else
 		{
+			if (tableam != NULL)
+			{
+				char	   *escape_tableam;
+
+				escape_tableam = PQescapeIdentifier(con, tableam, strlen(tableam));
+				appendPQExpBuffer(&query, " using %s", escape_tableam);
+				PQfreemem(escape_tableam);
+			}
+
 			/* fillfactor is only expected on actual tables */
-			appendPQExpBuffer(&query, " with (fillfactor=%d)", fillfactor);
+			if (ddl->declare_fillfactor)
+				appendPQExpBuffer(&query, " with (fillfactor=%d)", fillfactor);
 		}
 
 		if (tablespace != NULL)
@@ -6663,6 +6699,7 @@ main(int argc, char **argv)
 		{"verbose-errors", no_argument, NULL, 15},
 		{"exit-on-abort", no_argument, NULL, 16},
 		{"debug", no_argument, NULL, 17},
+		{"tableam", required_argument, NULL, 18},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -7002,6 +7039,10 @@ main(int argc, char **argv)
 				break;
 			case 17:			/* debug */
 				pg_logging_increase_verbosity();
+				break;
+			case 18:			/* tableam */
+				initialization_option_set = true;
+				tableam = pg_strdup(optarg);
 				break;
 			default:
 				/* getopt_long already emitted a complaint */
