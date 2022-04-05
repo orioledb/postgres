@@ -183,6 +183,11 @@ double		throttle_delay = 0;
 int64		latency_limit = 0;
 
 /*
+ * tableam selection
+ */
+char	   *tableam = NULL;
+
+/*
  * tablespace selection
  */
 char	   *tablespace = NULL;
@@ -603,6 +608,7 @@ static void doLog(TState *thread, CState *st,
 static void processXactStats(TState *thread, CState *st, instr_time *now,
 							 bool skipped, StatsData *agg);
 static void append_fillfactor(char *opts, int len);
+static void append_tableam(char *opts, int len);
 static void addScript(ParsedScript script);
 static void *threadRun(void *arg);
 static void finishCon(CState *st);
@@ -641,6 +647,7 @@ usage(void)
 		   "  --partition-method=(range|hash)\n"
 		   "                           partition pgbench_accounts with this method (default: range)\n"
 		   "  --partitions=NUM         partition pgbench_accounts into NUM parts (default: 0)\n"
+		   "  --tableam=TABLEAM        create tables using the specified tableam\n"
 		   "  --tablespace=TABLESPACE  create tables in the specified tablespace\n"
 		   "  --unlogged-tables        create tables as unlogged tables\n"
 		   "\nOptions to select what to run:\n"
@@ -3648,14 +3655,16 @@ static void
 createPartitions(PGconn *con)
 {
 	char		ff[64];
-
-	ff[0] = '\0';
+	char		tam[64];
 
 	/*
 	 * Per ddlinfo in initCreateTables, fillfactor is needed on table
 	 * pgbench_accounts.
 	 */
+	ff[0] = '\0';
 	append_fillfactor(ff, sizeof(ff));
+	tam[0] = '\0';
+	append_tableam(tam, sizeof(tam));
 
 	/* we must have to create some partitions */
 	Assert(partitions > 0);
@@ -3691,17 +3700,17 @@ createPartitions(PGconn *con)
 			snprintf(query, sizeof(query),
 					 "create%s table pgbench_accounts_%d\n"
 					 "  partition of pgbench_accounts\n"
-					 "  for values from (%s) to (%s)%s\n",
+					 "  for values from (%s) to (%s)%s%s\n",
 					 unlogged_tables ? " unlogged" : "", p,
-					 minvalue, maxvalue, ff);
+					 minvalue, maxvalue, tam, ff);
 		}
 		else if (partition_method == PART_HASH)
 			snprintf(query, sizeof(query),
 					 "create%s table pgbench_accounts_%d\n"
 					 "  partition of pgbench_accounts\n"
-					 "  for values with (modulus %d, remainder %d)%s\n",
+					 "  for values with (modulus %d, remainder %d)%s%s\n",
 					 unlogged_tables ? " unlogged" : "", p,
-					 partitions, p - 1, ff);
+					 partitions, p - 1, tam, ff);
 		else					/* cannot get there */
 			Assert(0);
 
@@ -3775,11 +3784,16 @@ initCreateTables(PGconn *con)
 
 		/* Partition pgbench_accounts table */
 		if (partition_method != PART_NONE && strcmp(ddl->table, "pgbench_accounts") == 0)
+		{
 			snprintf(opts + strlen(opts), sizeof(opts) - strlen(opts),
 					 " partition by %s (aid)", PARTITION_METHOD[partition_method]);
+		}
 		else if (ddl->declare_fillfactor)
+		{
 			/* fillfactor is only expected on actual tables */
+			append_tableam(opts, sizeof(opts));
 			append_fillfactor(opts, sizeof(opts));
+		}
 
 		if (tablespace != NULL)
 		{
@@ -3815,6 +3829,17 @@ append_fillfactor(char *opts, int len)
 {
 	snprintf(opts + strlen(opts), len - strlen(opts),
 			 " with (fillfactor=%d)", fillfactor);
+}
+
+/*
+ * add tableam option.
+ */
+static void
+append_tableam(char *opts, int len)
+{
+	if (tableam != NULL)
+		snprintf(opts + strlen(opts), len - strlen(opts),
+				 " using %s", tableam);
 }
 
 /*
@@ -5438,6 +5463,7 @@ main(int argc, char **argv)
 		{"show-script", required_argument, NULL, 10},
 		{"partitions", required_argument, NULL, 11},
 		{"partition-method", required_argument, NULL, 12},
+		{"tableam", required_argument, NULL, 13},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -5810,6 +5836,10 @@ main(int argc, char **argv)
 								 optarg);
 					exit(1);
 				}
+				break;
+			case 13:			/* tableam */
+				initialization_option_set = true;
+				tableam = pg_strdup(optarg);
 				break;
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
