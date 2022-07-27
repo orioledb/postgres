@@ -2568,8 +2568,14 @@ TupleHashTable
 TupleQueueReader
 TupleTableSlot
 TupleTableSlotOps
+TuplesortClusterArg
+TuplesortDatumArg
+TuplesortIndexArg
+TuplesortIndexBTreeArg
+TuplesortIndexHashArg
 TuplesortInstrumentation
 TuplesortMethod
+TuplesortPublic
 TuplesortSpaceType
 Tuplesortstate
 Tuplestorestate
