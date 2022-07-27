@@ -19,6 +19,7 @@ OBJS = \
 	sharedtuplestore.o \
 	sortsupport.o \
 	tuplesort.o \
+	tuplesortvariants.o \
 	tuplestore.o
 
 tuplesort.o: qsort_tuple.c
