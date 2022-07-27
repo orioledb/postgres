@@ -275,6 +275,13 @@ struct Tuplesortstate
 	SortTupleComparator comparetup;
 
 	/*
+	 * Alter datum1 representation in the SortTuple's array back from the
+	 * abbreviated key to the first column value.
+	 */
+	void		(*removeabbrev) (Tuplesortstate *state, SortTuple *stups,
+								 int count);
+
+	/*
 	 * Function to write a stored tuple onto tape.  The representation of the
 	 * tuple on tape need not be the same as it is in memory; requirements on
 	 * the tape representation are given below.  Unless the slab allocator is
@@ -530,6 +537,7 @@ struct Sharedsort
 			pfree(buf); \
 	} while(0)
 
+#define REMOVEABBREV(state,stup,count)	((*(state)->removeabbrev) (state, stup, count))
 #define COMPARETUP(state,a,b)	((*(state)->comparetup) (a, b, state))
 #define WRITETUP(state,tape,stup)	((*(state)->writetup) (state, tape, stup))
 #define READTUP(state,stup,tape,len) ((*(state)->readtup) (state, stup, tape, len))
@@ -619,6 +627,14 @@ static void reversedirection(Tuplesortstate *state);
 static unsigned int getlen(Tuplesortstate *state, int tapenum, bool eofOK);
 static void markrunend(Tuplesortstate *state, int tapenum);
 static void *readtup_alloc(Tuplesortstate *state, Size tuplen);
+static void removeabbrev_heap(Tuplesortstate *state, SortTuple *stups,
+							  int count);
+static void removeabbrev_cluster(Tuplesortstate *state, SortTuple *stups,
+								 int count);
+static void removeabbrev_index(Tuplesortstate *state, SortTuple *stups,
+							   int count);
+static void removeabbrev_datum(Tuplesortstate *state, SortTuple *stups,
+							   int count);
 static int	comparetup_heap(const SortTuple *a, const SortTuple *b,
 							Tuplesortstate *state);
 static void writetup_heap(Tuplesortstate *state, int tapenum,
@@ -909,6 +925,7 @@ tuplesort_begin_heap(TupleDesc tupDesc,
 								randomAccess,
 								PARALLEL_SORT(state));
 
+	state->removeabbrev = removeabbrev_heap;
 	state->comparetup = comparetup_heap;
 	state->writetup = writetup_heap;
 	state->readtup = readtup_heap;
@@ -984,6 +1001,7 @@ tuplesort_begin_cluster(TupleDesc tupDesc,
 								randomAccess,
 								PARALLEL_SORT(state));
 
+	state->removeabbrev = removeabbrev_cluster;
 	state->comparetup = comparetup_cluster;
 	state->writetup = writetup_cluster;
 	state->readtup = readtup_cluster;
@@ -1079,6 +1097,7 @@ tuplesort_begin_index_btree(Relation heapRel,
 								randomAccess,
 								PARALLEL_SORT(state));
 
+	state->removeabbrev = removeabbrev_index;
 	state->comparetup = comparetup_index_btree;
 	state->writetup = writetup_index;
 	state->readtup = readtup_index;
@@ -1152,6 +1171,7 @@ tuplesort_begin_index_hash(Relation heapRel,
 
 	state->nKeys = 1;			/* Only one sort column, the hash code */
 
+	state->removeabbrev = removeabbrev_index;
 	state->comparetup = comparetup_index_hash;
 	state->writetup = writetup_index;
 	state->readtup = readtup_index;
@@ -1191,6 +1211,7 @@ tuplesort_begin_index_gist(Relation heapRel,
 
 	state->nKeys = IndexRelationGetNumberOfKeyAttributes(indexRel);
 
+	state->removeabbrev = removeabbrev_index;
 	state->comparetup = comparetup_index_btree;
 	state->writetup = writetup_index;
 	state->readtup = readtup_index;
@@ -1253,6 +1274,7 @@ tuplesort_begin_datum(Oid datumType, Oid sortOperator, Oid sortCollation,
 								randomAccess,
 								PARALLEL_SORT(state));
 
+	state->removeabbrev = removeabbrev_datum;
 	state->comparetup = comparetup_datum;
 	state->writetup = writetup_datum;
 	state->readtup = readtup_datum;
@@ -1704,8 +1726,6 @@ tuplesort_puttupleslot(Tuplesortstate *state, TupleTableSlot *slot)
 	else
 	{
 		/* Abort abbreviation */
-		int			i;
-
 		stup.datum1 = original;
 
 		/*
@@ -1717,20 +1737,7 @@ tuplesort_puttupleslot(Tuplesortstate *state, TupleTableSlot *slot)
 		 * sorted on tape, since serialized tuples lack abbreviated keys
 		 * (TSS_BUILDRUNS state prevents control reaching here in any case).
 		 */
-		for (i = 0; i < state->memtupcount; i++)
-		{
-			SortTuple  *mtup = &state->memtuples[i];
-
-			htup.t_len = ((MinimalTuple) mtup->tuple)->t_len +
-				MINIMAL_TUPLE_OFFSET;
-			htup.t_data = (HeapTupleHeader) ((char *) mtup->tuple -
-											 MINIMAL_TUPLE_OFFSET);
-
-			mtup->datum1 = heap_getattr(&htup,
-										state->sortKeys[0].ssup_attno,
-										state->tupDesc,
-										&mtup->isnull1);
-		}
+		REMOVEABBREV(state, state->memtuples, state->memtupcount);
 	}
 
 	puttuple_common(state, &stup);
@@ -1788,8 +1795,6 @@ tuplesort_putheaptuple(Tuplesortstate *state, HeapTuple tup)
 		else
 		{
 			/* Abort abbreviation */
-			int			i;
-
 			stup.datum1 = original;
 
 			/*
@@ -1802,16 +1807,7 @@ tuplesort_putheaptuple(Tuplesortstate *state, HeapTuple tup)
 			 * (TSS_BUILDRUNS state prevents control reaching here in any
 			 * case).
 			 */
-			for (i = 0; i < state->memtupcount; i++)
-			{
-				SortTuple  *mtup = &state->memtuples[i];
-
-				tup = (HeapTuple) mtup->tuple;
-				mtup->datum1 = heap_getattr(tup,
-											state->indexInfo->ii_IndexAttrNumbers[0],
-											state->tupDesc,
-											&mtup->isnull1);
-			}
+			REMOVEABBREV(state, state->memtuples, state->memtupcount);
 		}
 	}
 
@@ -1867,8 +1863,6 @@ tuplesort_putindextuplevalues(Tuplesortstate *state, Relation rel,
 	else
 	{
 		/* Abort abbreviation */
-		int			i;
-
 		stup.datum1 = original;
 
 		/*
@@ -1880,16 +1874,7 @@ tuplesort_putindextuplevalues(Tuplesortstate *state, Relation rel,
 		 * sorted on tape, since serialized tuples lack abbreviated keys
 		 * (TSS_BUILDRUNS state prevents control reaching here in any case).
 		 */
-		for (i = 0; i < state->memtupcount; i++)
-		{
-			SortTuple  *mtup = &state->memtuples[i];
-
-			tuple = mtup->tuple;
-			mtup->datum1 = index_getattr(tuple,
-										 1,
-										 RelationGetDescr(state->indexRel),
-										 &mtup->isnull1);
-		}
+		REMOVEABBREV(state, state->memtuples, state->memtupcount);
 	}
 
 	puttuple_common(state, &stup);
@@ -1953,8 +1938,6 @@ tuplesort_putdatum(Tuplesortstate *state, Datum val, bool isNull)
 		else
 		{
 			/* Abort abbreviation */
-			int			i;
-
 			stup.datum1 = original;
 
 			/*
@@ -1967,12 +1950,7 @@ tuplesort_putdatum(Tuplesortstate *state, Datum val, bool isNull)
 			 * (TSS_BUILDRUNS state prevents control reaching here in any
 			 * case).
 			 */
-			for (i = 0; i < state->memtupcount; i++)
-			{
-				SortTuple  *mtup = &state->memtuples[i];
-
-				mtup->datum1 = PointerGetDatum(mtup->tuple);
-			}
+			REMOVEABBREV(state, state->memtuples, state->memtupcount);
 		}
 	}
 
@@ -3852,6 +3830,26 @@ readtup_alloc(Tuplesortstate *state, Size tuplen)
  * Routines specialized for HeapTuple (actually MinimalTuple) case
  */
 
+static void
+removeabbrev_heap(Tuplesortstate *state, SortTuple *stups, int count)
+{
+	int			i;
+
+	for (i = 0; i < count; i++)
+	{
+		HeapTupleData htup;
+
+		htup.t_len = ((MinimalTuple) stups[i].tuple)->t_len +
+			MINIMAL_TUPLE_OFFSET;
+		htup.t_data = (HeapTupleHeader) ((char *) stups[i].tuple -
+										 MINIMAL_TUPLE_OFFSET);
+		stups[i].datum1 = heap_getattr(&htup,
+									   state->sortKeys[0].ssup_attno,
+									   state->tupDesc,
+									   &stups[i].isnull1);
+	}
+}
+
 static int
 comparetup_heap(const SortTuple *a, const SortTuple *b, Tuplesortstate *state)
 {
@@ -3972,6 +3970,23 @@ readtup_heap(Tuplesortstate *state, SortTuple *stup,
  * Routines specialized for the CLUSTER case (HeapTuple data, with
  * comparisons per a btree index definition)
  */
+
+static void
+removeabbrev_cluster(Tuplesortstate *state, SortTuple *stups, int count)
+{
+	int			i;
+
+	for (i = 0; i < count; i++)
+	{
+		HeapTuple	tup;
+
+		tup = (HeapTuple) stups[i].tuple;
+		stups[i].datum1 = heap_getattr(tup,
+									   state->indexInfo->ii_IndexAttrNumbers[0],
+									   state->tupDesc,
+									   &stups[i].isnull1);
+	}
+}
 
 static int
 comparetup_cluster(const SortTuple *a, const SortTuple *b,
@@ -4145,6 +4160,23 @@ readtup_cluster(Tuplesortstate *state, SortTuple *stup,
  * IndexTuple representation is the same so the copy/write/read support
  * functions can be shared.
  */
+
+static void
+removeabbrev_index(Tuplesortstate *state, SortTuple *stups, int count)
+{
+	int			i;
+
+	for (i = 0; i < count; i++)
+	{
+		IndexTuple	tuple;
+
+		tuple = stups[i].tuple;
+		stups[i].datum1 = index_getattr(tuple,
+										1,
+										RelationGetDescr(state->indexRel),
+										&stups[i].isnull1);
+	}
+}
 
 static int
 comparetup_index_btree(const SortTuple *a, const SortTuple *b,
@@ -4379,6 +4411,15 @@ readtup_index(Tuplesortstate *state, SortTuple *stup,
 /*
  * Routines specialized for DatumTuple case
  */
+
+static void
+removeabbrev_datum(Tuplesortstate *state, SortTuple *stups, int count)
+{
+	int			i;
+
+	for (i = 0; i < count; i++)
+		stups[i].datum1 = PointerGetDatum(stups[i].tuple);
+}
 
 static int
 comparetup_datum(const SortTuple *a, const SortTuple *b, Tuplesortstate *state)
