@@ -32,10 +32,8 @@
 
 #include "access/nbtree.h"
 #include "catalog/objectaccess.h"
-#include "catalog/pg_language.h"
 #include "catalog/pg_type.h"
 #include "executor/execExpr.h"
-#include "executor/functions.h"
 #include "executor/nodeSubplan.h"
 #include "funcapi.h"
 #include "jit/jit.h"
@@ -49,7 +47,6 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
-#include "utils/fmgrtab.h"
 #include "utils/json.h"
 #include "utils/jsonb.h"
 #include "utils/jsonpath.h"
@@ -65,6 +62,8 @@ typedef struct LastAttnumInfo
 } LastAttnumInfo;
 
 static void ExecReadyExpr(ExprState *state);
+static void ExecInitExprRec(Expr *node, ExprState *state,
+							Datum *resv, bool *resnull);
 static void ExecInitFunc(ExprEvalStep *scratch, Expr *node, List *args,
 						 Oid funcid, Oid inputcollid,
 						 ExprState *state);
@@ -88,7 +87,6 @@ static void ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 								  int transno, int setno, int setoff, bool ishash,
 								  bool nullcheck);
 
-ExecInitFuncHookType ExecInitFuncHook = NULL;
 
 /*
  * ExecInitExpr: prepare an expression tree for execution
@@ -901,7 +899,7 @@ ExecReadyExpr(ExprState *state)
  * state - ExprState to whose ->steps to append the necessary operations
  * resv / resnull - where to store the result of the node into
  */
-void
+static void
 ExecInitExprRec(Expr *node, ExprState *state,
 				Datum *resv, bool *resnull)
 {
@@ -2156,19 +2154,36 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				MinMaxExpr *minmaxexpr = (MinMaxExpr *) node;
 				int			nelems = list_length(minmaxexpr->args);
 				TypeCacheEntry *typentry;
+				TypeCacheEntry *hook_typentry = NULL;
 				FmgrInfo   *finfo;
 				FunctionCallInfo fcinfo;
 				ListCell   *lc;
 				int			off;
 
-				/* Look up the btree comparison function for the datatype */
-				typentry = lookup_type_cache(minmaxexpr->minmaxtype,
-											 TYPECACHE_CMP_PROC);
-				if (!OidIsValid(typentry->cmp_proc))
-					ereport(ERROR,
-							(errcode(ERRCODE_UNDEFINED_FUNCTION),
-							 errmsg("could not identify a comparison function for type %s",
-									format_type_be(minmaxexpr->minmaxtype))));
+				if (type_elements_cmp_hook)
+				{
+					hook_typentry =
+						type_elements_cmp_hook(minmaxexpr->minmaxtype,
+											   CurrentMemoryContext);
+					if (hook_typentry)
+					{
+						typentry = hook_typentry;
+						finfo = &typentry->cmp_proc_finfo;
+					}
+				}
+
+				if (!hook_typentry)
+				{
+					/* Look up the btree comparison function for the datatype */
+					typentry = lookup_type_cache(minmaxexpr->minmaxtype,
+												TYPECACHE_CMP_PROC);
+					if (!OidIsValid(typentry->cmp_proc))
+						ereport(ERROR,
+								(errcode(ERRCODE_UNDEFINED_FUNCTION),
+								errmsg("could not identify a comparison function for type %s",
+										format_type_be(minmaxexpr->minmaxtype))));
+					finfo = palloc0(sizeof(FmgrInfo));
+				}
 
 				/*
 				 * If we enforced permissions checks on index support
@@ -2178,12 +2193,17 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				 */
 
 				/* Perform function lookup */
-				finfo = palloc0(sizeof(FmgrInfo));
 				fcinfo = palloc0(SizeForFunctionCallInfo(2));
-				fmgr_info(typentry->cmp_proc, finfo);
+
+				if (!hook_typentry)
+				{
+					fmgr_info(typentry->cmp_proc, finfo);
+				}
+
 				fmgr_info_set_expr((Node *) node, finfo);
 				InitFunctionCallInfoData(*fcinfo, finfo, 2,
-										 minmaxexpr->inputcollid, NULL, NULL);
+										 minmaxexpr->inputcollid,
+										 NULL, NULL);
 
 				scratch.opcode = EEOP_MINMAX;
 				/* allocate space to store arguments */
@@ -2465,10 +2485,6 @@ ExecInitFunc(ExprEvalStep *scratch, Expr *node, List *args, Oid funcid,
 	FunctionCallInfo fcinfo;
 	int			argno;
 	ListCell   *lc;
-
-	if (ExecInitFuncHook &&
-		ExecInitFuncHook(scratch, node, args, funcid, inputcollid, state))
-		return;
 
 	/* Check permission to call function */
 	aclresult = pg_proc_aclcheck(funcid, GetUserId(), ACL_EXECUTE);
