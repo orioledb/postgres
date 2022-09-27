@@ -8587,7 +8587,7 @@ do_pg_backup_stop(BackupState *state, bool waitforarchive)
 	}
 	else
 	{
-		StringInfo	history_file;
+		char	   *history_file;
 
 		/*
 		 * Write the backup-end xlog record
@@ -8627,8 +8627,7 @@ do_pg_backup_stop(BackupState *state, bool waitforarchive)
 
 		/* Build and save the contents of the backup history file */
 		history_file = build_backup_content(state, true);
-		fprintf(fp, "%s", history_file->data);
-		pfree(history_file->data);
+		fprintf(fp, "%s", history_file);
 		pfree(history_file);
 
 		if (fflush(fp) || ferror(fp) || FreeFile(fp))
