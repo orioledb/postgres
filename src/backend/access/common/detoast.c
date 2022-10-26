@@ -28,6 +28,8 @@ static struct varlena *toast_fetch_datum_slice(struct varlena *attr,
 											   int32 slicelength);
 static struct varlena *toast_decompress_datum_slice(struct varlena *attr, int32 slicelength);
 
+static ToastFunc o_detoast_func = NULL;
+
 /* ----------
  * detoast_external_attr -
  *
@@ -222,7 +224,14 @@ detoast_attr_slice(struct varlena *attr,
 	else if (pg_add_s32_overflow(sliceoffset, slicelength, &slicelimit))
 		slicelength = slicelimit = -1;
 
-	if (VARATT_IS_EXTERNAL_ONDISK(attr))
+	if (VARATT_IS_EXTERNAL_ORIOLEDB(attr))
+	{
+		Assert(o_detoast_func != NULL);
+		preslice = o_detoast_func(attr);
+		if (preslice == NULL)
+			elog(ERROR, "unexpected NULL detoast result");
+	}
+	else if (VARATT_IS_EXTERNAL_ONDISK(attr))
 	{
 		struct varatt_external toast_pointer;
 
@@ -330,8 +339,6 @@ detoast_attr_slice(struct varlena *attr,
 
 	return result;
 }
-
-static ToastFunc o_detoast_func = NULL;
 
 void
 register_o_detoast_func(ToastFunc func)
@@ -633,7 +640,12 @@ toast_datum_size(Datum value)
 	struct varlena *attr = (struct varlena *) DatumGetPointer(value);
 	Size		result;
 
-	if (VARATT_IS_EXTERNAL_ONDISK(attr))
+	if (VARATT_IS_EXTERNAL_ORIOLEDB(attr))
+	{
+		OToastExternal *toasted = (OToastExternal*) VARDATA_EXTERNAL(attr);
+		result = toasted->toasted_size - VARHDRSZ;
+	}
+	else if (VARATT_IS_EXTERNAL_ONDISK(attr))
 	{
 		/*
 		 * Attribute is stored externally - return the extsize whether
