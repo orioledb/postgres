@@ -5145,7 +5145,7 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 			 * unlogged anyway.
 			 */
 			if (!table_has_extended_am(OldHeap) ||
-				!table_extended_rewrite_table(OldHeap))
+				!table_extended_rewrite_table(tab->oldDesc, OldHeap))
 			{
 				OIDNewHeap = make_new_heap(tab->relid, NewTableSpace,
 										   persistence, lockmode);
@@ -6816,6 +6816,9 @@ ATExecDropNotNull(Relation rel, const char *colName, LOCKMODE lockmode)
 
 	table_close(attr_rel, RowExclusiveLock);
 
+	if (table_has_extended_am(rel))
+		table_extended_change_not_null(rel, colName, false);
+
 	return address;
 }
 
@@ -6955,6 +6958,9 @@ ATExecSetNotNull(AlteredTableInfo *tab, Relation rel,
 							  RelationGetRelid(rel), attnum);
 
 	table_close(attr_rel, RowExclusiveLock);
+
+	if (table_has_extended_am(rel))
+		table_extended_change_not_null(rel, colName, true);
 
 	return address;
 }
@@ -11562,6 +11568,11 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 	SysScanDesc scan;
 	HeapTuple	depTup;
 	ObjectAddress address;
+	bool		rebuild_constraint = true;
+
+	if (table_has_extended_am(rel))
+		rebuild_constraint = table_extended_alter_column_type(rel, colName,
+															  def);
 
 	/*
 	 * Clear all the missing values if we're rewriting the table, since this
@@ -11732,7 +11743,8 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 
 			case OCLASS_CONSTRAINT:
 				Assert(foundObject.objectSubId == 0);
-				RememberConstraintForRebuilding(foundObject.objectId, tab);
+				if (rebuild_constraint)
+					RememberConstraintForRebuilding(foundObject.objectId, tab);
 				break;
 
 			case OCLASS_REWRITE:
