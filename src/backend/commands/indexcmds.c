@@ -562,6 +562,7 @@ DefineIndex(Oid relationId,
 	int			root_save_sec_context;
 	int			root_save_nestlevel;
 	int			i;
+	void		*arg = NULL;
 
 	root_save_nestlevel = NewGUCNestLevel();
 
@@ -608,6 +609,27 @@ DefineIndex(Oid relationId,
 								 InvalidOid);
 
 	/*
+	 * Only SELECT ... FOR UPDATE/SHARE are allowed while doing a standard
+	 * index build; but for concurrent builds we allow INSERT/UPDATE/DELETE
+	 * (but not VACUUM).
+	 *
+	 * NB: Caller is responsible for making sure that relationId refers to the
+	 * relation on which the index should be built; except in bootstrap mode,
+	 * this will typically require the caller to have already locked the
+	 * relation.  To avoid lock upgrade hazards, that lock should be at least
+	 * as strong as the one we take here.
+	 *
+	 * NB: If the lock strength here ever changes, code that is run by
+	 * parallel workers under the control of certain particular ambuild
+	 * functions will need to be updated, too.
+	 */
+	lockmode = concurrent ? ShareUpdateExclusiveLock : ShareLock;
+	rel = table_open(relationId, lockmode);
+
+	if (table_has_extended_am(rel))
+		table_extended_define_index_validate(rel, stmt, &arg);
+
+	/*
 	 * count key attributes in index
 	 */
 	numberOfKeyAttributes = list_length(stmt->indexParams);
@@ -633,24 +655,6 @@ DefineIndex(Oid relationId,
 				(errcode(ERRCODE_TOO_MANY_COLUMNS),
 				 errmsg("cannot use more than %d columns in an index",
 						INDEX_MAX_KEYS)));
-
-	/*
-	 * Only SELECT ... FOR UPDATE/SHARE are allowed while doing a standard
-	 * index build; but for concurrent builds we allow INSERT/UPDATE/DELETE
-	 * (but not VACUUM).
-	 *
-	 * NB: Caller is responsible for making sure that relationId refers to the
-	 * relation on which the index should be built; except in bootstrap mode,
-	 * this will typically require the caller to have already locked the
-	 * relation.  To avoid lock upgrade hazards, that lock should be at least
-	 * as strong as the one we take here.
-	 *
-	 * NB: If the lock strength here ever changes, code that is run by
-	 * parallel workers under the control of certain particular ambuild
-	 * functions will need to be updated, too.
-	 */
-	lockmode = concurrent ? ShareUpdateExclusiveLock : ShareLock;
-	rel = table_open(relationId, lockmode);
 
 	/*
 	 * Switch to the table owner's userid, so that any index functions are run
@@ -1159,6 +1163,9 @@ DefineIndex(Oid relationId,
 					 &createdConstraintId);
 
 	ObjectAddressSet(address, RelationRelationId, indexRelationId);
+
+	if (table_has_extended_am(rel))
+		table_extended_define_index(rel, address, arg);
 
 	if (!OidIsValid(indexRelationId))
 	{

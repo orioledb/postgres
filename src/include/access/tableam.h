@@ -2162,9 +2162,21 @@ typedef struct ExtendedTableAmRoutine
 	bool		(*tuple_refetch_row_version) (Relation rel,
 											  TupleTableSlot *slot);
 
-	bool		(*rewrite_table) (Relation old_rel);
+	bool		(*rewrite_table) (TupleDesc oldDesc, Relation old_rel);
 
 	void		(*free_rd_amcache) (Relation rel);
+
+	void		(*change_not_null) (Relation rel, const char *colName,
+									bool newVal);
+
+	bool		(*alter_column_type) (Relation rel, char *colName,
+									  ColumnDef *def);
+
+	bool		(*define_index_validate) (Relation rel, IndexStmt *stmt,
+										  void **arg);
+
+	bool		(*define_index) (Relation rel, ObjectAddress address,
+								 void *arg);
 } ExtendedTableAmRoutine;
 
 
@@ -2345,13 +2357,53 @@ table_extended_tuple_refetch_row_version(Relation rel,
 }
 
 static inline bool
-table_extended_rewrite_table(Relation old_rel)
+table_extended_rewrite_table(TupleDesc oldDesc, Relation old_rel)
 {
 	ExtendedTableAmRoutine *extendedRoutine;
 
 	Assert(table_has_extended_am(old_rel));
 	extendedRoutine = (ExtendedTableAmRoutine *) old_rel->rd_tableam;
-	return extendedRoutine->rewrite_table(old_rel);
+	return extendedRoutine->rewrite_table(oldDesc, old_rel);
+}
+
+static inline void
+table_extended_change_not_null(Relation rel, const char *colName, bool newVal)
+{
+	ExtendedTableAmRoutine *extendedRoutine;
+
+	Assert(table_has_extended_am(rel));
+	extendedRoutine = (ExtendedTableAmRoutine *) rel->rd_tableam;
+	return extendedRoutine->change_not_null(rel, colName, newVal);
+}
+
+static inline bool
+table_extended_alter_column_type(Relation rel, char *colName, ColumnDef *def)
+{
+	ExtendedTableAmRoutine *extendedRoutine;
+
+	Assert(table_has_extended_am(rel));
+	extendedRoutine = (ExtendedTableAmRoutine *) rel->rd_tableam;
+	return extendedRoutine->alter_column_type(rel, colName, def);
+}
+
+static inline bool
+table_extended_define_index_validate(Relation rel, IndexStmt *stmt, void **arg)
+{
+	ExtendedTableAmRoutine *extendedRoutine;
+
+	Assert(table_has_extended_am(rel));
+	extendedRoutine = (ExtendedTableAmRoutine *) rel->rd_tableam;
+	return extendedRoutine->define_index_validate(rel, stmt, arg);
+}
+
+static inline bool
+table_extended_define_index(Relation rel, ObjectAddress address, void *arg)
+{
+	ExtendedTableAmRoutine *extendedRoutine;
+
+	Assert(table_has_extended_am(rel));
+	extendedRoutine = (ExtendedTableAmRoutine *) rel->rd_tableam;
+	return extendedRoutine->define_index(rel, address, arg);
 }
 
 static inline void
