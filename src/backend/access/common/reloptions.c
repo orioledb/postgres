@@ -1394,7 +1394,18 @@ extractRelOptions(HeapTuple tuple, TupleDesc tupdesc,
 		case RELKIND_RELATION:
 		case RELKIND_TOASTVALUE:
 		case RELKIND_MATVIEW:
-			options = heap_reloptions(classForm->relkind, datum, false);
+			{
+				const TableAmRoutine   *tableam = NULL;
+
+				tableam = GetTableAmRoutineByAmOid(classForm->relam);
+
+				if (tableam && IsA(tableam, ExtendedTableAmRoutine))
+					options = tableam_extended_reloptions(tableam,
+														  classForm->relkind,
+														  datum, false);
+				else
+					options = heap_reloptions(classForm->relkind, datum, false);
+			}
 			break;
 		case RELKIND_PARTITIONED_TABLE:
 			options = partitioned_table_reloptions(datum, false);

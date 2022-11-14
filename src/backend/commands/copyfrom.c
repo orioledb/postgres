@@ -325,25 +325,12 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 	 * context before calling it.
 	 */
 	oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-	if (isExtendedRoutine)
-	{
-		table_extended_multi_insert(resultRelInfo->ri_RelationDesc,
-									slots,
-									nused,
-									estate,
-									mycid,
-									ti_options,
-									buffer->bistate);
-	}
-	else
-	{
-		table_multi_insert(resultRelInfo->ri_RelationDesc,
-						   slots,
-						   nused,
-						   mycid,
-						   ti_options,
-						   buffer->bistate);
-	}
+	table_multi_insert(resultRelInfo->ri_RelationDesc,
+					   slots,
+					   nused,
+					   mycid,
+					   ti_options,
+					   buffer->bistate);
 	MemoryContextSwitchTo(oldcontext);
 
 	for (i = 0; i < nused; i++)
