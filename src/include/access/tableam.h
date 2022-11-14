@@ -1830,6 +1830,7 @@ extern void table_block_relation_estimate_size(Relation rel,
  */
 
 extern const TableAmRoutine *GetTableAmRoutine(Oid amhandler);
+extern const TableAmRoutine *GetTableAmRoutineByAmOid(Oid amoid);
 extern const TableAmRoutine *GetHeapamTableAmRoutine(void);
 extern bool check_default_table_access_method(char **newval, void **extra,
 											  GucSource source);
@@ -1844,20 +1845,10 @@ typedef struct ExtendedTableAmRoutine
 
 	RowRefType	(*get_row_ref_type) (Relation rel);
 
-
-	void		(*tuple_insert) (Relation rel, TupleTableSlot *slot,
-								 EState *estate,
-								 CommandId cid, int options,
-								 struct BulkInsertStateData *bistate);
-
 	TupleTableSlot* (*tuple_insert_on_conflict) (ModifyTableState *mstate,
 												 EState *estate,
 												 ResultRelInfo *rinfo,
 												 TupleTableSlot *slot);
-
-	void		(*multi_insert) (Relation rel, TupleTableSlot **slots,
-								 int nslots, EState *estate,
-								 CommandId cid, int options, struct BulkInsertStateData *bistate);
 
 	TM_Result	(*tuple_delete) (ModifyTableState *mstate,
 								 ResultRelInfo *resultRelInfo,
@@ -1910,21 +1901,15 @@ typedef struct ExtendedTableAmRoutine
 	bool		(*tuple_refetch_row_version) (Relation rel,
 											  TupleTableSlot *slot);
 
-	bool		(*rewrite_table) (TupleDesc oldDesc, Relation old_rel);
-
 	void		(*free_rd_amcache) (Relation rel);
-
-	void		(*change_not_null) (Relation rel, const char *colName,
-									bool newVal);
-
-	bool		(*alter_column_type) (Relation rel, char *colName,
-									  ColumnDef *def);
 
 	bool		(*define_index_validate) (Relation rel, IndexStmt *stmt,
 										  void **arg);
 
-	bool		(*define_index) (Relation rel, ObjectAddress address,
+	bool		(*define_index) (Relation rel, Oid indoid, bool reindex,
+								 bool skip_constraint_checks, bool skip_build,
 								 void *arg);
+	bytea	   *(*reloptions) (char relkind, Datum reloptions, bool validate);
 } ExtendedTableAmRoutine;
 
 
@@ -1952,20 +1937,6 @@ table_get_row_ref_type(Relation rel)
 	}
 }
 
-static inline void
-table_extended_tuple_insert(Relation rel, TupleTableSlot *slot,
-							EState *estate,
-							CommandId cid, int options,
-							struct BulkInsertStateData *bistate)
-{
-	ExtendedTableAmRoutine *extendedRoutine;
-
-	Assert(table_has_extended_am(rel));
-	extendedRoutine = (ExtendedTableAmRoutine *) rel->rd_tableam;
-	extendedRoutine->tuple_insert(rel, slot, estate, cid,
-								  options, bistate);
-}
-
 static inline TupleTableSlot *
 table_extended_tuple_insert_on_conflict(ModifyTableState *mstate,
 										EState *estate,
@@ -1979,20 +1950,6 @@ table_extended_tuple_insert_on_conflict(ModifyTableState *mstate,
 	extendedRoutine = (ExtendedTableAmRoutine *) rel->rd_tableam;
 	return extendedRoutine->tuple_insert_on_conflict(mstate, estate,
 													 rinfo, slot);
-}
-
-static inline void
-table_extended_multi_insert(Relation rel, TupleTableSlot **slots,
-							int nslots, EState *estate,
-							CommandId cid, int options,
-							struct BulkInsertStateData *bistate)
-{
-	ExtendedTableAmRoutine *extendedRoutine;
-
-	Assert(table_has_extended_am(rel));
-	extendedRoutine = (ExtendedTableAmRoutine *) rel->rd_tableam;
-	extendedRoutine->multi_insert(rel, slots, nslots, estate,
-								  cid, options, bistate);
 }
 
 static inline TM_Result
@@ -2105,36 +2062,6 @@ table_extended_tuple_refetch_row_version(Relation rel,
 }
 
 static inline bool
-table_extended_rewrite_table(TupleDesc oldDesc, Relation old_rel)
-{
-	ExtendedTableAmRoutine *extendedRoutine;
-
-	Assert(table_has_extended_am(old_rel));
-	extendedRoutine = (ExtendedTableAmRoutine *) old_rel->rd_tableam;
-	return extendedRoutine->rewrite_table(oldDesc, old_rel);
-}
-
-static inline void
-table_extended_change_not_null(Relation rel, const char *colName, bool newVal)
-{
-	ExtendedTableAmRoutine *extendedRoutine;
-
-	Assert(table_has_extended_am(rel));
-	extendedRoutine = (ExtendedTableAmRoutine *) rel->rd_tableam;
-	return extendedRoutine->change_not_null(rel, colName, newVal);
-}
-
-static inline bool
-table_extended_alter_column_type(Relation rel, char *colName, ColumnDef *def)
-{
-	ExtendedTableAmRoutine *extendedRoutine;
-
-	Assert(table_has_extended_am(rel));
-	extendedRoutine = (ExtendedTableAmRoutine *) rel->rd_tableam;
-	return extendedRoutine->alter_column_type(rel, colName, def);
-}
-
-static inline bool
 table_extended_define_index_validate(Relation rel, IndexStmt *stmt, void **arg)
 {
 	ExtendedTableAmRoutine *extendedRoutine;
@@ -2145,13 +2072,17 @@ table_extended_define_index_validate(Relation rel, IndexStmt *stmt, void **arg)
 }
 
 static inline bool
-table_extended_define_index(Relation rel, ObjectAddress address, void *arg)
+table_extended_define_index(Relation rel, Oid indoid, bool reindex,
+							bool skip_constraint_checks, bool skip_build,
+							void *arg)
 {
 	ExtendedTableAmRoutine *extendedRoutine;
 
 	Assert(table_has_extended_am(rel));
 	extendedRoutine = (ExtendedTableAmRoutine *) rel->rd_tableam;
-	return extendedRoutine->define_index(rel, address, arg);
+	return extendedRoutine->define_index(rel, indoid, reindex,
+										 skip_constraint_checks, skip_build,
+										 arg);
 }
 
 static inline void
@@ -2180,6 +2111,27 @@ table_extended_analyze(Relation relation,
 		*func = acquire_sample_rows;
 		*totalpages = RelationGetNumberOfBlocks(relation);
 	}
+}
+
+static inline bytea *
+table_extended_reloptions(Relation rel, char relkind,
+						  Datum reloptions, bool validate)
+{
+	ExtendedTableAmRoutine *extendedRoutine;
+
+	Assert(table_has_extended_am(rel));
+	extendedRoutine = (ExtendedTableAmRoutine *) rel->rd_tableam;
+	return extendedRoutine->reloptions(relkind, reloptions, validate);
+}
+
+static inline bytea *
+tableam_extended_reloptions(const TableAmRoutine *tableam, char relkind,
+							Datum reloptions, bool validate)
+{
+	ExtendedTableAmRoutine *extendedRoutine;
+
+	extendedRoutine = (ExtendedTableAmRoutine *) tableam;
+	return extendedRoutine->reloptions(relkind, reloptions, validate);
 }
 
 #endif							/* TABLEAM_H */
