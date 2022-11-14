@@ -1561,6 +1561,8 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 									   gid);
 
 	ProcArrayRemove(proc, latestXid);
+	if (isCommit)
+		ShmemVariableCache->xidCSN++;
 
 	/*
 	 * In case we fail while running the callbacks, mark the gxact invalid so
