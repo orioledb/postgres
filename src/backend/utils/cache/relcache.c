@@ -34,6 +34,7 @@
 #include "access/multixact.h"
 #include "access/nbtree.h"
 #include "access/parallel.h"
+#include "access/relation.h"
 #include "access/reloptions.h"
 #include "access/sysattr.h"
 #include "access/table.h"
@@ -458,8 +459,9 @@ AllocateRelationDesc(Form_pg_class relp)
 static void
 RelationParseRelOptions(Relation relation, HeapTuple tuple)
 {
-	bytea	   *options;
-	amoptions_function amoptsfn;
+	bytea				   *options;
+	amoptions_function		amoptsfn;
+	const TableAmRoutine   *tableam = NULL;
 
 	relation->rd_options = NULL;
 
@@ -484,12 +486,44 @@ RelationParseRelOptions(Relation relation, HeapTuple tuple)
 			return;
 	}
 
-	/*
-	 * Fetch reloptions from tuple; have to use a hardwired descriptor because
-	 * we might not have any other for pg_class yet (consider executing this
-	 * code for pg_class itself)
-	 */
-	options = extractRelOptions(tuple, GetPgClassDescriptor(), amoptsfn);
+	if (relation->rd_rel->relkind == RELKIND_INDEX &&
+		relation->rd_index->indrelid >= FirstNormalObjectId)
+	{
+		HeapTuple	pg_class_tuple;
+		Form_pg_class relp;
+
+		pg_class_tuple = ScanPgRelation(relation->rd_index->indrelid,
+										false, false);
+		if (!HeapTupleIsValid(pg_class_tuple))
+			elog(ERROR, "could not find pg_class tuple for index %u",
+				RelationGetRelid(relation));
+		relp = (Form_pg_class) GETSTRUCT(pg_class_tuple);
+		tableam = GetTableAmRoutineByAmOid(relp->relam);
+		heap_freetuple(pg_class_tuple);
+	}
+
+
+	if (tableam && IsA(tableam, ExtendedTableAmRoutine))
+	{
+		Datum	datum;
+		bool	isnull;
+		datum = fastgetattr(tuple, Anum_pg_class_reloptions,
+							GetPgClassDescriptor(), &isnull);
+
+		if (isnull)
+			options = NULL;
+		else
+			options = tableam_extended_reloptions(tableam,
+												  relation->rd_rel->relkind,
+												  datum, false);
+	}
+	else
+		/*
+		* Fetch reloptions from tuple; have to use a hardwired descriptor because
+		* we might not have any other for pg_class yet (consider executing this
+		* code for pg_class itself)
+		*/
+		options = extractRelOptions(tuple, GetPgClassDescriptor(), amoptsfn);
 
 	/*
 	 * Copy parsed data into CacheMemoryContext.  To guard against the

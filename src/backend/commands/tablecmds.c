@@ -613,6 +613,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	LOCKMODE	parentLockmode;
 	const char *accessMethod = NULL;
 	Oid			accessMethodId = InvalidOid;
+	const TableAmRoutine *tableam = NULL;
 
 	/*
 	 * Truncate relname to appropriate length (probably a waste of time, as
@@ -753,6 +754,37 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		ownerId = GetUserId();
 
 	/*
+	 * If the statement hasn't specified an access method, but we're defining
+	 * a type of relation that needs one, use the default.
+	 */
+	if (stmt->accessMethod != NULL)
+	{
+		accessMethod = stmt->accessMethod;
+
+		if (partitioned)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("specifying a table access method is not supported on a partitioned table")));
+
+	}
+	else if (relkind == RELKIND_RELATION ||
+			 relkind == RELKIND_TOASTVALUE ||
+			 relkind == RELKIND_MATVIEW)
+		accessMethod = default_table_access_method;
+
+	/* look up the access method, verify it is for a table */
+	if (accessMethod != NULL)
+	{
+		accessMethodId = get_table_am_oid(accessMethod, false);
+		if (relkind == RELKIND_RELATION ||
+			relkind == RELKIND_TOASTVALUE ||
+			relkind == RELKIND_MATVIEW)
+		{
+			tableam = GetTableAmRoutineByAmOid(accessMethodId);
+		}
+	}
+
+	/*
 	 * Parse and validate reloptions, if any.
 	 */
 	reloptions = transformRelOptions((Datum) 0, stmt->options, NULL, validnsps,
@@ -767,7 +799,14 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 			(void) partitioned_table_reloptions(reloptions, true);
 			break;
 		default:
-			(void) heap_reloptions(relkind, reloptions, true);
+			{
+				if (tableam && IsA(tableam, ExtendedTableAmRoutine))
+					(void) tableam_extended_reloptions(tableam, relkind,
+													   reloptions, true);
+				else
+					(void) heap_reloptions(relkind, reloptions, true);
+			}
+			break;
 	}
 
 	if (stmt->ofTypename)
@@ -863,29 +902,6 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		if (colDef->generated)
 			attr->attgenerated = colDef->generated;
 	}
-
-	/*
-	 * If the statement hasn't specified an access method, but we're defining
-	 * a type of relation that needs one, use the default.
-	 */
-	if (stmt->accessMethod != NULL)
-	{
-		accessMethod = stmt->accessMethod;
-
-		if (partitioned)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("specifying a table access method is not supported on a partitioned table")));
-
-	}
-	else if (relkind == RELKIND_RELATION ||
-			 relkind == RELKIND_TOASTVALUE ||
-			 relkind == RELKIND_MATVIEW)
-		accessMethod = default_table_access_method;
-
-	/* look up the access method, verify it is for a table */
-	if (accessMethod != NULL)
-		accessMethodId = get_table_am_oid(accessMethod, false);
 
 	/*
 	 * Create the relation.  Inherited defaults and constraints are passed in
@@ -1856,9 +1872,6 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 	foreach(cell, rels)
 	{
 		Relation	rel = (Relation) lfirst(cell);
-		bool		isExtendedRoutine;
-
-		isExtendedRoutine = table_has_extended_am(rel);
 
 		/* Skip partitioned tables as there is nothing to do */
 		if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
@@ -1890,17 +1903,14 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 			 */
 			CheckTableForSerializableConflictIn(rel);
 
-			if (!isExtendedRoutine)
-			{
-				/*
-				 * Need the full transaction-safe pushups.
-				 *
-				 * Create a new empty storage file for the relation, and assign it
-				 * as the relfilenode value. The old storage file is scheduled for
-				 * deletion at commit.
-				 */
-				RelationSetNewRelfilenode(rel, rel->rd_rel->relpersistence);
-			}
+			/*
+			 * Need the full transaction-safe pushups.
+			 *
+			 * Create a new empty storage file for the relation, and assign it
+			 * as the relfilenode value. The old storage file is scheduled for
+			 * deletion at commit.
+			 */
+			RelationSetNewRelfilenode(rel, rel->rd_rel->relpersistence);
 
 			heap_relid = RelationGetRelid(rel);
 
@@ -1922,18 +1932,6 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 			 * Reconstruct the indexes to match, and we're done.
 			 */
 			reindex_relation(heap_relid, REINDEX_REL_PROCESS_TOAST, 0);
-
-			if (isExtendedRoutine)
-			{
-				/*
-				 * Need the full transaction-safe pushups.
-				 *
-				 * Create a new empty storage file for the relation, and assign it
-				 * as the relfilenode value. The old storage file is scheduled for
-				 * deletion at commit.
-				 */
-				RelationSetNewRelfilenode(rel, rel->rd_rel->relpersistence);
-			}
 		}
 
 		pgstat_count_truncate(rel);
@@ -5089,7 +5087,7 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 		{
 			/* Build a temporary relation and copy data */
 			Relation	OldHeap;
-			Oid			OIDNewHeap = InvalidOid;
+			Oid			OIDNewHeap;
 			Oid			NewTableSpace;
 			char		persistence;
 
@@ -5137,6 +5135,8 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 			persistence = tab->chgPersistence ?
 				tab->newrelpersistence : OldHeap->rd_rel->relpersistence;
 
+			table_close(OldHeap, NoLock);
+
 			/*
 			 * Fire off an Event Trigger now, before actually rewriting the
 			 * table.
@@ -5167,36 +5167,30 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 			 * persistence. That wouldn't work for pg_class, but that can't be
 			 * unlogged anyway.
 			 */
-			if (!table_has_extended_am(OldHeap) ||
-				!table_extended_rewrite_table(tab->oldDesc, OldHeap))
-			{
-				OIDNewHeap = make_new_heap(tab->relid, NewTableSpace,
-										   persistence, lockmode);
+			OIDNewHeap = make_new_heap(tab->relid, NewTableSpace, persistence,
+									   lockmode);
 
-				/*
-				* Copy the heap data into the new table with the desired
-				* modifications, and test the current data within the table
-				* against new constraints generated by ALTER TABLE commands.
-				*/
-				ATRewriteTable(tab, OIDNewHeap, lockmode);
-				/*
-				 * Swap the physical files of the old and new heaps, then
-				 * rebuild indexes and discard the old heap.  We can use
-				 * RecentXmin for the table's new relfrozenxid because we
-				 * rewrote all the tuples in ATRewriteTable, so no older Xid
-				 * remains in the table. Also, we never try to swap toast
-				 * tables by content, since we have no interest in letting
-				 * this code work on system catalogs.
-				 */
-				finish_heap_swap(tab->relid, OIDNewHeap,
-								false, false, true,
-								!OidIsValid(tab->newTableSpace),
-								RecentXmin,
-								ReadNextMultiXactId(),
-								persistence);
-			}
+			/*
+			 * Copy the heap data into the new table with the desired
+			 * modifications, and test the current data within the table
+			 * against new constraints generated by ALTER TABLE commands.
+			 */
+			ATRewriteTable(tab, OIDNewHeap, lockmode);
 
-			table_close(OldHeap, NoLock);
+			/*
+			 * Swap the physical files of the old and new heaps, then rebuild
+			 * indexes and discard the old heap.  We can use RecentXmin for
+			 * the table's new relfrozenxid because we rewrote all the tuples
+			 * in ATRewriteTable, so no older Xid remains in the table.  Also,
+			 * we never try to swap toast tables by content, since we have no
+			 * interest in letting this code work on system catalogs.
+			 */
+			finish_heap_swap(tab->relid, OIDNewHeap,
+							 false, false, true,
+							 !OidIsValid(tab->newTableSpace),
+							 RecentXmin,
+							 ReadNextMultiXactId(),
+							 persistence);
 		}
 		else
 		{
@@ -6839,9 +6833,6 @@ ATExecDropNotNull(Relation rel, const char *colName, LOCKMODE lockmode)
 
 	table_close(attr_rel, RowExclusiveLock);
 
-	if (table_has_extended_am(rel))
-		table_extended_change_not_null(rel, colName, false);
-
 	return address;
 }
 
@@ -6981,9 +6972,6 @@ ATExecSetNotNull(AlteredTableInfo *tab, Relation rel,
 							  RelationGetRelid(rel), attnum);
 
 	table_close(attr_rel, RowExclusiveLock);
-
-	if (table_has_extended_am(rel))
-		table_extended_change_not_null(rel, colName, true);
 
 	return address;
 }
@@ -11621,11 +11609,6 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 	SysScanDesc scan;
 	HeapTuple	depTup;
 	ObjectAddress address;
-	bool		rebuild_constraint = true;
-
-	if (table_has_extended_am(rel))
-		rebuild_constraint = table_extended_alter_column_type(rel, colName,
-															  def);
 
 	/*
 	 * Clear all the missing values if we're rewriting the table, since this
@@ -11796,8 +11779,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 
 			case OCLASS_CONSTRAINT:
 				Assert(foundObject.objectSubId == 0);
-				if (rebuild_constraint)
-					RememberConstraintForRebuilding(foundObject.objectId, tab);
+				RememberConstraintForRebuilding(foundObject.objectId, tab);
 				break;
 
 			case OCLASS_REWRITE:
@@ -13304,7 +13286,14 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 		case RELKIND_RELATION:
 		case RELKIND_TOASTVALUE:
 		case RELKIND_MATVIEW:
-			(void) heap_reloptions(rel->rd_rel->relkind, newOptions, true);
+			{
+				if (table_has_extended_am(rel))
+					(void) table_extended_reloptions(rel, rel->rd_rel->relkind,
+													 newOptions, true);
+				else
+					(void) heap_reloptions(rel->rd_rel->relkind,
+										   newOptions, true);
+			}
 			break;
 		case RELKIND_PARTITIONED_TABLE:
 			(void) partitioned_table_reloptions(newOptions, true);
@@ -13314,7 +13303,17 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 			break;
 		case RELKIND_INDEX:
 		case RELKIND_PARTITIONED_INDEX:
-			(void) index_reloptions(rel->rd_indam->amoptions, newOptions, true);
+			{
+				Relation	tbl = relation_open(rel->rd_index->indrelid,
+												AccessShareLock);
+				if (table_has_extended_am(tbl))
+					(void) table_extended_reloptions(tbl, rel->rd_rel->relkind,
+													 newOptions, true);
+				else
+					(void) index_reloptions(rel->rd_indam->amoptions,
+											newOptions, true);
+				relation_close(tbl, AccessShareLock);
+			}
 			break;
 		default:
 			ereport(ERROR,

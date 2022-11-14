@@ -107,6 +107,24 @@ GetTableAmRoutine(Oid amhandler)
 	return routine;
 }
 
+const TableAmRoutine *
+GetTableAmRoutineByAmOid(Oid amoid)
+{
+	HeapTuple				ht_am;
+	Form_pg_am				amrec;
+	const TableAmRoutine   *tableam = NULL;
+
+	ht_am = SearchSysCache1(AMOID, ObjectIdGetDatum(amoid));
+	if (!HeapTupleIsValid(ht_am))
+		elog(ERROR, "cache lookup failed for access method %u",
+			 amoid);
+	amrec = (Form_pg_am)GETSTRUCT(ht_am);
+
+	tableam = GetTableAmRoutine(amrec->amhandler);
+	ReleaseSysCache(ht_am);
+	return tableam;
+}
+
 /* check_hook: validate new default_table_access_method */
 bool
 check_default_table_access_method(char **newval, void **extra, GucSource source)

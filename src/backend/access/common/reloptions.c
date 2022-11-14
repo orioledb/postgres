@@ -24,6 +24,7 @@
 #include "access/nbtree.h"
 #include "access/reloptions.h"
 #include "access/spgist_private.h"
+#include "access/tableam.h"
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
 #include "commands/tablespace.h"
@@ -1377,7 +1378,18 @@ extractRelOptions(HeapTuple tuple, TupleDesc tupdesc,
 		case RELKIND_RELATION:
 		case RELKIND_TOASTVALUE:
 		case RELKIND_MATVIEW:
-			options = heap_reloptions(classForm->relkind, datum, false);
+			{
+				const TableAmRoutine   *tableam = NULL;
+
+				tableam = GetTableAmRoutineByAmOid(classForm->relam);
+
+				if (tableam && IsA(tableam, ExtendedTableAmRoutine))
+					options = tableam_extended_reloptions(tableam,
+														  classForm->relkind,
+														  datum, false);
+				else
+					options = heap_reloptions(classForm->relkind, datum, false);
+			}
 			break;
 		case RELKIND_PARTITIONED_TABLE:
 			options = partitioned_table_reloptions(datum, false);

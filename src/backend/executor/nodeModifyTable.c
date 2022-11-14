@@ -710,11 +710,6 @@ ExecInsert(ModifyTableState *mtstate,
 			if (slot == NULL)
 				return NULL;
 		}
-		else if (isExtendedRoutine)
-		{
-			table_extended_tuple_insert(resultRelationDesc, slot, estate,
-										estate->es_output_cid, 0, NULL);
-		}
 		else
 		{
 			/* insert the tuple normally */
@@ -723,7 +718,7 @@ ExecInsert(ModifyTableState *mtstate,
 							   0, NULL);
 
 			/* insert index entries for tuple */
-			if (resultRelInfo->ri_NumIndices > 0)
+			if (resultRelInfo->ri_NumIndices > 0 && !isExtendedRoutine)
 				recheckIndexes = ExecInsertIndexTuples(slot, estate, false, NULL,
 													   NIL);
 		}
