@@ -879,7 +879,10 @@ DefineIndex(Oid relationId,
 	reloptions = transformRelOptions((Datum) 0, stmt->options,
 									 NULL, NULL, false, false);
 
-	(void) index_reloptions(amoptions, reloptions, true);
+	if (table_has_extended_am(rel))
+		(void) table_extended_reloptions(rel, RELKIND_INDEX, reloptions, true);
+	else
+		(void) index_reloptions(amoptions, reloptions, true);
 
 	/*
 	 * Prepare arguments for index_create, primarily an IndexInfo structure.
@@ -1165,8 +1168,8 @@ DefineIndex(Oid relationId,
 	ObjectAddressSet(address, RelationRelationId, indexRelationId);
 
 	if (table_has_extended_am(rel))
-		table_extended_define_index(rel, address, arg);
-
+		table_extended_define_index(rel, address.objectId, false, false,
+									skip_build, arg);
 	if (!OidIsValid(indexRelationId))
 	{
 		/*
