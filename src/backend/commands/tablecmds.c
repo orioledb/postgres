@@ -1926,9 +1926,6 @@ ExecuteTruncateGuts(List *explicit_rels,
 	foreach(cell, rels)
 	{
 		Relation	rel = (Relation) lfirst(cell);
-		bool		isExtendedRoutine;
-
-		isExtendedRoutine = table_has_extended_am(rel);
 
 		/* Skip partitioned tables as there is nothing to do */
 		if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
@@ -2006,17 +2003,14 @@ ExecuteTruncateGuts(List *explicit_rels,
 			 */
 			CheckTableForSerializableConflictIn(rel);
 
-			if (!isExtendedRoutine)
-			{
-				/*
-				 * Need the full transaction-safe pushups.
-				 *
-				 * Create a new empty storage file for the relation, and assign it
-				 * as the relfilenode value. The old storage file is scheduled for
-				 * deletion at commit.
-				 */
-				RelationSetNewRelfilenode(rel, rel->rd_rel->relpersistence);
-			}
+			/*
+			 * Need the full transaction-safe pushups.
+			 *
+			 * Create a new empty storage file for the relation, and assign it
+			 * as the relfilenode value. The old storage file is scheduled for
+			 * deletion at commit.
+			 */
+			RelationSetNewRelfilenode(rel, rel->rd_rel->relpersistence);
 
 			heap_relid = RelationGetRelid(rel);
 
@@ -2039,18 +2033,6 @@ ExecuteTruncateGuts(List *explicit_rels,
 			 */
 			reindex_relation(heap_relid, REINDEX_REL_PROCESS_TOAST,
 							 &reindex_params);
-
-			if (isExtendedRoutine)
-			{
-				/*
-				 * Need the full transaction-safe pushups.
-				 *
-				 * Create a new empty storage file for the relation, and assign it
-				 * as the relfilenode value. The old storage file is scheduled for
-				 * deletion at commit.
-				 */
-				RelationSetNewRelfilenode(rel, rel->rd_rel->relpersistence);
-			}
 		}
 
 		pgstat_count_truncate(rel);
