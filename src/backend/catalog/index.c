@@ -3732,13 +3732,12 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 
 	/* Close rels, but keep locks */
 	index_close(iRel, NoLock);
-	table_close(heapRelation, NoLock);
-
 	if (table_has_extended_am(heapRelation))
 	{
 		table_extended_define_index(heapRelation, indexId, true,
 									skip_constraint_checks, false, NULL);
 	}
+	table_close(heapRelation, NoLock);
 
 	if (progress)
 		pgstat_progress_end_command();
