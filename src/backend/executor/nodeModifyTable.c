@@ -687,6 +687,9 @@ ExecInsert(ModifyTableState *mtstate,
 	resultRelationDesc = resultRelInfo->ri_RelationDesc;
 	isExtendedRoutine = table_has_extended_am(resultRelationDesc);
 
+	if (isExtendedRoutine)
+		table_extended_init_modify(mtstate, resultRelInfo);
+
 	/*
 	 * Open the table's indexes, if we have not done so already, so that we
 	 * can add new index entries for the inserted tuple.
