@@ -473,6 +473,9 @@ ExecInsert(ModifyTableState *mtstate,
 	resultRelationDesc = resultRelInfo->ri_RelationDesc;
 	isExtendedRoutine = table_has_extended_am(resultRelationDesc);
 
+	if (isExtendedRoutine)
+		table_extended_init_modify(mtstate, resultRelInfo);
+
 	/*
 	 * BEFORE ROW INSERT Triggers.
 	 *
