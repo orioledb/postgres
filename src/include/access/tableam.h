@@ -2159,7 +2159,7 @@ typedef struct ExtendedTableAmRoutine
 	void		(*free_rd_amcache) (Relation rel);
 
 	bool		(*define_index_validate) (Relation rel, IndexStmt *stmt,
-										  void **arg);
+										  bool skip_build, void **arg);
 
 	bool		(*define_index) (Relation rel, Oid indoid, bool reindex,
 								 bool skip_constraint_checks, bool skip_build,
@@ -2317,13 +2317,14 @@ table_extended_tuple_refetch_row_version(Relation rel,
 }
 
 static inline bool
-table_extended_define_index_validate(Relation rel, IndexStmt *stmt, void **arg)
+table_extended_define_index_validate(Relation rel, IndexStmt *stmt,
+									 bool skip_build, void **arg)
 {
 	ExtendedTableAmRoutine *extendedRoutine;
 
 	Assert(table_has_extended_am(rel));
 	extendedRoutine = (ExtendedTableAmRoutine *) rel->rd_tableam;
-	return extendedRoutine->define_index_validate(rel, stmt, arg);
+	return extendedRoutine->define_index_validate(rel, stmt, skip_build, arg);
 }
 
 static inline bool
