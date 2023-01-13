@@ -627,7 +627,7 @@ DefineIndex(Oid relationId,
 	rel = table_open(relationId, lockmode);
 
 	if (table_has_extended_am(rel))
-		table_extended_define_index_validate(rel, stmt, &arg);
+		table_extended_define_index_validate(rel, stmt, skip_build, &arg);
 
 	/*
 	 * count key attributes in index
