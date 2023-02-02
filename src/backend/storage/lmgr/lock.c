@@ -1149,11 +1149,33 @@ LockAcquireExtended(const LOCKTAG *locktag,
 		 */
 		if (!(proclock->holdMask & LOCKBIT_ON(lockmode)))
 		{
+			int		i;
+
 			AbortStrongLockAcquire();
 			PROCLOCK_PRINT("LockAcquire: INCONSISTENT", proclock);
 			LOCK_PRINT("LockAcquire: INCONSISTENT", lock, lockmode);
 			/* Should we retry ? */
 			LWLockRelease(partitionLock);
+
+			/*
+			 * We've been removed from the queue without obtaining a lock.
+			 * That's OK, we're going to return LOCKACQUIRE_NOT_AVAIL, but
+			 * need to release a local lock first.
+			 */
+			locallock->nLocks--;
+			for (i = 0; i < locallock->numLockOwners; i++)
+			{
+				if (locallock->lockOwners[i].owner == owner)
+				{
+					locallock->lockOwners[i].nLocks--;
+					if (locallock->lockOwners[i].nLocks == 0)
+					{
+						ResourceOwnerForgetLock(owner, locallock);
+						locallock->lockOwners[i] = locallock->lockOwners[--locallock->numLockOwners];
+					}
+					break;
+				}
+			}
 
 			return LOCKACQUIRE_NOT_AVAIL;
 		}
