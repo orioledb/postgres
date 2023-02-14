@@ -16,6 +16,7 @@
 
 #include "access/sysattr.h"
 #include "access/table.h"
+#include "access/tableam.h"
 #include "catalog/partition.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_type.h"
@@ -486,6 +487,7 @@ expand_single_inheritance_child(PlannerInfo *root, RangeTblEntry *parentrte,
 	Assert(parentrte->rtekind == RTE_RELATION); /* else this is dubious */
 	childrte->relid = childOID;
 	childrte->relkind = childrel->rd_rel->relkind;
+	childrte->reftype = table_get_row_ref_type(childrel);
 	/* A partitioned child will need to be expanded further. */
 	if (childrte->relkind == RELKIND_PARTITIONED_TABLE)
 	{
