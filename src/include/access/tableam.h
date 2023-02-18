@@ -494,7 +494,7 @@ typedef struct TableAmRoutine
 	 */
 
 	/* see table_tuple_insert() for reference about parameters */
-	void		(*tuple_insert) (Relation rel, TupleTableSlot *slot,
+	TupleTableSlot *(*tuple_insert) (Relation rel, TupleTableSlot *slot,
 								 CommandId cid, int options,
 								 struct BulkInsertStateData *bistate);
 
@@ -1379,12 +1379,12 @@ table_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
  * insertion. But note that any toasting of fields within the slot is NOT
  * reflected in the slots contents.
  */
-static inline void
+static inline TupleTableSlot *
 table_tuple_insert(Relation rel, TupleTableSlot *slot, CommandId cid,
 				   int options, struct BulkInsertStateData *bistate)
 {
-	rel->rd_tableam->tuple_insert(rel, slot, cid, options,
-								  bistate);
+	return rel->rd_tableam->tuple_insert(rel, slot, cid, options,
+										 bistate);
 }
 
 /*
