@@ -716,9 +716,9 @@ ExecInsert(ModifyTableState *mtstate,
 		else
 		{
 			/* insert the tuple normally */
-			table_tuple_insert(resultRelationDesc, slot,
-							   estate->es_output_cid,
-							   0, NULL);
+			slot = table_tuple_insert(resultRelationDesc, slot,
+									  estate->es_output_cid,
+									  0, NULL);
 
 			/* insert index entries for tuple */
 			if (resultRelInfo->ri_NumIndices > 0 && !isExtendedRoutine)
