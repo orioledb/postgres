@@ -2165,6 +2165,9 @@ typedef struct ExtendedTableAmRoutine
 								 bool skip_constraint_checks, bool skip_build,
 								 void *arg);
 	bytea	   *(*reloptions) (char relkind, Datum reloptions, bool validate);
+
+	/* Check if tuple in the slot belongs to the current transaction */
+	bool		(*tuple_is_current) (Relation rel, TupleTableSlot *slot);
 } ExtendedTableAmRoutine;
 
 
@@ -2388,6 +2391,16 @@ tableam_extended_reloptions(const TableAmRoutine *tableam, char relkind,
 
 	extendedRoutine = (ExtendedTableAmRoutine *) tableam;
 	return extendedRoutine->reloptions(relkind, reloptions, validate);
+}
+
+static inline bool
+table_extended_tuple_is_current(Relation rel, TupleTableSlot *slot)
+{
+	ExtendedTableAmRoutine *extendedRoutine;
+
+	Assert(table_has_extended_am(rel));
+	extendedRoutine = (ExtendedTableAmRoutine *) rel->rd_tableam;
+	return extendedRoutine->tuple_is_current(rel, slot);
 }
 
 #endif							/* TABLEAM_H */
