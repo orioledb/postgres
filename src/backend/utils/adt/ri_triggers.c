@@ -1289,6 +1289,11 @@ RI_FKey_fk_upd_check_required(Trigger *trigger, Relation fk_rel,
 		if (TransactionIdIsCurrentTransactionId(xmin))
 			return true;
 	}
+	else
+	{
+		if (table_extended_tuple_is_current(fk_rel, oldslot))
+			return true;
+	}
 
 	/* If all old and new key values are equal, no check is needed */
 	if (ri_KeysEqual(fk_rel, oldslot, newslot, riinfo, false))
