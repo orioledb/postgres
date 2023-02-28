@@ -17629,10 +17629,33 @@ AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 			stmt = generateClonedIndexStmt(NULL,
 										   idxRel, attmap,
 										   &constraintOid);
+			if (idxRel->rd_index->indisprimary &&
+				table_has_extended_am(attachrel))
+			{
+				for (i = 0; i < list_length(attachRelIdxs); i++)
+					index_close(attachrelIdxRels[i], AccessShareLock);
+			}
+
 			DefineIndex(RelationGetRelid(attachrel), stmt, InvalidOid,
 						RelationGetRelid(idxRel),
 						constraintOid,
 						true, false, false, false, false);
+
+			if (idxRel->rd_index->indisprimary &&
+				table_has_extended_am(attachrel))
+			{
+				ListCell *lc;
+
+				i = 0;
+				foreach(lc, attachRelIdxs)
+				{
+					Oid	cldIdxId = lfirst_oid(lc);
+
+					attachrelIdxRels[i] = index_open(cldIdxId,
+													 AccessShareLock);
+					i++;
+				}
+			}
 		}
 
 		index_close(idxRel, AccessShareLock);
