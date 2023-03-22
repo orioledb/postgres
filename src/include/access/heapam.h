@@ -150,18 +150,21 @@ extern void heap_multi_insert(Relation relation, struct TupleTableSlot **slots,
 							  int ntuples, CommandId cid, int options,
 							  BulkInsertState bistate);
 extern TM_Result heap_delete(Relation relation, ItemPointer tid,
-							 CommandId cid, Snapshot crosscheck, bool wait,
-							 struct TM_FailureData *tmfd, bool changingPart);
+							 CommandId cid, Snapshot crosscheck, int options,
+							 struct TM_FailureData *tmfd, bool changingPart,
+							 TupleTableSlot *oldSlot);
 extern void heap_finish_speculative(Relation relation, ItemPointer tid);
 extern void heap_abort_speculative(Relation relation, ItemPointer tid);
 extern TM_Result heap_update(Relation relation, ItemPointer otid,
 							 HeapTuple newtup,
-							 CommandId cid, Snapshot crosscheck, bool wait,
-							 struct TM_FailureData *tmfd, LockTupleMode *lockmode);
-extern TM_Result heap_lock_tuple(Relation relation, HeapTuple tuple,
-								 CommandId cid, LockTupleMode mode, LockWaitPolicy wait_policy,
-								 bool follow_update,
-								 Buffer *buffer, struct TM_FailureData *tmfd);
+							 CommandId cid, Snapshot crosscheck, int options,
+							 struct TM_FailureData *tmfd, LockTupleMode *lockmode,
+							 TupleTableSlot *oldSlot);
+extern TM_Result heap_lock_tuple(Relation relation, ItemPointer tid,
+								 TupleTableSlot *slot,
+								 CommandId cid, LockTupleMode mode,
+								 LockWaitPolicy wait_policy, bool follow_update,
+								 struct TM_FailureData *tmfd);
 
 extern void heap_inplace_update(Relation relation, HeapTuple tuple);
 extern bool heap_freeze_tuple(HeapTupleHeader tuple,
