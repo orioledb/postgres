@@ -2601,8 +2601,8 @@ ExecBRDeleteTriggers(EState *estate, EPQState *epqstate,
 
 void
 ExecARDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
-					 ItemPointer tupleid,
 					 HeapTuple fdw_trigtuple,
+					 TupleTableSlot *slot,
 					 TransitionCaptureState *transition_capture)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
@@ -2610,18 +2610,11 @@ ExecARDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
 	if ((trigdesc && trigdesc->trig_delete_after_row) ||
 		(transition_capture && transition_capture->tcs_delete_old_table))
 	{
-		TupleTableSlot *slot = ExecGetTriggerOldSlot(estate, relinfo);
-
-		Assert(HeapTupleIsValid(fdw_trigtuple) ^ ItemPointerIsValid(tupleid));
-		if (fdw_trigtuple == NULL)
-			GetTupleForTrigger(estate,
-							   NULL,
-							   relinfo,
-							   tupleid,
-							   LockTupleExclusive,
-							   slot,
-							   NULL);
-		else
+		/*
+		 * Put the FDW old tuple to the slot.  Otherwise, caller is expected
+		 * to have old tuple alredy fetched to the slot.
+		 */
+		if (fdw_trigtuple != NULL)
 			ExecForceStoreHeapTuple(fdw_trigtuple, slot, false);
 
 		AfterTriggerSaveEvent(estate, relinfo, TRIGGER_EVENT_DELETE,
@@ -2885,8 +2878,8 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 
 void
 ExecARUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
-					 ItemPointer tupleid,
 					 HeapTuple fdw_trigtuple,
+					 TupleTableSlot *oldslot,
 					 TupleTableSlot *newslot,
 					 List *recheckIndexes,
 					 TransitionCaptureState *transition_capture)
@@ -2904,20 +2897,12 @@ ExecARUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 		 * separately for DELETE and INSERT to capture transition table rows.
 		 * In such case, either old tuple or new tuple can be NULL.
 		 */
-		TupleTableSlot *oldslot = ExecGetTriggerOldSlot(estate, relinfo);
 
-		if (fdw_trigtuple == NULL && ItemPointerIsValid(tupleid))
-			GetTupleForTrigger(estate,
-							   NULL,
-							   relinfo,
-							   tupleid,
-							   LockTupleExclusive,
-							   oldslot,
-							   NULL);
-		else if (fdw_trigtuple != NULL)
+		if (fdw_trigtuple != NULL)
+		{
+			Assert(oldslot);
 			ExecForceStoreHeapTuple(fdw_trigtuple, oldslot, false);
-		else
-			ExecClearTuple(oldslot);
+		}
 
 		AfterTriggerSaveEvent(estate, relinfo, TRIGGER_EVENT_UPDATE,
 							  true, oldslot, newslot, recheckIndexes,
