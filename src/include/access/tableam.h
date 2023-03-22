@@ -259,6 +259,11 @@ typedef struct TM_IndexDeleteOp
 /* Follow update chain and lock latest version of tuple */
 #define TUPLE_LOCK_FLAG_FIND_LAST_VERSION		(1 << 1)
 
+/* "options" flag bits for table_tuple_update and table_tuple_delete */
+#define TABLE_MODIFY_WAIT			0x0001
+#define TABLE_MODIFY_FETCH_OLD_TUPLE 0x0002
+#define TABLE_MODIFY_LOCK_UPDATED	0x0004
+
 
 /* Typedef for callback function for table_index_build_scan */
 typedef void (*IndexBuildCallback) (Relation index,
@@ -528,9 +533,10 @@ typedef struct TableAmRoutine
 								 CommandId cid,
 								 Snapshot snapshot,
 								 Snapshot crosscheck,
-								 bool wait,
+								 int options,
 								 TM_FailureData *tmfd,
-								 bool changingPart);
+								 bool changingPart,
+								 TupleTableSlot *oldSlot);
 
 	/* see table_tuple_update() for reference about parameters */
 	TM_Result	(*tuple_update) (Relation rel,
@@ -539,10 +545,11 @@ typedef struct TableAmRoutine
 								 CommandId cid,
 								 Snapshot snapshot,
 								 Snapshot crosscheck,
-								 bool wait,
+								 int options,
 								 TM_FailureData *tmfd,
 								 LockTupleMode *lockmode,
-								 TU_UpdateIndexes *update_indexes);
+								 TU_UpdateIndexes *update_indexes,
+								 TupleTableSlot *oldSlot);
 
 	/* see table_tuple_lock() for reference about parameters */
 	TM_Result	(*tuple_lock) (Relation rel,
@@ -1457,7 +1464,7 @@ table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
 }
 
 /*
- * Delete a tuple.
+ * Delete a tuple (and optionally lock the last tuple version).
  *
  * NB: do not call this directly unless prepared to deal with
  * concurrent-update conditions.  Use simple_table_tuple_delete instead.
@@ -1468,11 +1475,21 @@ table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
  *	cid - delete command ID (used for visibility test, and stored into
  *		cmax if successful)
  *	crosscheck - if not InvalidSnapshot, also check tuple against this
- *	wait - true if should wait for any conflicting update to commit/abort
+ *	options:
+ *		If TABLE_MODIFY_WAIT, wait for any conflicting update to commit/abort.
+ *		If TABLE_MODIFY_FETCH_OLD_TUPLE option is given, the existing tuple is
+ *		fetched into oldSlot when the update is successful.
+ *		If TABLE_MODIFY_LOCK_UPDATED option is given and the tuple is
+ *		concurrently updated, then the last tuple version is locked and fetched
+ *		into oldSlot.
+ *
  * Output parameters:
  *	tmfd - filled in failure cases (see below)
  *	changingPart - true iff the tuple is being moved to another partition
  *		table due to an update of the partition key. Otherwise, false.
+ *	oldSlot - slot to save the deleted or locked tuple. Can be NULL if none of
+ *		TABLE_MODIFY_FETCH_OLD_TUPLE or TABLE_MODIFY_LOCK_UPDATED options
+ *		is specified.
  *
  * Normal, successful return value is TM_Ok, which means we did actually
  * delete it.  Failure return codes are TM_SelfModified, TM_Updated, and
@@ -1484,16 +1501,18 @@ table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
  */
 static inline TM_Result
 table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
-				   Snapshot snapshot, Snapshot crosscheck, bool wait,
-				   TM_FailureData *tmfd, bool changingPart)
+				   Snapshot snapshot, Snapshot crosscheck, int options,
+				   TM_FailureData *tmfd, bool changingPart,
+				   TupleTableSlot *oldSlot)
 {
 	return rel->rd_tableam->tuple_delete(rel, tid, cid,
 										 snapshot, crosscheck,
-										 wait, tmfd, changingPart);
+										 options, tmfd, changingPart,
+										 oldSlot);
 }
 
 /*
- * Update a tuple.
+ * Update a tuple (and optionally lock the last tuple version).
  *
  * NB: do not call this directly unless you are prepared to deal with
  * concurrent-update conditions.  Use simple_table_tuple_update instead.
@@ -1505,13 +1524,23 @@ table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
  *	cid - update command ID (used for visibility test, and stored into
  *		cmax/cmin if successful)
  *	crosscheck - if not InvalidSnapshot, also check old tuple against this
- *	wait - true if should wait for any conflicting update to commit/abort
+ *	options:
+ *		If TABLE_MODIFY_WAIT, wait for any conflicting update to commit/abort.
+ *		If TABLE_MODIFY_FETCH_OLD_TUPLE option is given, the existing tuple is
+ *		fetched into oldSlot when the update is successful.
+ *		If TABLE_MODIFY_LOCK_UPDATED option is given and the tuple is
+ *		concurrently updated, then the last tuple version is locked and fetched
+ *		into oldSlot.
+ *
  * Output parameters:
  *	tmfd - filled in failure cases (see below)
  *	lockmode - filled with lock mode acquired on tuple
  *  update_indexes - in success cases this is set to true if new index entries
  *		are required for this tuple
- *
+ *	oldSlot - slot to save the deleted or locked tuple. Can be NULL if none of
+ *		TABLE_MODIFY_FETCH_OLD_TUPLE or TABLE_MODIFY_LOCK_UPDATED options
+ *		is specified.
+
  * Normal, successful return value is TM_Ok, which means we did actually
  * update it.  Failure return codes are TM_SelfModified, TM_Updated, and
  * TM_BeingModified (the last only possible if wait == false).
@@ -1529,13 +1558,15 @@ table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
 static inline TM_Result
 table_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slot,
 				   CommandId cid, Snapshot snapshot, Snapshot crosscheck,
-				   bool wait, TM_FailureData *tmfd, LockTupleMode *lockmode,
-				   TU_UpdateIndexes *update_indexes)
+				   int options, TM_FailureData *tmfd, LockTupleMode *lockmode,
+				   TU_UpdateIndexes *update_indexes,
+				   TupleTableSlot *oldSlot)
 {
 	return rel->rd_tableam->tuple_update(rel, otid, slot,
 										 cid, snapshot, crosscheck,
-										 wait, tmfd,
-										 lockmode, update_indexes);
+										 options, tmfd,
+										 lockmode, update_indexes,
+										 oldSlot);
 }
 
 /*
@@ -2051,10 +2082,12 @@ table_scan_sample_next_tuple(TableScanDesc scan,
 
 extern void simple_table_tuple_insert(Relation rel, TupleTableSlot *slot);
 extern void simple_table_tuple_delete(Relation rel, ItemPointer tid,
-									  Snapshot snapshot);
+									  Snapshot snapshot,
+									  TupleTableSlot *oldSlot);
 extern void simple_table_tuple_update(Relation rel, ItemPointer otid,
 									  TupleTableSlot *slot, Snapshot snapshot,
-									  TU_UpdateIndexes *update_indexes);
+									  TU_UpdateIndexes *update_indexes,
+									  TupleTableSlot *oldSlot);
 
 
 /* ----------------------------------------------------------------------------
