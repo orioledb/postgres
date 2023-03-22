@@ -219,8 +219,8 @@ extern bool ExecBRDeleteTriggers(EState *estate,
 								 TupleTableSlot **epqslot);
 extern void ExecARDeleteTriggers(EState *estate,
 								 ResultRelInfo *relinfo,
-								 ItemPointer tupleid,
 								 HeapTuple fdw_trigtuple,
+								 TupleTableSlot *slot,
 								 TransitionCaptureState *transition_capture);
 extern bool ExecIRDeleteTriggers(EState *estate,
 								 ResultRelInfo *relinfo,
@@ -238,9 +238,9 @@ extern bool ExecBRUpdateTriggers(EState *estate,
 								 TupleTableSlot *slot);
 extern void ExecARUpdateTriggers(EState *estate,
 								 ResultRelInfo *relinfo,
-								 ItemPointer tupleid,
 								 HeapTuple fdw_trigtuple,
-								 TupleTableSlot *slot,
+								 TupleTableSlot *oldslot,
+								 TupleTableSlot *newslot,
 								 List *recheckIndexes,
 								 TransitionCaptureState *transition_capture);
 extern bool ExecIRUpdateTriggers(EState *estate,
