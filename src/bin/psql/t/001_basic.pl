@@ -3,6 +3,7 @@
 
 use strict;
 use warnings;
+use locale;
 
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
@@ -353,7 +354,7 @@ psql_like(
 # Check \watch
 psql_like(
 	$node,
-	'SELECT 1 \watch c=3 i=0.01',
+	sprintf('SELECT 1 \watch c=3 i=%g', 0.01),
 	qr/1\n1\n1/,
 	'\watch with 3 iterations');
 
