@@ -18097,6 +18097,7 @@ static void
 AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 {
 	List	   *idxes;
+	List	   *buildIdxes = NIL;
 	List	   *attachRelIdxs;
 	Relation   *attachrelIdxRels;
 	IndexInfo **attachInfos;
@@ -18104,6 +18105,7 @@ AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 	ListCell   *cell;
 	MemoryContext cxt;
 	MemoryContext oldcxt;
+	AttrMap    *attmap;
 
 	cxt = AllocSetContextCreate(CurrentMemoryContext,
 								"AttachPartitionEnsureIndexes",
@@ -18154,6 +18156,10 @@ AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 		goto out;
 	}
 
+	attmap = build_attrmap_by_name(RelationGetDescr(attachrel),
+								   RelationGetDescr(rel),
+								   false);
+
 	/*
 	 * For each index on the partitioned table, find a matching one in the
 	 * partition-to-be; if one is not found, create one.
@@ -18163,7 +18169,6 @@ AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 		Oid			idx = lfirst_oid(cell);
 		Relation	idxRel = index_open(idx, AccessShareLock);
 		IndexInfo  *info;
-		AttrMap    *attmap;
 		bool		found = false;
 		Oid			constraintOid;
 
@@ -18179,9 +18184,6 @@ AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 
 		/* construct an indexinfo to compare existing indexes against */
 		info = BuildIndexInfo(idxRel);
-		attmap = build_attrmap_by_name(RelationGetDescr(attachrel),
-									   RelationGetDescr(rel),
-									   false);
 		constraintOid = get_relation_idx_constraint_oid(RelationGetRelid(rel), idx);
 
 		/*
@@ -18242,19 +18244,7 @@ AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 		 * now.
 		 */
 		if (!found)
-		{
-			IndexStmt  *stmt;
-			Oid			conOid;
-
-			stmt = generateClonedIndexStmt(NULL,
-										   idxRel, attmap,
-										   &conOid);
-			DefineIndex(RelationGetRelid(attachrel), stmt, InvalidOid,
-						RelationGetRelid(idxRel),
-						conOid,
-						-1,
-						true, false, false, false, false);
-		}
+			buildIdxes = lappend_oid(buildIdxes, RelationGetRelid(idxRel));
 
 		index_close(idxRel, AccessShareLock);
 	}
@@ -18263,6 +18253,25 @@ out:
 	/* Clean up. */
 	for (i = 0; i < list_length(attachRelIdxs); i++)
 		index_close(attachrelIdxRels[i], AccessShareLock);
+
+	foreach(cell, buildIdxes)
+	{
+		Oid			idx = lfirst_oid(cell);
+		Relation	idxRel = index_open(idx, AccessShareLock);
+		IndexStmt  *stmt;
+		Oid			conOid;
+
+		stmt = generateClonedIndexStmt(NULL,
+									   idxRel, attmap,
+									   &conOid);
+		DefineIndex(RelationGetRelid(attachrel), stmt, InvalidOid,
+					RelationGetRelid(idxRel),
+					conOid,
+					-1,
+					true, false, false, false, false);
+		index_close(idxRel, AccessShareLock);
+	}
+
 	MemoryContextSwitchTo(oldcxt);
 	MemoryContextDelete(cxt);
 }
