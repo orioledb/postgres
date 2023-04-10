@@ -25,6 +25,20 @@
  */
 typedef struct GlobalTransactionData *GlobalTransaction;
 
+typedef Size (*prepared_eval_file_hook_type) (void);
+typedef void (*prepared_read_file_hook_type) (Pointer);
+typedef void (*prepared_write_file_hook_type) (Pointer);
+typedef void (*prepared_eval_view_hook_type) (int *);
+typedef void (*prepared_init_view_hook_type) (Pointer tupdesc, int nattrs);
+typedef void (*prepared_fill_view_hook_type) (Datum *values, bool *nulls, int nattrs);
+
+extern PGDLLIMPORT prepared_eval_file_hook_type prepared_eval_file_hook;
+extern PGDLLIMPORT prepared_read_file_hook_type prepared_read_file_hook;
+extern PGDLLIMPORT prepared_write_file_hook_type prepared_write_file_hook;
+extern PGDLLIMPORT prepared_eval_view_hook_type prepared_eval_view_hook;
+extern PGDLLIMPORT prepared_init_view_hook_type prepared_init_view_hook;
+extern PGDLLIMPORT prepared_fill_view_hook_type prepared_fill_view_hook;
+
 /* GUC variable */
 extern PGDLLIMPORT int max_prepared_xacts;
 

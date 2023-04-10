@@ -309,6 +309,7 @@ typedef struct xl_xact_prepare
 	int32		ncommitrels;	/* number of delete-on-commit rels */
 	int32		nabortrels;		/* number of delete-on-abort rels */
 	int32		ninvalmsgs;		/* number of cache invalidation messages */
+	int32		opaque_size;    /* additional info for AM */
 	bool		initfileinval;	/* does relcache init file need invalidation? */
 	uint16		gidlen;			/* length of the GID - GID follows the header */
 	XLogRecPtr	origin_lsn;		/* lsn of this record at origin node */

@@ -706,7 +706,6 @@ GetPreparedTransactionList(GlobalTransaction *gxacts)
 	return num;
 }
 
-
 /* Working status for pg_prepared_xact */
 typedef struct
 {
@@ -714,6 +713,13 @@ typedef struct
 	int			ngxacts;
 	int			currIdx;
 } Working_State;
+
+prepared_eval_file_hook_type prepared_eval_file_hook = NULL;
+prepared_read_file_hook_type prepared_read_file_hook = NULL;
+prepared_write_file_hook_type prepared_write_file_hook = NULL;
+prepared_eval_view_hook_type prepared_eval_view_hook = NULL;
+prepared_init_view_hook_type prepared_init_view_hook = NULL;
+prepared_fill_view_hook_type prepared_fill_view_hook = NULL;
 
 /*
  * pg_prepared_xact
@@ -727,6 +733,7 @@ pg_prepared_xact(PG_FUNCTION_ARGS)
 {
 	FuncCallContext *funcctx;
 	Working_State *status;
+	int nattrs = 5; /* could be increased later by hooks */
 
 	if (SRF_IS_FIRSTCALL())
 	{
@@ -743,7 +750,12 @@ pg_prepared_xact(PG_FUNCTION_ARGS)
 
 		/* build tupdesc for result tuples */
 		/* this had better match pg_prepared_xacts view in system_views.sql */
-		tupdesc = CreateTemplateTupleDesc(5);
+
+		/* Add extra pg_prepared_xact attrs if needed */
+		if(prepared_eval_view_hook)
+			prepared_eval_view_hook(&nattrs);
+
+		tupdesc = CreateTemplateTupleDesc(nattrs);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "transaction",
 						   XIDOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "gid",
@@ -754,6 +766,9 @@ pg_prepared_xact(PG_FUNCTION_ARGS)
 						   OIDOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 5, "dbid",
 						   OIDOID, -1, 0);
+
+		if (prepared_init_view_hook)
+			prepared_init_view_hook(tupdesc, nattrs);
 
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 
@@ -777,28 +792,32 @@ pg_prepared_xact(PG_FUNCTION_ARGS)
 	{
 		GlobalTransaction gxact = &status->array[status->currIdx++];
 		PGPROC	   *proc = &ProcGlobal->allProcs[gxact->pgprocno];
-		Datum		values[5];
-		bool		nulls[5];
+		Datum		*values;
+		bool		*nulls;
 		HeapTuple	tuple;
 		Datum		result;
 
 		if (!gxact->valid)
 			continue;
 
+		values = palloc0(sizeof(Datum) * nattrs);
+		nulls = palloc0(sizeof(bool) * nattrs);
 		/*
 		 * Form tuple with appropriate data.
 		 */
-		MemSet(values, 0, sizeof(values));
-		MemSet(nulls, 0, sizeof(nulls));
-
 		values[0] = TransactionIdGetDatum(proc->xid);
 		values[1] = CStringGetTextDatum(gxact->gid);
 		values[2] = TimestampTzGetDatum(gxact->prepared_at);
 		values[3] = ObjectIdGetDatum(gxact->owner);
 		values[4] = ObjectIdGetDatum(proc->databaseId);
-
+		/* fill additional prepared_xact_attr if needed */
+		if (prepared_fill_view_hook)
+			prepared_fill_view_hook(values, nulls, nattrs);
 		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
 		result = HeapTupleGetDatum(tuple);
+
+		pfree(values);
+		pfree(nulls);
 		SRF_RETURN_NEXT(funcctx, result);
 	}
 
@@ -1073,6 +1092,7 @@ StartPrepare(GlobalTransaction gxact)
 	hdr.nabortrels = smgrGetPendingDeletes(false, &abortrels);
 	hdr.ninvalmsgs = xactGetCommittedInvalidationMessages(&invalmsgs,
 														  &hdr.initfileinval);
+	hdr.opaque_size = prepared_eval_file_hook ? prepared_eval_file_hook() : 0;
 	hdr.gidlen = strlen(gxact->gid) + 1;	/* Include '\0' */
 
 	save_state_data(&hdr, sizeof(TwoPhaseFileHeader));
@@ -1103,6 +1123,17 @@ StartPrepare(GlobalTransaction gxact)
 		save_state_data(invalmsgs,
 						hdr.ninvalmsgs * sizeof(SharedInvalidationMessage));
 		pfree(invalmsgs);
+	}
+
+	if (hdr.opaque_size > 0)
+	{
+		Pointer opaque = palloc0(hdr.opaque_size);
+
+		if (prepared_write_file_hook)
+			prepared_write_file_hook(opaque);
+
+		save_state_data(opaque, hdr.opaque_size);
+		pfree(opaque);
 	}
 }
 
@@ -1522,6 +1553,14 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	bufptr += MAXALIGN(hdr->nabortrels * sizeof(RelFileNode));
 	invalmsgs = (SharedInvalidationMessage *) bufptr;
 	bufptr += MAXALIGN(hdr->ninvalmsgs * sizeof(SharedInvalidationMessage));
+
+	if(hdr->opaque_size > 0)
+	{
+		if (prepared_read_file_hook)
+			prepared_read_file_hook(bufptr);
+
+		bufptr += MAXALIGN(hdr->opaque_size);
+	}
 
 	/* compute latestXid among all children */
 	latestXid = TransactionIdLatest(xid, hdr->nsubxacts, children);
@@ -2077,6 +2116,14 @@ RecoverPreparedTransactions(void)
 		bufptr += MAXALIGN(hdr->ncommitrels * sizeof(RelFileNode));
 		bufptr += MAXALIGN(hdr->nabortrels * sizeof(RelFileNode));
 		bufptr += MAXALIGN(hdr->ninvalmsgs * sizeof(SharedInvalidationMessage));
+
+		if(hdr->opaque_size > 0)
+		{
+			if (prepared_read_file_hook)
+				prepared_read_file_hook(bufptr);
+
+			bufptr += MAXALIGN(hdr->opaque_size);
+		}
 
 		/*
 		 * Recreate its GXACT and dummy PGPROC. But, check whether it was
