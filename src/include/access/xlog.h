@@ -380,6 +380,7 @@ extern XLogRecPtr do_pg_start_backup(const char *backupidstr, bool fast,
 extern XLogRecPtr do_pg_stop_backup(char *labelfile, bool waitforarchive,
 									TimeLineID *stoptli_p);
 extern void do_pg_abort_backup(int code, Datum arg);
+extern bool have_backup_in_progress(void);
 extern void register_persistent_abort_backup_handler(void);
 extern SessionBackupState get_backup_status(void);
 
