@@ -11328,7 +11328,21 @@ get_backup_status(void)
 }
 
 /*
- * do_pg_stop_backup
+ * Check if there is a backup in progress.
+ *
+ * We do this check without lock assuming 32-bit reads are atomic.  In fact,
+ * the false result means that there was at least a moment of time when there
+ * were no backups.
+ */
+bool
+have_backup_in_progress(void)
+{
+	return (XLogCtl->Insert.exclusiveBackupState != EXCLUSIVE_BACKUP_NONE ||
+			XLogCtl->Insert.nonExclusiveBackups > 0);
+}
+
+/*
+ * do_pg_backup_stop
  *
  * Utility function called at the end of an online backup. It cleans up the
  * backup state and can optionally wait for WAL segments to be archived.
