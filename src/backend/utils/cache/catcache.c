@@ -66,6 +66,7 @@ static CatCacheHeader *CacheHdr = NULL;
 
 SearchCatCacheInternal_hook_type SearchCatCacheInternal_hook = NULL;
 SearchCatCacheList_hook_type SearchCatCacheList_hook = NULL;
+GetCatCacheHashValue_hook_type GetCatCacheHashValue_hook = NULL;
 
 static inline HeapTuple SearchCatCacheInternal(CatCache *cache,
 											   int nkeys,
@@ -1627,6 +1628,11 @@ GetCatCacheHashValue(CatCache *cache,
 					 Datum v3,
 					 Datum v4)
 {
+	if (GetCatCacheHashValue_hook)
+	{
+		return GetCatCacheHashValue_hook(cache, cache->cc_nkeys,
+										 v1, v2, v3, v4);
+	}
 	/*
 	 * one-time startup overhead for each cache
 	 */
