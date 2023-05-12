@@ -66,6 +66,7 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
+GetDefaultOpClass_hook_type GetDefaultOpClass_hook = NULL;
 
 /* non-export function prototypes */
 static bool CompareOpclassOptions(Datum *opts1, Datum *opts2, int natts);
@@ -2241,6 +2242,9 @@ GetDefaultOpClass(Oid type_id, Oid am_id)
 
 	/* If it's a domain, look at the base type instead */
 	type_id = getBaseType(type_id);
+
+	if (GetDefaultOpClass_hook)
+		return GetDefaultOpClass_hook(type_id, am_id);
 
 	tcategory = TypeCategory(type_id);
 

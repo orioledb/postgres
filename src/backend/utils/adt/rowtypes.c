@@ -28,7 +28,6 @@
 #include "utils/lsyscache.h"
 #include "utils/typcache.h"
 
-record_cmp_hook_type record_cmp_hook = NULL;
 
 /*
  * structure to cache metadata needed for record I/O
@@ -813,8 +812,8 @@ record_cmp(FunctionCallInfo fcinfo)
 	Oid			tupType2;
 	int32		tupTypmod1;
 	int32		tupTypmod2;
-	TupleDesc	tupdesc1 = NULL;
-	TupleDesc	tupdesc2 = NULL;
+	TupleDesc	tupdesc1;
+	TupleDesc	tupdesc2;
 	HeapTupleData tuple1;
 	HeapTupleData tuple2;
 	int			ncolumns1;
@@ -834,17 +833,11 @@ record_cmp(FunctionCallInfo fcinfo)
 	/* Extract type info from the tuples */
 	tupType1 = HeapTupleHeaderGetTypeId(record1);
 	tupTypmod1 = HeapTupleHeaderGetTypMod(record1);
-	if (record_cmp_hook && tupTypmod1 == -1)
-		tupdesc1 = record_cmp_hook(tupType1, fcinfo->flinfo->fn_mcxt);
-	if (!tupdesc1)
-		tupdesc1 = lookup_rowtype_tupdesc(tupType1, tupTypmod1);
+	tupdesc1 = lookup_rowtype_tupdesc(tupType1, tupTypmod1);
 	ncolumns1 = tupdesc1->natts;
 	tupType2 = HeapTupleHeaderGetTypeId(record2);
 	tupTypmod2 = HeapTupleHeaderGetTypMod(record2);
-	if (record_cmp_hook && tupTypmod2 == -1)
-		tupdesc2 = record_cmp_hook(tupType2, fcinfo->flinfo->fn_mcxt);
-	if (!tupdesc2)
-		tupdesc2 = lookup_rowtype_tupdesc(tupType2, tupTypmod2);
+	tupdesc2 = lookup_rowtype_tupdesc(tupType2, tupTypmod2);
 	ncolumns2 = tupdesc2->natts;
 
 	/* Build temporary HeapTuple control structures */
@@ -956,20 +949,13 @@ record_cmp(FunctionCallInfo fcinfo)
 		if (typentry == NULL ||
 			typentry->type_id != att1->atttypid)
 		{
-			typentry = NULL;
-			if (type_elements_cmp_hook)
-				typentry = type_elements_cmp_hook(att1->atttypid,
-												  fcinfo->flinfo->fn_mcxt);
-			if (!typentry)
-			{
-				typentry = lookup_type_cache(att1->atttypid,
-											 TYPECACHE_CMP_PROC_FINFO);
-				if (!OidIsValid(typentry->cmp_proc_finfo.fn_oid))
-					ereport(ERROR, (errcode(ERRCODE_UNDEFINED_FUNCTION),
-							errmsg("could not identify a comparison function "
-									"for type %s",
-									format_type_be(typentry->type_id))));
-			}
+			typentry = lookup_type_cache(att1->atttypid,
+										 TYPECACHE_CMP_PROC_FINFO);
+			if (!OidIsValid(typentry->cmp_proc_finfo.fn_oid))
+				ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_FUNCTION),
+						 errmsg("could not identify a comparison function for type %s",
+								format_type_be(typentry->type_id))));
 			my_extra->columns[j].typentry = typentry;
 		}
 
