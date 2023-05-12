@@ -158,4 +158,7 @@ extern TypeName *defGetTypeName(DefElem *def);
 extern int	defGetTypeLength(DefElem *def);
 extern List *defGetStringList(DefElem *def);
 
+typedef Oid (*GetDefaultOpClass_hook_type)(Oid type_id, Oid am_id);
+extern PGDLLIMPORT GetDefaultOpClass_hook_type GetDefaultOpClass_hook;
+
 #endif							/* DEFREM_H */
