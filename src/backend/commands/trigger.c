@@ -6296,25 +6296,59 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 			tgtype_event = TRIGGER_TYPE_UPDATE;
 			if (row_trigger)
 			{
+				bool		src_rowid = false,
+							dst_rowid = false;
 				Assert(oldslot != NULL);
 				Assert(newslot != NULL);
 				ItemPointerCopy(&(oldslot->tts_tid), &(new_event.ate_ctid1));
 				ItemPointerCopy(&(newslot->tts_tid), &(new_event.ate_ctid2));
+				if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+				{
+					Relation src_rel = src_partinfo->ri_RelationDesc;
+					Relation dst_rel = dst_partinfo->ri_RelationDesc;
+
+					src_rowid = table_get_row_ref_type(src_rel) ==
+								ROW_REF_ROWID;
+					dst_rowid = table_get_row_ref_type(dst_rel) ==
+								ROW_REF_ROWID;
+				}
+				else
+				{
+					if (table_get_row_ref_type(rel) == ROW_REF_ROWID)
+					{
+						src_rowid = true;
+						dst_rowid = true;
+					}
+				}
+
+				if (src_rowid)
+				{
+					Datum	val;
+					bool	isnull;
+					val = slot_getsysattr(oldslot,
+										  RowIdAttributeNumber,
+										  &isnull);
+					rowId1 = DatumGetByteaP(val);
+					Assert(!isnull);
+					new_event.ate_flags |= AFTER_TRIGGER_ROWID1;
+				}
+
+				if (dst_rowid)
+				{
+					Datum	val;
+					bool	isnull;
+					val = slot_getsysattr(newslot,
+										  RowIdAttributeNumber,
+										  &isnull);
+					rowId2 = DatumGetByteaP(val);
+					Assert(!isnull);
+					new_event.ate_flags |= AFTER_TRIGGER_ROWID2;
+				}
 
 				/*
 				 * Also remember the OIDs of partitions to fetch these tuples
 				 * out of later in AfterTriggerExecute().
 				 */
-				if (table_get_row_ref_type(rel) == ROW_REF_ROWID)
-				{
-					bool	isnull;
-					rowId1 = DatumGetByteaP(slot_getsysattr(oldslot, RowIdAttributeNumber, &isnull));
-					Assert(!isnull);
-					rowId2 = DatumGetByteaP(slot_getsysattr(newslot, RowIdAttributeNumber, &isnull));
-					Assert(!isnull);
-					new_event.ate_flags |= AFTER_TRIGGER_ROWID1;
-					new_event.ate_flags |= AFTER_TRIGGER_ROWID2;
-				}
 				if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 				{
 					Assert(src_partinfo != NULL && dst_partinfo != NULL);
