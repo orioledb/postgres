@@ -84,7 +84,8 @@ SharedFileSetInit(SharedFileSet *fileset, dsm_segment *seg)
 	}
 
 	/* Register our cleanup callback. */
-	on_dsm_detach(seg, SharedFileSetOnDetach, PointerGetDatum(fileset));
+	if (seg)
+		on_dsm_detach(seg, SharedFileSetOnDetach, PointerGetDatum(fileset));
 }
 
 /*
