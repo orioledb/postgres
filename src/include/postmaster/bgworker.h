@@ -66,6 +66,12 @@
  * background workers should not use this class.
  */
 #define BGWORKER_CLASS_PARALLEL					0x0010
+
+/*
+ * This class of bgworkers are allowed to stay working during shutdown
+ * checkpointing.
+ */
+#define BGWORKER_CLASS_SYSTEM					0x0020
 /* add additional bgworker classes here */
 
 
