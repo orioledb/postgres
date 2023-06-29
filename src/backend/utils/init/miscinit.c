@@ -287,6 +287,9 @@ GetBackendTypeDesc(BackendType backendType)
 		case B_BG_WORKER:
 			backendDesc = gettext_noop("background worker");
 			break;
+		case B_SYSTEM_BG_WORKER:
+			backendDesc = gettext_noop("system background worker");
+			break;
 		case B_BG_WRITER:
 			backendDesc = gettext_noop("background writer");
 			break;

@@ -107,6 +107,7 @@ InitPostmasterChildSlots(void)
 	 * There can be only one of each of these running at a time.  They each
 	 * get their own pool of just one entry.
 	 */
+	pmchild_pools[B_SYSTEM_BG_WORKER].size = 1;
 	pmchild_pools[B_AUTOVAC_LAUNCHER].size = 1;
 	pmchild_pools[B_SLOTSYNC_WORKER].size = 1;
 	pmchild_pools[B_ARCHIVER].size = 1;

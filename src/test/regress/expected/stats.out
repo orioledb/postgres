@@ -81,6 +81,14 @@ startup|relation|normal
 startup|relation|vacuum
 startup|wal|init
 startup|wal|normal
+system background worker|relation|bulkread
+system background worker|relation|bulkwrite
+system background worker|relation|init
+system background worker|relation|normal
+system background worker|relation|vacuum
+system background worker|temp relation|normal
+system background worker|wal|init
+system background worker|wal|normal
 walreceiver|wal|init
 walreceiver|wal|normal
 walsender|relation|bulkread
@@ -95,7 +103,7 @@ walsummarizer|wal|init
 walsummarizer|wal|normal
 walwriter|wal|init
 walwriter|wal|normal
-(79 rows)
+(87 rows)
 \a
 -- ensure that both seqscan and indexscan plans are allowed
 SET enable_seqscan TO on;

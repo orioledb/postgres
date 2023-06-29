@@ -366,6 +366,7 @@ pgstat_tracks_io_bktype(BackendType bktype)
 		case B_AUTOVAC_WORKER:
 		case B_BACKEND:
 		case B_BG_WORKER:
+		case B_SYSTEM_BG_WORKER:
 		case B_BG_WRITER:
 		case B_CHECKPOINTER:
 		case B_IO_WORKER:
