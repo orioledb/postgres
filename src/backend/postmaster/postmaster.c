@@ -137,7 +137,8 @@
 #define BACKEND_TYPE_AUTOVAC	0x0002	/* autovacuum worker process */
 #define BACKEND_TYPE_WALSND		0x0004	/* walsender process */
 #define BACKEND_TYPE_BGWORKER	0x0008	/* bgworker process */
-#define BACKEND_TYPE_ALL		0x000F	/* OR of all the above */
+#define BACKEND_TYPE_SYSTEM_BGWORKER 0x0010	/* system bgworker process */
+#define BACKEND_TYPE_ALL		0x001F	/* OR of all the above */
 
 /*
  * List of active backends (or child processes anyway; we don't actually
@@ -1756,8 +1757,9 @@ ServerLoop(void)
 /*
  * canAcceptConnections --- check to see if database state allows connections
  * of the specified type.  backend_type can be BACKEND_TYPE_NORMAL,
- * BACKEND_TYPE_AUTOVAC, or BACKEND_TYPE_BGWORKER.  (Note that we don't yet
- * know whether a NORMAL connection might turn into a walsender.)
+ * BACKEND_TYPE_AUTOVAC, BACKEND_TYPE_BGWORKER or BACKEND_TYPE_SYSTEM_BGWORKER.
+ * (Note that we don't yet know whether a NORMAL connection might turn into
+ * a walsender.)
  */
 static CAC_state
 canAcceptConnections(int backend_type)
@@ -1771,7 +1773,8 @@ canAcceptConnections(int backend_type)
 	 * bgworker_should_start_now() decided whether the DB state allows them.
 	 */
 	if (pmState != PM_RUN && pmState != PM_HOT_STANDBY &&
-		backend_type != BACKEND_TYPE_BGWORKER)
+		backend_type != BACKEND_TYPE_BGWORKER &&
+		backend_type != BACKEND_TYPE_SYSTEM_BGWORKER)
 	{
 		if (Shutdown > NoShutdown)
 			return CAC_SHUTDOWN;	/* shutdown is pending */
@@ -2387,6 +2390,13 @@ process_pm_child_exit(void)
 					signal_child(PgArchPID, SIGUSR2);
 
 				/*
+				 * Terminate system background workers since checpoint is
+				 * complete.
+				 */
+				SignalSomeChildren(SIGTERM,
+								   BACKEND_TYPE_SYSTEM_BGWORKER);
+
+				/*
 				 * Waken walsenders for the last time. No regular backends
 				 * should be around anymore.
 				 */
@@ -2714,6 +2724,10 @@ HandleChildCrash(int pid, int exitstatus, const char *procname)
 		{
 			Backend    *bp = dlist_container(Backend, elem, iter.cur);
 
+			if (bp->bkend_type == BACKEND_TYPE_BGWORKER ||
+				bp->bkend_type == BACKEND_TYPE_SYSTEM_BGWORKER)
+				continue;
+
 			/*
 			 * This backend is still alive.  Unless we did so already, tell it
 			 * to commit hara-kiri.
@@ -2886,7 +2900,7 @@ PostmasterStateMachine(void)
 
 		/* Signal all backend children except walsenders */
 		SignalSomeChildren(SIGTERM,
-						   BACKEND_TYPE_ALL - BACKEND_TYPE_WALSND);
+						   BACKEND_TYPE_ALL - BACKEND_TYPE_WALSND - BACKEND_TYPE_SYSTEM_BGWORKER);
 		/* and the autovac launcher too */
 		if (AutoVacPID != 0)
 			signal_child(AutoVacPID, SIGTERM);
@@ -2928,7 +2942,7 @@ PostmasterStateMachine(void)
 		 * here. Walsenders and archiver are also disregarded, they will be
 		 * terminated later after writing the checkpoint record.
 		 */
-		if (CountChildren(BACKEND_TYPE_ALL - BACKEND_TYPE_WALSND) == 0 &&
+		if (CountChildren(BACKEND_TYPE_ALL - BACKEND_TYPE_WALSND - BACKEND_TYPE_SYSTEM_BGWORKER) == 0 &&
 			StartupPID == 0 &&
 			WalReceiverPID == 0 &&
 			WalSummarizerPID == 0 &&
@@ -3948,16 +3962,20 @@ do_start_bgworker(RegisteredBgWorker *rw)
  * specified start_time?
  */
 static bool
-bgworker_should_start_now(BgWorkerStartTime start_time)
+bgworker_should_start_now(BgWorkerStartTime start_time, int flags)
 {
 	switch (pmState)
 	{
 		case PM_NO_CHILDREN:
 		case PM_WAIT_DEAD_END:
 		case PM_SHUTDOWN_2:
+			break;
+
 		case PM_SHUTDOWN:
 		case PM_WAIT_BACKENDS:
 		case PM_STOP_BACKENDS:
+			if (flags & BGWORKER_CLASS_SYSTEM)
+				return true;
 			break;
 
 		case PM_RUN:
@@ -4015,7 +4033,10 @@ assign_backendlist_entry(void)
 	}
 
 	bn->child_slot = MyPMChildSlot = AssignPostmasterChildSlot();
-	bn->bkend_type = BACKEND_TYPE_BGWORKER;
+	if (rw->rw_worker.bgw_flags & BGWORKER_CLASS_SYSTEM)
+		bn->bkend_type = BACKEND_TYPE_SYSTEM_BGWORKER;
+	else
+		bn->bkend_type = BACKEND_TYPE_BGWORKER;
 	bn->dead_end = false;
 	bn->bgworker_notify = false;
 
@@ -4110,7 +4131,8 @@ maybe_start_bgworkers(void)
 			}
 		}
 
-		if (bgworker_should_start_now(rw->rw_worker.bgw_start_time))
+		if (bgworker_should_start_now(rw->rw_worker.bgw_start_time,
+									  rw->rw_worker.bgw_flags))
 		{
 			/* reset crash time before trying to start worker */
 			rw->rw_crashed_at = 0;
