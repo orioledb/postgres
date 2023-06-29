@@ -2566,7 +2566,8 @@ CleanupBackend(PMChild *bp,
 	RegisteredBgWorker *rw;
 
 	/* Construct a process name for the log message */
-	if (bp->bkend_type == B_BG_WORKER)
+	if (bp->bkend_type == B_BG_WORKER ||
+		bp->bkend_type == B_SYSTEM_BG_WORKER)
 	{
 		snprintf(namebuf, MAXPGPATH, _("background worker \"%s\""),
 				 bp->rw->rw_worker.bgw_type);
@@ -2648,7 +2649,7 @@ CleanupBackend(PMChild *bp,
 	 * If it was a background worker, also update its RegisteredBgWorker
 	 * entry.
 	 */
-	if (bp_bkend_type == B_BG_WORKER)
+	if (bp_bkend_type == B_BG_WORKER || bp_bkend_type == B_SYSTEM_BG_WORKER)
 	{
 		if (!EXIT_STATUS_0(exitstatus))
 		{
@@ -2951,7 +2952,8 @@ PostmasterStateMachine(void)
 
 			remainMask = btmask_add(remainMask,
 									B_DEAD_END_BACKEND,
-									B_LOGGER);
+									B_LOGGER,
+									B_SYSTEM_BG_WORKER);
 
 			/*
 			 * Archiver, checkpointer, IO workers, and walsender may or may
@@ -3066,7 +3068,8 @@ PostmasterStateMachine(void)
 		 * really waiting for is for walsenders and archiver to exit.
 		 */
 		if (CountChildren(btmask_all_except(B_CHECKPOINTER, B_IO_WORKER,
-											B_LOGGER, B_DEAD_END_BACKEND)) == 0)
+											B_LOGGER, B_DEAD_END_BACKEND,
+											B_SYSTEM_BG_WORKER)) == 0)
 		{
 			UpdatePMState(PM_WAIT_IO_WORKERS);
 			SignalChildren(SIGUSR2, btmask(B_IO_WORKER));
@@ -4135,14 +4138,17 @@ StartBackgroundWorker(RegisteredBgWorker *rw)
 		return false;
 	}
 	bn->rw = rw;
-	bn->bkend_type = B_BG_WORKER;
+	if (rw->rw_worker.bgw_flags & BGWORKER_CLASS_SYSTEM)
+		bn->bkend_type = B_SYSTEM_BG_WORKER;
+	else
+		bn->bkend_type = B_BG_WORKER;
 	bn->bgworker_notify = false;
 
 	ereport(DEBUG1,
 			(errmsg_internal("starting background worker process \"%s\"",
 							 rw->rw_worker.bgw_name)));
 
-	worker_pid = postmaster_child_launch(B_BG_WORKER, bn->child_slot,
+	worker_pid = postmaster_child_launch(bn->bkend_type, bn->child_slot,
 										 &rw->rw_worker, sizeof(BackgroundWorker), NULL);
 	if (worker_pid == -1)
 	{
@@ -4169,18 +4175,22 @@ StartBackgroundWorker(RegisteredBgWorker *rw)
  * specified start_time?
  */
 static bool
-bgworker_should_start_now(BgWorkerStartTime start_time)
+bgworker_should_start_now(BgWorkerStartTime start_time, int flags)
 {
 	switch (pmState)
 	{
 		case PM_NO_CHILDREN:
-		case PM_WAIT_CHECKPOINTER:
 		case PM_WAIT_DEAD_END:
 		case PM_WAIT_XLOG_ARCHIVAL:
-		case PM_WAIT_XLOG_SHUTDOWN:
 		case PM_WAIT_IO_WORKERS:
+			break;
+
+		case PM_WAIT_CHECKPOINTER:
+		case PM_WAIT_XLOG_SHUTDOWN:
 		case PM_WAIT_BACKENDS:
 		case PM_STOP_BACKENDS:
+			if (flags & BGWORKER_CLASS_SYSTEM)
+				return true;
 			break;
 
 		case PM_RUN:
@@ -4292,7 +4302,8 @@ maybe_start_bgworkers(void)
 			}
 		}
 
-		if (bgworker_should_start_now(rw->rw_worker.bgw_start_time))
+		if (bgworker_should_start_now(rw->rw_worker.bgw_start_time,
+									  rw->rw_worker.bgw_flags))
 		{
 			/* reset crash time before trying to start worker */
 			rw->rw_crashed_at = 0;
