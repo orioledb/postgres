@@ -184,6 +184,7 @@ static child_process_kind child_process_kinds[] = {
 	[B_AUTOVAC_LAUNCHER] = {"autovacuum launcher", AutoVacLauncherMain, true},
 	[B_AUTOVAC_WORKER] = {"autovacuum worker", AutoVacWorkerMain, true},
 	[B_BG_WORKER] = {"bgworker", BackgroundWorkerMain, true},
+	[B_SYSTEM_BG_WORKER] = {"bgworker", BackgroundWorkerMain, true},
 
 	/*
 	 * WAL senders start their life as regular backend processes, and change
