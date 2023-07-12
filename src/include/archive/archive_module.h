@@ -37,13 +37,17 @@ typedef struct ArchiveModuleState
  */
 typedef void (*ArchiveStartupCB) (ArchiveModuleState *state);
 typedef bool (*ArchiveCheckConfiguredCB) (ArchiveModuleState *state);
-typedef bool (*ArchiveFileCB) (ArchiveModuleState *state, const char *file, const char *path);
+typedef void (*ArchivePreloadFileCB) (ArchiveModuleState *state,
+									  const char *file, const char *path);
+typedef bool (*ArchiveFileCB) (ArchiveModuleState *state,
+							   const char *file, const char *path);
 typedef void (*ArchiveShutdownCB) (ArchiveModuleState *state);
 
 typedef struct ArchiveModuleCallbacks
 {
 	ArchiveStartupCB startup_cb;
 	ArchiveCheckConfiguredCB check_configured_cb;
+	ArchivePreloadFileCB archive_preload_file_cb;
 	ArchiveFileCB archive_file_cb;
 	ArchiveShutdownCB shutdown_cb;
 } ArchiveModuleCallbacks;
