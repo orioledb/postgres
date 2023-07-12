@@ -47,12 +47,14 @@ extern PGDLLIMPORT char *XLogArchiveLibrary;
  * archive modules documentation.
  */
 typedef bool (*ArchiveCheckConfiguredCB) (void);
+typedef void (*ArchivePreloadFileCB) (const char *file, const char *path);
 typedef bool (*ArchiveFileCB) (const char *file, const char *path);
 typedef void (*ArchiveShutdownCB) (void);
 
 typedef struct ArchiveModuleCallbacks
 {
 	ArchiveCheckConfiguredCB check_configured_cb;
+	ArchivePreloadFileCB archive_preload_file_cb;
 	ArchiveFileCB archive_file_cb;
 	ArchiveShutdownCB shutdown_cb;
 } ArchiveModuleCallbacks;
