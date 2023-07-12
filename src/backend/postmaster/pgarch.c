@@ -677,6 +677,21 @@ pgarch_readyXlog(char *xlog)
 	for (int i = 0; i < arch_files->arch_files_size; i++)
 		arch_files->arch_files[i] = DatumGetCString(binaryheap_remove_first(arch_files->arch_heap));
 
+	/*
+	 * Preload the WAL files if the relevant callback is provided.
+	 */
+	if (ArchiveContext.archive_preload_file_cb)
+	{
+		for (int i = 0; i < arch_files->arch_files_size; i++)
+		{
+			char	   *xlog = arch_files->arch_files[i];
+			char		pathname[MAXPGPATH];
+
+			snprintf(pathname, MAXPGPATH, XLOGDIR "/%s", xlog);
+			ArchiveContext.archive_preload_file_cb(xlog, pathname);
+		}
+	}
+
 	/* Return the highest priority file. */
 	arch_files->arch_files_size--;
 	strcpy(xlog, arch_files->arch_files[arch_files->arch_files_size]);
