@@ -133,6 +133,7 @@ typedef struct
 
 static HTAB *collation_cache = NULL;
 
+pg_newlocale_from_collation_hook_type pg_newlocale_from_collation_hook = NULL;
 
 #if defined(WIN32) && defined(LC_MESSAGES)
 static char *IsoLocaleName(const char *);
@@ -1673,6 +1674,7 @@ pg_newlocale_from_collation(Oid collid)
 		{
 			char	   *actual_versionstr;
 			char	   *collversionstr;
+			int			level = WARNING;
 
 			collversionstr = TextDatumGetCString(datum);
 
@@ -1695,8 +1697,11 @@ pg_newlocale_from_collation(Oid collid)
 								NameStr(collform->collname))));
 			}
 
+			if (pg_newlocale_from_collation_hook && pg_newlocale_from_collation_hook())
+				level = ERROR;
+
 			if (strcmp(actual_versionstr, collversionstr) != 0)
-				ereport(WARNING,
+				ereport(level,
 						(errmsg("collation \"%s\" has version mismatch",
 								NameStr(collform->collname)),
 						 errdetail("The collation in the database was created using version %s, "
