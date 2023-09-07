@@ -101,6 +101,8 @@ extern void make_icu_collator(const char *iculocstr,
 
 extern bool pg_locale_deterministic(pg_locale_t locale);
 extern pg_locale_t pg_newlocale_from_collation(Oid collid);
+typedef bool (*pg_newlocale_from_collation_hook_type)();
+extern pg_newlocale_from_collation_hook_type pg_newlocale_from_collation_hook;
 
 extern char *get_collation_actual_version(char collprovider, const char *collcollate);
 extern int	pg_strcoll(const char *arg1, const char *arg2, pg_locale_t locale);
