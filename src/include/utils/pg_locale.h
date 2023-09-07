@@ -102,6 +102,8 @@ struct pg_locale_struct
 typedef struct pg_locale_struct *pg_locale_t;
 
 extern pg_locale_t pg_newlocale_from_collation(Oid collid);
+typedef bool (*pg_newlocale_from_collation_hook_type)();
+extern pg_newlocale_from_collation_hook_type pg_newlocale_from_collation_hook;
 
 extern char *get_collation_actual_version(char collprovider, const char *collcollate);
 
