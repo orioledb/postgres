@@ -17,6 +17,7 @@ include $(top_builddir)/src/Makefile.global
 
 override CPPFLAGS := -I$(libpq_srcdir) -DFRONTEND $(CPPFLAGS)
 LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
+LDFLAGS_EX += -Wl,--export-dynamic
 
 OBJS = \
 	$(WIN32RES) \

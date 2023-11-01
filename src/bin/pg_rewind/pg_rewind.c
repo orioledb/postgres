@@ -26,10 +26,32 @@
 #include "fe_utils/string_utils.h"
 #include "file_ops.h"
 #include "filemap.h"
+#include "magic.h"
 #include "getopt_long.h"
 #include "pg_rewind.h"
 #include "rewind_source.h"
 #include "storage/bufpage.h"
+
+#ifndef WIN32
+#include <dlfcn.h>
+
+/*
+ * On macOS, <dlfcn.h> insists on including <stdbool.h>.  If we're not
+ * using stdbool, undef bool to undo the damage.
+ */
+#ifndef PG_USE_STDBOOL
+#ifdef bool
+#undef bool
+#endif
+#endif
+#endif							/* !WIN32 */
+
+/* signature for pg_rewind extension library rewind function */
+typedef void (*PG_rewind_t) (const char *datadir_target, char *datadir_source,
+							 char *connstr_source, XLogRecPtr startpoint,
+							 int tliIndex, XLogRecPtr endpoint,
+							 const char *restoreCommand, const char *argv0,
+							 bool debug);
 
 static void usage(const char *progname);
 
@@ -68,6 +90,7 @@ char	   *datadir_source = NULL;
 char	   *connstr_source = NULL;
 char	   *restore_command = NULL;
 char	   *config_file = NULL;
+char	   *extensions = NULL;
 
 static bool debug = false;
 bool		showprogress = false;
@@ -85,6 +108,9 @@ uint64		fetch_done;
 
 static PGconn *conn;
 static rewind_source *source;
+
+/* Magic structure that module needs to match to be accepted */
+static const Pg_magic_struct magic_data = PG_MODULE_MAGIC_DATA;
 
 static void
 usage(const char *progname)
@@ -114,6 +140,290 @@ usage(const char *progname)
 }
 
 
+static bool
+split_extensions(char *rawstring, char ***namelist, int	*name_num)
+{
+	char	   *nextp = rawstring;
+	bool		done = false;
+	int			name_allocated = 0;
+
+	*name_num = 0;
+
+	while (*nextp == ' ')
+		nextp++;				/* skip leading whitespace */
+
+	if (*nextp == '\0')
+		return true;			/* allow empty string */
+
+	/* At the top of the loop, we are at start of a new directory. */
+	do
+	{
+		char	   *curname;
+		char	   *endp;
+
+		/* Unquoted name --- extends to separator or end of string */
+		curname = endp = nextp;
+		while (*nextp && *nextp != ',')
+		{
+			/* trailing whitespace should not be included in name */
+			if (*nextp != ' ')
+				endp = nextp + 1;
+			nextp++;
+		}
+		if (curname == endp)
+			return false;	/* empty unquoted name not allowed */
+
+		while (*nextp == ' ')
+			nextp++;			/* skip trailing whitespace */
+
+		if (*nextp == ',')
+		{
+			nextp++;
+			while (*nextp == ' ')
+				nextp++;		/* skip leading whitespace for next */
+			/* we expect another name, so done remains false */
+		}
+		else if (*nextp == '\0')
+			done = true;
+		else
+			return false;		/* invalid syntax */
+
+		/* Now safe to overwrite separator with a null */
+		*endp = '\0';
+
+		/* Truncate path if it's overlength */
+		if (strlen(curname) >= MAXPGPATH)
+			curname[MAXPGPATH - 1] = '\0';
+
+		/*
+		 * Finished isolating current name --- add it to list
+		 */
+		if (*name_num == name_allocated)
+		{
+			if (name_allocated == 0)
+			{
+				name_allocated = 8;
+				*namelist = palloc0(sizeof(char *) * name_allocated);
+			}
+			else
+			{
+				name_allocated = name_allocated * 2;
+				*namelist = repalloc(*namelist, sizeof(char *) * name_allocated);
+			}
+		}
+		char *name = pstrdup(curname);
+		(*namelist)[*name_num] = name;
+		(*name_num)++;
+
+		/* Loop back if we didn't reach end of string */
+	} while (!done);
+
+	return true;
+}
+
+static bool
+file_exists(const char *name)
+{
+	struct stat st;
+
+	Assert(name != NULL);
+
+	if (stat(name, &st) == 0)
+		return !S_ISDIR(st.st_mode);
+	else if (!(errno == ENOENT || errno == ENOTDIR || errno == EACCES))
+	{
+		pg_log_error("could not access file \"%s\": %m", name);
+		pg_log_error_hint("Try \"%s --help\" for more information.", progname);
+		exit(1);
+	}
+
+	return false;
+}
+
+static char *
+expand_dynamic_library_name(const char *argv0, const char *name)
+{
+	char	   *full;
+	char		my_exec_path[MAXPGPATH];
+	char		pkglib_path[MAXPGPATH];
+
+	Assert(name);
+
+	if (find_my_exec(argv0, my_exec_path) < 0)
+		pg_fatal("%s: could not locate my own executable path", argv0);
+	get_pkglib_path(my_exec_path, pkglib_path);
+	full = palloc(strlen(pkglib_path) + 1 + strlen(name) + 1);
+	sprintf(full, "%s/%s", pkglib_path, name);
+	if (file_exists(full))
+		return full;
+	pfree(full);
+
+	full = palloc(strlen(pkglib_path) + 1 + strlen(name) + 1 +
+				  strlen(DLSUFFIX) + 1);
+	sprintf(full, "%s/%s%s", pkglib_path, name, DLSUFFIX);
+	if (file_exists(full))
+		return full;
+	pfree(full);
+
+	return pstrdup(name);
+}
+
+/*
+ * Report a suitable error for an incompatible magic block.
+ */
+static void
+incompatible_module_error(const char *libname,
+						  const Pg_magic_struct *module_magic_data)
+{
+	StringInfoData details;
+
+	/*
+	 * If the version doesn't match, just report that, because the rest of the
+	 * block might not even have the fields we expect.
+	 */
+	if (magic_data.version != module_magic_data->version)
+	{
+		char		library_version[32];
+
+		if (module_magic_data->version >= 1000)
+			snprintf(library_version, sizeof(library_version), "%d",
+					 module_magic_data->version / 100);
+		else
+			snprintf(library_version, sizeof(library_version), "%d.%d",
+					 module_magic_data->version / 100,
+					 module_magic_data->version % 100);
+		pg_log_error("incompatible library \"%s\": version mismatch",
+					 libname);
+		pg_log_error_detail("Server is version %d, library is version %s.",
+						    magic_data.version / 100, library_version);
+		exit(1);
+	}
+
+	/*
+	 * Similarly, if the ABI extra field doesn't match, error out.  Other
+	 * fields below might also mismatch, but that isn't useful information if
+	 * you're using the wrong product altogether.
+	 */
+	if (strcmp(module_magic_data->abi_extra, magic_data.abi_extra) != 0)
+	{
+		pg_log_error("incompatible library \"%s\": ABI mismatch",
+					 libname);
+		pg_log_error_detail("Server has ABI \"%s\", library has \"%s\".",
+							magic_data.abi_extra,
+							module_magic_data->abi_extra);
+		exit(1);
+	}
+
+	/*
+	 * Otherwise, spell out which fields don't agree.
+	 *
+	 * XXX this code has to be adjusted any time the set of fields in a magic
+	 * block change!
+	 */
+	initStringInfo(&details);
+
+	if (module_magic_data->funcmaxargs != magic_data.funcmaxargs)
+	{
+		if (details.len)
+			appendStringInfoChar(&details, '\n');
+		appendStringInfo(&details,
+						 _("Server has FUNC_MAX_ARGS = %d, library has %d."),
+						 magic_data.funcmaxargs,
+						 module_magic_data->funcmaxargs);
+	}
+	if (module_magic_data->indexmaxkeys != magic_data.indexmaxkeys)
+	{
+		if (details.len)
+			appendStringInfoChar(&details, '\n');
+		appendStringInfo(&details,
+						 _("Server has INDEX_MAX_KEYS = %d, library has %d."),
+						 magic_data.indexmaxkeys,
+						 module_magic_data->indexmaxkeys);
+	}
+	if (module_magic_data->namedatalen != magic_data.namedatalen)
+	{
+		if (details.len)
+			appendStringInfoChar(&details, '\n');
+		appendStringInfo(&details,
+						 _("Server has NAMEDATALEN = %d, library has %d."),
+						 magic_data.namedatalen,
+						 module_magic_data->namedatalen);
+	}
+	if (module_magic_data->float8byval != magic_data.float8byval)
+	{
+		if (details.len)
+			appendStringInfoChar(&details, '\n');
+		appendStringInfo(&details,
+						 _("Server has FLOAT8PASSBYVAL = %s, library has %s."),
+						 magic_data.float8byval ? "true" : "false",
+						 module_magic_data->float8byval ? "true" : "false");
+	}
+
+	if (details.len == 0)
+		appendStringInfoString(&details,
+							   _("Magic block has unexpected length or padding difference."));
+
+	pg_log_error("incompatible library \"%s\": magic block mismatch", libname);
+	pg_log_error_detail("%s", details.data);
+	exit(1);
+}
+
+/*
+ * Load the specified dynamic-link library file, unless it already is
+ * loaded.  Return the pg_dl* handle for the file.
+ *
+ * Note: libname is expected to be an exact name for the library file.
+ *
+ * NB: There is presently no way to unload a dynamically loaded file.  We might
+ * add one someday if we can convince ourselves we have safe protocols for un-
+ * hooking from hook function pointers, releasing custom GUC variables, and
+ * perhaps other things that are definitely unsafe currently.
+ */
+static void *
+internal_load_library(const char *libname)
+{
+	PGModuleMagicFunction magic_func;
+	char	   *load_error;
+	void *handle;
+
+	handle = dlopen(libname, RTLD_NOW | RTLD_GLOBAL);
+	if (handle == NULL)
+	{
+		load_error = dlerror();
+		pg_fatal("could not load library \"%s\": %s", libname, load_error);
+	}
+
+	/* Check the magic function to determine compatibility */
+	magic_func = (PGModuleMagicFunction)
+		dlsym(handle, PG_MAGIC_FUNCTION_NAME_STRING);
+	if (magic_func)
+	{
+		const Pg_magic_struct *magic_data_ptr = (*magic_func) ();
+
+		if (magic_data_ptr->len != magic_data.len ||
+			memcmp(magic_data_ptr, &magic_data, magic_data.len) != 0)
+		{
+			/* copy data block before unlinking library */
+			Pg_magic_struct module_magic_data = *magic_data_ptr;
+
+			/* try to close library */
+			dlclose(handle);
+
+			/* issue suitable complaint */
+			incompatible_module_error(libname, &module_magic_data);
+		}
+	}
+	else
+	{
+		/* try to close library */
+		dlclose(handle);
+		/* complain */
+		pg_fatal("incompatible library \"%s\": missing magic block", libname);
+	}
+
+	return handle;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -131,6 +441,7 @@ main(int argc, char **argv)
 		{"no-sync", no_argument, NULL, 'N'},
 		{"progress", no_argument, NULL, 'P'},
 		{"debug", no_argument, NULL, 3},
+		{"extensions", required_argument, NULL, 'e'},
 		{NULL, 0, NULL, 0}
 	};
 	int			option_index;
@@ -169,7 +480,7 @@ main(int argc, char **argv)
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "cD:nNPR", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "cD:nNPRe", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -216,6 +527,10 @@ main(int argc, char **argv)
 
 			case 5:
 				config_file = pg_strdup(optarg);
+				break;
+
+			case 'e':			/* -e or --extensions */
+				extensions = pg_strdup(optarg);
 				break;
 
 			default:
@@ -453,6 +768,70 @@ main(int argc, char **argv)
 
 	/* Initialize the hash table to track the status of each file */
 	filehash_init();
+
+	if (extensions != NULL)
+	{
+		char	  **extension_list = NULL;
+		int			extension_num;
+		int			i;
+
+		// TODO: Make pg_rewind to take 4 variants:
+		// orioledb, orioledb.so, pg_rewind_orioledb, pg_rewind_orioledb.so
+		// check that pg_rewind_orioledb.so exists
+		// add hook to run rewind for extension
+		// add hook to check if it's possible to run rewind for extension
+		// pfree all data
+
+		/* Parse string into list of filename paths */
+		if (!split_extensions(extensions, &extension_list, &extension_num))
+		{
+			/* syntax error in list */
+			for (i = 0; i < extension_num; i++)
+			{
+				pfree(extension_list[i]);
+			}
+			if (extension_list)
+				pfree(extension_list);
+
+			pfree(extensions);
+			pg_log_error("invalid list syntax in parameter --extensions");
+			pg_log_error_hint("Try \"%s --help\" for more information.",
+							  progname);
+			exit(1);
+		}
+
+		for (i = 0; i < extension_num; i++)
+		{
+			char	   *filename = extension_list[i];
+			char	   *expanded = NULL;
+			char	   *fullname;
+			void	   *lib_handle;
+			PG_rewind_t	PG_rewind;
+			bool		allocated = false;
+
+			fullname = expand_dynamic_library_name(argv[0], filename);
+			lib_handle = internal_load_library(fullname);
+
+			PG_rewind = dlsym(lib_handle, "_PG_rewind");
+
+			if (PG_rewind == NULL)
+				pg_fatal("could not find function \"_PG_rewind\" in \"%s\"",
+						 fullname);
+			pfree(fullname);
+
+			if (showprogress)
+				pg_log_info("performing rewind for '%s' extension", filename);
+			PG_rewind(datadir_target, datadir_source, connstr_source, chkptrec,
+					  lastcommontliIndex, target_wal_endrec, restore_command,
+					  argv[0], debug);
+
+			pg_log_debug("loaded library \"%s\"", filename);
+			if (expanded)
+				pfree(expanded);
+			pfree(filename);
+		}
+		pfree(extension_list);
+	}
 
 	/*
 	 * Collect information about all files in the both data directories.

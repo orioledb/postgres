@@ -54,6 +54,9 @@ static uint32 hash_string_pointer(const char *s);
 #define FILEHASH_INITIAL_SIZE	1000
 
 static filehash_hash *filehash;
+static char	  **extensions_exclude = NULL;
+static int		extensions_exclude_num;
+static int		extensions_exclude_allocated;
 
 static bool isRelDataFile(const char *path);
 static char *datasegpath(RelFileLocator rlocator, ForkNumber forknum,
@@ -261,6 +264,8 @@ process_target_file(const char *path, file_type_t type, size_t size,
 	 * from the target data folder all paths which have been filtered out from
 	 * the source data folder when processing the source files.
 	 */
+	if (check_file_excluded(path, false))
+		return;
 
 	/*
 	 * Like in process_source_file, pretend that pg_wal is always a directory.
@@ -402,6 +407,30 @@ check_file_excluded(const char *path, bool is_source)
 				pg_log_debug("entry \"%s\" excluded from target file list",
 							 path);
 			return true;
+		}
+	}
+
+	/*
+	 * Exclude extensions directories
+	 */
+	if (extensions_exclude)
+	{
+		int i;
+
+		for(i = 0; i < extensions_exclude_num; i++)
+		{
+			char   *exclude_dir = extensions_exclude[i];
+			snprintf(localpath, sizeof(localpath), "%s/", exclude_dir);
+			if (strstr(path, localpath) == path)
+			{
+				if (is_source)
+					pg_log_debug("entry \"%s\" excluded from source file list",
+								path);
+				else
+					pg_log_debug("entry \"%s\" excluded from target file list",
+								path);
+				return true;
+			}
 		}
 	}
 
@@ -828,4 +857,30 @@ hash_string_pointer(const char *s)
 	unsigned char *ss = (unsigned char *) s;
 
 	return hash_bytes(ss, strlen(s));
+}
+
+void
+extensions_exclude_add(char **exclude_dir)
+{
+	int i;
+	for (i = 0; exclude_dir[i] != NULL; i++)
+	{
+		if (extensions_exclude_num == extensions_exclude_allocated)
+		{
+			if (extensions_exclude_num == 0)
+			{
+				extensions_exclude_allocated = 8;
+				extensions_exclude = palloc0(sizeof(char *) *
+											 extensions_exclude_allocated);
+			}
+			else
+			{
+				extensions_exclude_allocated *= 2;
+				extensions_exclude = repalloc(extensions_exclude,
+											  sizeof(char *) *
+											  extensions_exclude_allocated);
+			}
+		}
+		extensions_exclude[extensions_exclude_num++] = pstrdup(exclude_dir[i]);
+	}
 }

@@ -12,6 +12,7 @@
 #define PG_REWIND_H
 
 #include "access/timeline.h"
+#include "access/xlogreader.h"
 #include "common/logging.h"
 #include "datapagemap.h"
 #include "libpq-fe.h"
@@ -37,6 +38,13 @@ extern uint64 fetch_done;
 extern void extractPageMap(const char *datadir, XLogRecPtr startpoint,
 						   int tliIndex, XLogRecPtr endpoint,
 						   const char *restoreCommand);
+extern void SimpleXLogRead(const char *datadir, XLogRecPtr startpoint,
+						   int tliIndex, XLogRecPtr endpoint,
+						   const char *restoreCommand,
+						   void (*page_callback)(XLogReaderState *,
+												 void *arg),
+						   void *arg);
+
 extern void findLastCheckpoint(const char *datadir, XLogRecPtr forkptr,
 							   int tliIndex,
 							   XLogRecPtr *lastchkptrec, TimeLineID *lastchkpttli,
