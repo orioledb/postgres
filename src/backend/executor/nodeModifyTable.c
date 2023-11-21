@@ -1022,10 +1022,9 @@ ExecInsert(ModifyTableContext *context,
 		}
 		else
 		{
-			bool		insertIndexes;
-
+			bool 	insertIndexes;
 			/* insert the tuple normally */
-			slot = table_tuple_insert(resultRelationDesc, slot,
+			slot = table_tuple_insert_extended(resultRelationDesc, slot,
 									  estate->es_output_cid,
 									  0, NULL, &insertIndexes);
 

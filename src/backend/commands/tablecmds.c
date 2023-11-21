@@ -5728,7 +5728,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		newrel = NULL;
 
 	/*
-	 * Prepare a BulkInsertState and options for table_tuple_insert.  The FSM
+	 * Prepare a BulkInsertState and options for table_tuple_insert_extended.  The FSM
 	 * is empty, so don't bother using it.
 	 */
 	if (newrel)
@@ -6041,10 +6041,8 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 			/* Write the tuple out to the new relation */
 			if (newrel)
 			{
-				bool		insertIndexes;
-
 				table_tuple_insert(newrel, insertslot, mycid,
-								   ti_options, bistate, &insertIndexes);
+								   ti_options, bistate);
 			}
 
 			ResetExprContext(econtext);

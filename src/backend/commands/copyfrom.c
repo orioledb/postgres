@@ -322,11 +322,11 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 	save_cur_lineno = cstate->cur_lineno;
 
 	/*
-	 * table_multi_insert may leak memory, so switch to short-lived memory
+	 * table_multi_insert_extended may leak memory, so switch to short-lived memory
 	 * context before calling it.
 	 */
 	oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-	table_multi_insert(resultRelInfo->ri_RelationDesc,
+	table_multi_insert_extended(resultRelInfo->ri_RelationDesc,
 					   slots,
 					   nused,
 					   mycid,
@@ -710,8 +710,8 @@ CopyFrom(CopyFromState cstate)
 
 	/*
 	 * It's generally more efficient to prepare a bunch of tuples for
-	 * insertion, and insert them in one table_multi_insert() call, than call
-	 * table_tuple_insert() separately for every tuple. However, there are a
+	 * insertion, and insert them in one table_multi_insert_extended() call, than call
+	 * table_tuple_insert_extended() separately for every tuple. However, there are a
 	 * number of reasons why we might not be able to do this.  These are
 	 * explained below.
 	 */
@@ -1098,7 +1098,7 @@ CopyFrom(CopyFromState cstate)
 						bool		insertIndexes;
 
 						/* OK, store the tuple and create index entries for it */
-						table_tuple_insert(resultRelInfo->ri_RelationDesc,
+						table_tuple_insert_extended(resultRelInfo->ri_RelationDesc,
 										   myslot, mycid, ti_options, bistate,
 										   &insertIndexes);
 
