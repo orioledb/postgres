@@ -37,39 +37,39 @@
 #define DATUM_SORT		2
 #define CLUSTER_SORT	3
 
-static void removeabbrev_heap(Tuplesortstate *state, SortTuple *stups,
+static void removeabbrev_heap(Tuplesortstate *state, SortTupleCompat *stups,
 							  int count);
-static void removeabbrev_cluster(Tuplesortstate *state, SortTuple *stups,
+static void removeabbrev_cluster(Tuplesortstate *state, SortTupleCompat *stups,
 								 int count);
-static void removeabbrev_index(Tuplesortstate *state, SortTuple *stups,
+static void removeabbrev_index(Tuplesortstate *state, SortTupleCompat *stups,
 							   int count);
-static void removeabbrev_datum(Tuplesortstate *state, SortTuple *stups,
+static void removeabbrev_datum(Tuplesortstate *state, SortTupleCompat *stups,
 							   int count);
-static int	comparetup_heap(const SortTuple *a, const SortTuple *b,
+static int	comparetup_heap(const SortTupleCompat *a, const SortTupleCompat *b,
 							Tuplesortstate *state);
 static void writetup_heap(Tuplesortstate *state, LogicalTape *tape,
-						  SortTuple *stup);
-static void readtup_heap(Tuplesortstate *state, SortTuple *stup,
+						  SortTupleCompat *stup);
+static void readtup_heap(Tuplesortstate *state, SortTupleCompat *stup,
 						 LogicalTape *tape, unsigned int len);
-static int	comparetup_cluster(const SortTuple *a, const SortTuple *b,
+static int	comparetup_cluster(const SortTupleCompat *a, const SortTupleCompat *b,
 							   Tuplesortstate *state);
 static void writetup_cluster(Tuplesortstate *state, LogicalTape *tape,
-							 SortTuple *stup);
-static void readtup_cluster(Tuplesortstate *state, SortTuple *stup,
+							 SortTupleCompat *stup);
+static void readtup_cluster(Tuplesortstate *state, SortTupleCompat *stup,
 							LogicalTape *tape, unsigned int len);
-static int	comparetup_index_btree(const SortTuple *a, const SortTuple *b,
+static int	comparetup_index_btree(const SortTupleCompat *a, const SortTupleCompat *b,
 								   Tuplesortstate *state);
-static int	comparetup_index_hash(const SortTuple *a, const SortTuple *b,
+static int	comparetup_index_hash(const SortTupleCompat *a, const SortTupleCompat *b,
 								  Tuplesortstate *state);
 static void writetup_index(Tuplesortstate *state, LogicalTape *tape,
-						   SortTuple *stup);
-static void readtup_index(Tuplesortstate *state, SortTuple *stup,
+						   SortTupleCompat *stup);
+static void readtup_index(Tuplesortstate *state, SortTupleCompat *stup,
 						  LogicalTape *tape, unsigned int len);
-static int	comparetup_datum(const SortTuple *a, const SortTuple *b,
+static int	comparetup_datum(const SortTupleCompat *a, const SortTupleCompat *b,
 							 Tuplesortstate *state);
 static void writetup_datum(Tuplesortstate *state, LogicalTape *tape,
-						   SortTuple *stup);
-static void readtup_datum(Tuplesortstate *state, SortTuple *stup,
+						   SortTupleCompat *stup);
+static void readtup_datum(Tuplesortstate *state, SortTupleCompat *stup,
 						  LogicalTape *tape, unsigned int len);
 static void freestate_cluster(Tuplesortstate *state);
 
@@ -137,7 +137,7 @@ tuplesort_begin_heap(TupleDesc tupDesc,
 					 bool *nullsFirstFlags,
 					 int workMem, SortCoordinate coordinate, int sortopt)
 {
-	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
+	Tuplesortstate *state = tuplesort_begin_common_compat(workMem, coordinate,
 												   sortopt);
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	MemoryContext oldcontext;
@@ -161,7 +161,7 @@ tuplesort_begin_heap(TupleDesc tupDesc,
 								nkeys,
 								workMem,
 								sortopt & TUPLESORT_RANDOMACCESS,
-								PARALLEL_SORT(coordinate));
+								PARALLEL_SORT_COMPAT(coordinate));
 
 	base->removeabbrev = removeabbrev_heap;
 	base->comparetup = comparetup_heap;
@@ -210,7 +210,7 @@ tuplesort_begin_cluster(TupleDesc tupDesc,
 						int workMem,
 						SortCoordinate coordinate, int sortopt)
 {
-	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
+	Tuplesortstate *state = tuplesort_begin_common_compat(workMem, coordinate,
 												   sortopt);
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	BTScanInsert indexScanKey;
@@ -238,7 +238,7 @@ tuplesort_begin_cluster(TupleDesc tupDesc,
 								base->nKeys,
 								workMem,
 								sortopt & TUPLESORT_RANDOMACCESS,
-								PARALLEL_SORT(coordinate));
+								PARALLEL_SORT_COMPAT(coordinate));
 
 	base->removeabbrev = removeabbrev_cluster;
 	base->comparetup = comparetup_cluster;
@@ -321,7 +321,7 @@ tuplesort_begin_index_btree(Relation heapRel,
 							SortCoordinate coordinate,
 							int sortopt)
 {
-	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
+	Tuplesortstate *state = tuplesort_begin_common_compat(workMem, coordinate,
 												   sortopt);
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	BTScanInsert indexScanKey;
@@ -347,7 +347,7 @@ tuplesort_begin_index_btree(Relation heapRel,
 								base->nKeys,
 								workMem,
 								sortopt & TUPLESORT_RANDOMACCESS,
-								PARALLEL_SORT(coordinate));
+								PARALLEL_SORT_COMPAT(coordinate));
 
 	base->removeabbrev = removeabbrev_index;
 	base->comparetup = comparetup_index_btree;
@@ -406,7 +406,7 @@ tuplesort_begin_index_hash(Relation heapRel,
 						   SortCoordinate coordinate,
 						   int sortopt)
 {
-	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
+	Tuplesortstate *state = tuplesort_begin_common_compat(workMem, coordinate,
 												   sortopt);
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	MemoryContext oldcontext;
@@ -455,7 +455,7 @@ tuplesort_begin_index_gist(Relation heapRel,
 						   SortCoordinate coordinate,
 						   int sortopt)
 {
-	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
+	Tuplesortstate *state = tuplesort_begin_common_compat(workMem, coordinate,
 												   sortopt);
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	MemoryContext oldcontext;
@@ -517,7 +517,7 @@ tuplesort_begin_datum(Oid datumType, Oid sortOperator, Oid sortCollation,
 					  bool nullsFirstFlag, int workMem,
 					  SortCoordinate coordinate, int sortopt)
 {
-	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
+	Tuplesortstate *state = tuplesort_begin_common_compat(workMem, coordinate,
 												   sortopt);
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	TuplesortDatumArg *arg;
@@ -542,7 +542,7 @@ tuplesort_begin_datum(Oid datumType, Oid sortOperator, Oid sortCollation,
 								1,
 								workMem,
 								sortopt & TUPLESORT_RANDOMACCESS,
-								PARALLEL_SORT(coordinate));
+								PARALLEL_SORT_COMPAT(coordinate));
 
 	base->removeabbrev = removeabbrev_datum;
 	base->comparetup = comparetup_datum;
@@ -571,7 +571,7 @@ tuplesort_begin_datum(Oid datumType, Oid sortOperator, Oid sortCollation,
 	 * to compare.  In a tuple sort, we could support that, because we can
 	 * always extract the original datum from the tuple as needed.  Here, we
 	 * can't, because a datum sort only stores a single copy of the datum; the
-	 * "tuple" field of each SortTuple is NULL.
+	 * "tuple" field of each SortTupleCompat is NULL.
 	 */
 	base->sortKeys->abbreviate = !typbyval;
 
@@ -602,7 +602,7 @@ tuplesort_puttupleslot(Tuplesortstate *state, TupleTableSlot *slot)
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	MemoryContext oldcontext = MemoryContextSwitchTo(base->tuplecontext);
 	TupleDesc	tupDesc = (TupleDesc) base->arg;
-	SortTuple	stup;
+	SortTupleCompat	stup;
 	MinimalTuple tuple;
 	HeapTupleData htup;
 
@@ -632,7 +632,7 @@ tuplesort_puttupleslot(Tuplesortstate *state, TupleTableSlot *slot)
 void
 tuplesort_putheaptuple(Tuplesortstate *state, HeapTuple tup)
 {
-	SortTuple	stup;
+	SortTupleCompat	stup;
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	MemoryContext oldcontext = MemoryContextSwitchTo(base->tuplecontext);
 	TuplesortClusterArg *arg = (TuplesortClusterArg *) base->arg;
@@ -670,7 +670,7 @@ tuplesort_putindextuplevalues(Tuplesortstate *state, Relation rel,
 							  ItemPointer self, Datum *values,
 							  bool *isnull)
 {
-	SortTuple	stup;
+	SortTupleCompat	stup;
 	IndexTuple	tuple;
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	TuplesortIndexArg *arg = (TuplesortIndexArg *) base->arg;
@@ -702,7 +702,7 @@ tuplesort_putdatum(Tuplesortstate *state, Datum val, bool isNull)
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	MemoryContext oldcontext = MemoryContextSwitchTo(base->tuplecontext);
 	TuplesortDatumArg *arg = (TuplesortDatumArg *) base->arg;
-	SortTuple	stup;
+	SortTupleCompat	stup;
 
 	/*
 	 * Pass-by-value types or null values are just stored directly in
@@ -766,9 +766,9 @@ tuplesort_gettupleslot(Tuplesortstate *state, bool forward, bool copy,
 {
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	MemoryContext oldcontext = MemoryContextSwitchTo(base->sortcontext);
-	SortTuple	stup;
+	SortTupleCompat	stup;
 
-	if (!tuplesort_gettuple_common(state, forward, &stup))
+	if (!tuplesort_gettuple_common_compat(state, forward, &stup))
 		stup.tuple = NULL;
 
 	MemoryContextSwitchTo(oldcontext);
@@ -803,9 +803,9 @@ tuplesort_getheaptuple(Tuplesortstate *state, bool forward)
 {
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	MemoryContext oldcontext = MemoryContextSwitchTo(base->sortcontext);
-	SortTuple	stup;
+	SortTupleCompat	stup;
 
-	if (!tuplesort_gettuple_common(state, forward, &stup))
+	if (!tuplesort_gettuple_common_compat(state, forward, &stup))
 		stup.tuple = NULL;
 
 	MemoryContextSwitchTo(oldcontext);
@@ -824,9 +824,9 @@ tuplesort_getindextuple(Tuplesortstate *state, bool forward)
 {
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	MemoryContext oldcontext = MemoryContextSwitchTo(base->sortcontext);
-	SortTuple	stup;
+	SortTupleCompat	stup;
 
-	if (!tuplesort_gettuple_common(state, forward, &stup))
+	if (!tuplesort_gettuple_common_compat(state, forward, &stup))
 		stup.tuple = NULL;
 
 	MemoryContextSwitchTo(oldcontext);
@@ -856,9 +856,9 @@ tuplesort_getdatum(Tuplesortstate *state, bool forward,
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	MemoryContext oldcontext = MemoryContextSwitchTo(base->sortcontext);
 	TuplesortDatumArg *arg = (TuplesortDatumArg *) base->arg;
-	SortTuple	stup;
+	SortTupleCompat	stup;
 
-	if (!tuplesort_gettuple_common(state, forward, &stup))
+	if (!tuplesort_gettuple_common_compat(state, forward, &stup))
 	{
 		MemoryContextSwitchTo(oldcontext);
 		return false;
@@ -892,7 +892,7 @@ tuplesort_getdatum(Tuplesortstate *state, bool forward,
  */
 
 static void
-removeabbrev_heap(Tuplesortstate *state, SortTuple *stups, int count)
+removeabbrev_heap(Tuplesortstate *state, SortTupleCompat *stups, int count)
 {
 	int			i;
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
@@ -913,7 +913,7 @@ removeabbrev_heap(Tuplesortstate *state, SortTuple *stups, int count)
 }
 
 static int
-comparetup_heap(const SortTuple *a, const SortTuple *b, Tuplesortstate *state)
+comparetup_heap(const SortTupleCompat *a, const SortTupleCompat *b, Tuplesortstate *state)
 {
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	SortSupport sortKey = base->sortKeys;
@@ -976,7 +976,7 @@ comparetup_heap(const SortTuple *a, const SortTuple *b, Tuplesortstate *state)
 }
 
 static void
-writetup_heap(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
+writetup_heap(Tuplesortstate *state, LogicalTape *tape, SortTupleCompat *stup)
 {
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	MinimalTuple tuple = (MinimalTuple) stup->tuple;
@@ -995,7 +995,7 @@ writetup_heap(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
 }
 
 static void
-readtup_heap(Tuplesortstate *state, SortTuple *stup,
+readtup_heap(Tuplesortstate *state, SortTupleCompat *stup,
 			 LogicalTape *tape, unsigned int len)
 {
 	unsigned int tupbodylen = len - sizeof(int);
@@ -1026,7 +1026,7 @@ readtup_heap(Tuplesortstate *state, SortTuple *stup,
  */
 
 static void
-removeabbrev_cluster(Tuplesortstate *state, SortTuple *stups, int count)
+removeabbrev_cluster(Tuplesortstate *state, SortTupleCompat *stups, int count)
 {
 	int			i;
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
@@ -1045,7 +1045,7 @@ removeabbrev_cluster(Tuplesortstate *state, SortTuple *stups, int count)
 }
 
 static int
-comparetup_cluster(const SortTuple *a, const SortTuple *b,
+comparetup_cluster(const SortTupleCompat *a, const SortTupleCompat *b,
 				   Tuplesortstate *state)
 {
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
@@ -1159,7 +1159,7 @@ comparetup_cluster(const SortTuple *a, const SortTuple *b,
 }
 
 static void
-writetup_cluster(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
+writetup_cluster(Tuplesortstate *state, LogicalTape *tape, SortTupleCompat *stup)
 {
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	HeapTuple	tuple = (HeapTuple) stup->tuple;
@@ -1174,7 +1174,7 @@ writetup_cluster(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
 }
 
 static void
-readtup_cluster(Tuplesortstate *state, SortTuple *stup,
+readtup_cluster(Tuplesortstate *state, SortTupleCompat *stup,
 				LogicalTape *tape, unsigned int tuplen)
 {
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
@@ -1227,7 +1227,7 @@ freestate_cluster(Tuplesortstate *state)
  */
 
 static void
-removeabbrev_index(Tuplesortstate *state, SortTuple *stups, int count)
+removeabbrev_index(Tuplesortstate *state, SortTupleCompat *stups, int count)
 {
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	TuplesortIndexArg *arg = (TuplesortIndexArg *) base->arg;
@@ -1246,7 +1246,7 @@ removeabbrev_index(Tuplesortstate *state, SortTuple *stups, int count)
 }
 
 static int
-comparetup_index_btree(const SortTuple *a, const SortTuple *b,
+comparetup_index_btree(const SortTupleCompat *a, const SortTupleCompat *b,
 					   Tuplesortstate *state)
 {
 	/*
@@ -1382,7 +1382,7 @@ comparetup_index_btree(const SortTuple *a, const SortTuple *b,
 }
 
 static int
-comparetup_index_hash(const SortTuple *a, const SortTuple *b,
+comparetup_index_hash(const SortTupleCompat *a, const SortTupleCompat *b,
 					  Tuplesortstate *state)
 {
 	Bucket		bucket1;
@@ -1439,7 +1439,7 @@ comparetup_index_hash(const SortTuple *a, const SortTuple *b,
 }
 
 static void
-writetup_index(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
+writetup_index(Tuplesortstate *state, LogicalTape *tape, SortTupleCompat *stup)
 {
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	IndexTuple	tuple = (IndexTuple) stup->tuple;
@@ -1453,7 +1453,7 @@ writetup_index(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
 }
 
 static void
-readtup_index(Tuplesortstate *state, SortTuple *stup,
+readtup_index(Tuplesortstate *state, SortTupleCompat *stup,
 			  LogicalTape *tape, unsigned int len)
 {
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
@@ -1477,7 +1477,7 @@ readtup_index(Tuplesortstate *state, SortTuple *stup,
  */
 
 static void
-removeabbrev_datum(Tuplesortstate *state, SortTuple *stups, int count)
+removeabbrev_datum(Tuplesortstate *state, SortTupleCompat *stups, int count)
 {
 	int			i;
 
@@ -1486,7 +1486,7 @@ removeabbrev_datum(Tuplesortstate *state, SortTuple *stups, int count)
 }
 
 static int
-comparetup_datum(const SortTuple *a, const SortTuple *b, Tuplesortstate *state)
+comparetup_datum(const SortTupleCompat *a, const SortTupleCompat *b, Tuplesortstate *state)
 {
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	int			compare;
@@ -1508,7 +1508,7 @@ comparetup_datum(const SortTuple *a, const SortTuple *b, Tuplesortstate *state)
 }
 
 static void
-writetup_datum(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
+writetup_datum(Tuplesortstate *state, LogicalTape *tape, SortTupleCompat *stup)
 {
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	TuplesortDatumArg *arg = (TuplesortDatumArg *) base->arg;
@@ -1542,7 +1542,7 @@ writetup_datum(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
 }
 
 static void
-readtup_datum(Tuplesortstate *state, SortTuple *stup,
+readtup_datum(Tuplesortstate *state, SortTupleCompat *stup,
 			  LogicalTape *tape, unsigned int len)
 {
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
