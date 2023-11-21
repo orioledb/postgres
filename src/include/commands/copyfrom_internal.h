@@ -44,8 +44,8 @@ typedef enum EolType
  */
 typedef enum CopyInsertMethod
 {
-	CIM_SINGLE,					/* use table_tuple_insert or ExecForeignInsert */
-	CIM_MULTI,					/* always use table_multi_insert or
+	CIM_SINGLE,					/* use table_tuple_insert_extended or ExecForeignInsert */
+	CIM_MULTI,					/* always use table_multi_insert_extended or
 								 * ExecForeignBatchInsert */
 	CIM_MULTI_CONDITIONAL		/* use table_multi_insert or
 								 * ExecForeignBatchInsert only if valid */

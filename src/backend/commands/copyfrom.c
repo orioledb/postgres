@@ -414,7 +414,7 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 		 * context before calling it.
 		 */
 		oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-		table_multi_insert(resultRelInfo->ri_RelationDesc,
+		table_multi_insert_extended(resultRelInfo->ri_RelationDesc,
 						   slots,
 						   nused,
 						   mycid,
@@ -831,11 +831,10 @@ CopyFrom(CopyFromState cstate)
 
 	/*
 	 * It's generally more efficient to prepare a bunch of tuples for
-	 * insertion, and insert them in one
-	 * table_multi_insert()/ExecForeignBatchInsert() call, than call
-	 * table_tuple_insert()/ExecForeignInsert() separately for every tuple.
-	 * However, there are a number of reasons why we might not be able to do
-	 * this.  These are explained below.
+	 * insertion, and insert them in one table_multi_insert_extended() call, than call
+	 * table_tuple_insert_extended() separately for every tuple. However, there are a
+	 * number of reasons why we might not be able to do this.  These are
+	 * explained below.
 	 */
 	if (resultRelInfo->ri_TrigDesc != NULL &&
 		(resultRelInfo->ri_TrigDesc->trig_insert_before_row ||
@@ -1242,7 +1241,7 @@ CopyFrom(CopyFromState cstate)
 						bool		insertIndexes;
 
 						/* OK, store the tuple and create index entries for it */
-						table_tuple_insert(resultRelInfo->ri_RelationDesc,
+						table_tuple_insert_extended(resultRelInfo->ri_RelationDesc,
 										   myslot, mycid, ti_options, bistate,
 										   &insertIndexes);
 
