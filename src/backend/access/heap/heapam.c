@@ -2010,7 +2010,7 @@ ReleaseBulkInsertStatePin(BulkInsertState bistate)
  * The new tuple is stamped with current transaction ID and the specified
  * command ID.
  *
- * See table_tuple_insert for comments about most of the input flags, except
+ * See table_tuple_insert_extended for comments about most of the input flags, except
  * that this routine directly takes a tuple rather than a slot.
  *
  * There's corresponding HEAP_INSERT_ options to all the TABLE_INSERT_
