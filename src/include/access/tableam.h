@@ -518,7 +518,7 @@ typedef struct TableAmRoutine
 								 TupleTableSlot *lockedSlot,
 								 TupleTableSlot *tempSlot);
 
-	/* see table_multi_insert() for reference about parameters */
+	/* see table_multi_insert_extended() for reference about parameters */
 	void		(*multi_insert) (Relation rel, TupleTableSlot **slots, int nslots,
 								 CommandId cid, int options, struct BulkInsertStateData *bistate,
 								 bool *insert_indexes);
@@ -1407,12 +1407,22 @@ table_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
  * reflected in the slots contents.
  */
 static inline TupleTableSlot *
-table_tuple_insert(Relation rel, TupleTableSlot *slot, CommandId cid,
+table_tuple_insert_extended(Relation rel, TupleTableSlot *slot, CommandId cid,
 				   int options, struct BulkInsertStateData *bistate,
 				   bool *insert_indexes)
 {
 	return rel->rd_tableam->tuple_insert(rel, slot, cid, options,
 										 bistate, insert_indexes);
+}
+
+static inline TupleTableSlot *
+table_tuple_insert(Relation rel, TupleTableSlot *slot, CommandId cid,
+				   int options, struct BulkInsertStateData *bistate)
+{
+	bool insert_indexes = false;
+
+	return rel->rd_tableam->tuple_insert(rel, slot, cid, options,
+										 bistate, &insert_indexes);
 }
 
 static inline TupleTableSlot *
@@ -1444,19 +1454,29 @@ table_tuple_insert_with_arbiter(ResultRelInfo *resultRelInfo,
  * because e.g. the AM can reduce WAL logging and page locking overhead.
  *
  * Except for taking `nslots` tuples as input, and an array of TupleTableSlots
- * in `slots`, the parameters for table_multi_insert() are the same as for
+ * in `slots`, the parameters for table_multi_insert_extended() are the same as for
  * table_tuple_insert().
  *
  * Note: this leaks memory into the current memory context. You can create a
  * temporary context before calling this, if that's a problem.
  */
 static inline void
-table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
+table_multi_insert_extended(Relation rel, TupleTableSlot **slots, int nslots,
 				   CommandId cid, int options, struct BulkInsertStateData *bistate,
 				   bool *insert_indexes)
 {
 	rel->rd_tableam->multi_insert(rel, slots, nslots,
 								  cid, options, bistate, insert_indexes);
+}
+
+static inline void
+table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
+				   CommandId cid, int options, struct BulkInsertStateData *bistate)
+{
+	bool insert_indexes = false;
+
+	rel->rd_tableam->multi_insert(rel, slots, nslots,
+								  cid, options, bistate, &insert_indexes);
 }
 
 /*
