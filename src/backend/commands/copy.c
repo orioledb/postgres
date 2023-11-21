@@ -2458,7 +2458,7 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 	 * context before calling it.
 	 */
 	oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-	table_multi_insert(resultRelInfo->ri_RelationDesc,
+	table_multi_insert_extended(resultRelInfo->ri_RelationDesc,
 					   slots,
 					   nused,
 					   mycid,
@@ -3246,7 +3246,7 @@ CopyFrom(CopyState cstate)
 						bool		insertIndexes;
 
 						/* OK, store the tuple and create index entries for it */
-						myslot = table_tuple_insert(resultRelInfo->ri_RelationDesc,
+						myslot = table_tuple_insert_extended(resultRelInfo->ri_RelationDesc,
 													myslot, mycid, ti_options, bistate,
 													&insertIndexes);
 

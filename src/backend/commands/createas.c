@@ -59,7 +59,7 @@ typedef struct
 	Relation	rel;			/* relation to write to */
 	ObjectAddress reladdr;		/* address of rel, for ExecCreateTableAs */
 	CommandId	output_cid;		/* cmin to insert in output tuples */
-	int			ti_options;		/* table_tuple_insert performance options */
+	int			ti_options;		/* table_tuple_insert_extended performance options */
 	BulkInsertState bistate;	/* bulk insert state */
 } DR_intorel;
 
@@ -580,7 +580,6 @@ static bool
 intorel_receive(TupleTableSlot *slot, DestReceiver *self)
 {
 	DR_intorel *myState = (DR_intorel *) self;
-	bool		insertIndexes;
 
 	/*
 	 * Note that the input slot might not be of the type of the target
@@ -595,8 +594,7 @@ intorel_receive(TupleTableSlot *slot, DestReceiver *self)
 					   slot,
 					   myState->output_cid,
 					   myState->ti_options,
-					   myState->bistate,
-					   &insertIndexes);
+					   myState->bistate);
 
 	/* We know this is a newly created relation, so there are no indexes */
 
