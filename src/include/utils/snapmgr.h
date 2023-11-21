@@ -41,7 +41,9 @@
   && !RelationIsAccessibleInLogicalDecoding(rel) \
 )
 
+#ifndef SNAPSHOT_H
 typedef void (*snapshot_hook_type) (Snapshot snapshot);
+#endif
 
 #define EarlyPruningEnabled(rel) (old_snapshot_threshold >= 0 && RelationAllowsEarlyPruning(rel))
 
