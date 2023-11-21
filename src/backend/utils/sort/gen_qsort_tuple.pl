@@ -9,7 +9,7 @@
 # when used to sort tuples.  This speedup comes from a number of places.
 # The major effects are (1) inlining simple tuple comparators is much faster
 # than jumping through a function pointer and (2) swap and vecswap operations
-# specialized to the particular data type of interest (in this case, SortTuple)
+# specialized to the particular data type of interest (in this case, SortTupleCompat)
 # are faster than the generic routines.
 #
 #	Modifications from vanilla NetBSD source:
@@ -19,7 +19,7 @@
 #	  in favor of a simple check for presorted input.
 #	  Take care to recurse on the smaller partition, to bound stack usage.
 #
-#     Instead of sorting arbitrary objects, we're always sorting SortTuples.
+#     Instead of sorting arbitrary objects, we're always sorting SortTupleCompats.
 #     Add CHECK_FOR_INTERRUPTS().
 #
 # CAUTION: if you change this file, see also qsort.c and qsort_arg.c
@@ -36,7 +36,7 @@ my $CMPPARAMS;
 emit_qsort_boilerplate();
 
 $SUFFIX      = 'tuple';
-$EXTRAARGS   = ', SortTupleComparator cmp_tuple, Tuplesortstate *state';
+$EXTRAARGS   = ', SortTupleCompatComparator cmp_tuple, Tuplesortstate *state';
 $EXTRAPARAMS = ', cmp_tuple, state';
 $CMPPARAMS   = ', state';
 emit_qsort_implementation();
@@ -111,11 +111,11 @@ sub emit_qsort_boilerplate
  */
 
 static void
-swapfunc(SortTuple *a, SortTuple *b, size_t n)
+swapfunc(SortTupleCompat *a, SortTupleCompat *b, size_t n)
 {
 	do
 	{
-		SortTuple 	t = *a;
+		SortTupleCompat 	t = *a;
 		*a++ = *b;
 		*b++ = t;
 	} while (--n > 0);
@@ -123,7 +123,7 @@ swapfunc(SortTuple *a, SortTuple *b, size_t n)
 
 #define swap(a, b)						\
 	do { 								\
-		SortTuple t = *(a);				\
+		SortTupleCompat t = *(a);				\
 		*(a) = *(b);					\
 		*(b) = t;						\
 	} while (0)
@@ -138,8 +138,8 @@ EOM
 sub emit_qsort_implementation
 {
 	print <<EOM;
-static SortTuple *
-med3_$SUFFIX(SortTuple *a, SortTuple *b, SortTuple *c$EXTRAARGS)
+static SortTupleCompat *
+med3_$SUFFIX(SortTupleCompat *a, SortTupleCompat *b, SortTupleCompat *c$EXTRAARGS)
 {
 	return cmp_$SUFFIX(a, b$CMPPARAMS) < 0 ?
 		(cmp_$SUFFIX(b, c$CMPPARAMS) < 0 ? b :
@@ -149,9 +149,9 @@ med3_$SUFFIX(SortTuple *a, SortTuple *b, SortTuple *c$EXTRAARGS)
 }
 
 static void
-qsort_$SUFFIX(SortTuple *a, size_t n$EXTRAARGS)
+qsort_$SUFFIX(SortTupleCompat *a, size_t n$EXTRAARGS)
 {
-	SortTuple  *pa,
+	SortTupleCompat  *pa,
 			   *pb,
 			   *pc,
 			   *pd,

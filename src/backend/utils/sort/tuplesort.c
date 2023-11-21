@@ -116,7 +116,7 @@
  *
  */
 #define INITIAL_MEMTUPSIZE Max(1024, \
-	ALLOCSET_SEPARATE_THRESHOLD / sizeof(SortTuple) + 1)
+	ALLOCSET_SEPARATE_THRESHOLD / sizeof(SortTupleCompat) + 1)
 
 /* GUC variables */
 #ifdef TRACE_SORT
@@ -209,7 +209,7 @@ struct Tuplesortstate
 	 * and FINALMERGE, the tuples are organized in "heap" order per Algorithm
 	 * H.  In state SORTEDONTAPE, the array is not used.
 	 */
-	SortTuple  *memtuples;		/* array of SortTuple structs */
+	SortTupleCompat  *memtuples;		/* array of SortTupleCompat structs */
 	int			memtupcount;	/* number of tuples currently present */
 	int			memtupsize;		/* allocated length of memtuples array */
 	bool		growmemtuples;	/* memtuples' growth still underway? */
@@ -456,7 +456,7 @@ struct Sharedsort
 
 static void tuplesort_begin_batch(Tuplesortstate *state);
 static void writetuple(Tuplesortstate *state, int tapenum,
-					   SortTuple *stup);
+					   SortTupleCompat *stup);
 static bool consider_abort_common(Tuplesortstate *state);
 static void inittapes(Tuplesortstate *state, bool mergeruns);
 static void inittapestate(Tuplesortstate *state, int maxTapes);
@@ -465,13 +465,13 @@ static void init_slab_allocator(Tuplesortstate *state, int numSlots);
 static void mergeruns(Tuplesortstate *state);
 static void mergeonerun(Tuplesortstate *state);
 static void beginmerge(Tuplesortstate *state);
-static bool mergereadnext(Tuplesortstate *state, int srcTape, SortTuple *stup);
+static bool mergereadnext(Tuplesortstate *state, int srcTape, SortTupleCompat *stup);
 static void dumptuples(Tuplesortstate *state, bool alltuples);
 static void make_bounded_heap(Tuplesortstate *state);
 static void sort_bounded_heap(Tuplesortstate *state);
 static void tuplesort_sort_memtuples(Tuplesortstate *state);
-static void tuplesort_heap_insert(Tuplesortstate *state, SortTuple *tuple);
-static void tuplesort_heap_replace_top(Tuplesortstate *state, SortTuple *tuple);
+static void tuplesort_heap_insert(Tuplesortstate *state, SortTupleCompat *tuple);
+static void tuplesort_heap_replace_top(Tuplesortstate *state, SortTupleCompat *tuple);
 static void tuplesort_heap_delete_top(Tuplesortstate *state);
 static void reversedirection(Tuplesortstate *state);
 static unsigned int getlen(Tuplesortstate *state, int tapenum, bool eofOK);
@@ -480,19 +480,18 @@ static int	worker_get_identifier(Tuplesortstate *state);
 static void worker_freeze_result_tape(Tuplesortstate *state);
 static void worker_nomergeruns(Tuplesortstate *state);
 static void leader_takeover_tapes(Tuplesortstate *state);
-static void free_sort_tuple(Tuplesortstate *state, SortTuple *stup);
+static void free_sort_tuple(Tuplesortstate *state, SortTupleCompat *stup);
 static void tuplesort_free(Tuplesortstate *state);
 static void tuplesort_updatemax(Tuplesortstate *state);
 
 /*
- * Special versions of qsort just for SortTuple objects.  qsort_tuple() sorts
- * any variant of SortTuples, using the appropriate comparetup function.
+ * Special versions of qsort just for SortTupleCompat objects.  qsort_tuple() sorts
+ * any variant of SortTupleCompats, using the appropriate comparetup function.
  * qsort_ssup() is specialized for the case where the comparetup function
  * reduces to ApplySortComparator(), that is single-key MinimalTuple sorts
  * and Datum sorts.
  */
 #include "qsort_tuple.c"
-
 
 /*
  *		tuplesort_begin_xxx
@@ -514,7 +513,7 @@ static void tuplesort_updatemax(Tuplesortstate *state);
  */
 
 Tuplesortstate *
-tuplesort_begin_common(int workMem, SortCoordinate coordinate,
+tuplesort_begin_common_compat(int workMem, SortCoordinate coordinate,
 					   bool randomAccess)
 {
 	Tuplesortstate *state;
@@ -623,7 +622,7 @@ tuplesort_begin_common(int workMem, SortCoordinate coordinate,
  *		tuplesort_begin_batch
  *
  * Setup, or reset, all state need for processing a new set of tuples with this
- * sort state. Called both from tuplesort_begin_common (the first time sorting
+ * sort state. Called both from tuplesort_begin_common_compat (the first time sorting
  * with this sort state) and tuplesort_reset (for subsequent usages).
  */
 static void
@@ -638,7 +637,7 @@ tuplesort_begin_batch(Tuplesortstate *state)
 	 *
 	 * A dedicated child context used exclusively for caller passed tuples
 	 * eases memory management.  Resetting at key points reduces
-	 * fragmentation. Note that the memtuples array of SortTuples is allocated
+	 * fragmentation. Note that the memtuples array of SortTupleCompats is allocated
 	 * in the parent context, not this context, because there is no need to
 	 * free memtuples early.
 	 */
@@ -670,7 +669,7 @@ tuplesort_begin_batch(Tuplesortstate *state)
 	}
 	if (state->memtuples == NULL)
 	{
-		state->memtuples = (SortTuple *) palloc(state->memtupsize * sizeof(SortTuple));
+		state->memtuples = (SortTupleCompat *) palloc(state->memtupsize * sizeof(SortTupleCompat));
 		USEMEM(state, GetMemoryChunkSpace(state->memtuples));
 	}
 
@@ -958,7 +957,7 @@ grow_memtuples(Tuplesortstate *state)
 		 * strategy and instead increase as much as we safely can.
 		 *
 		 * To stay within allowedMem, we can't increase memtupsize by more
-		 * than availMem / sizeof(SortTuple) elements.  In practice, we want
+		 * than availMem / sizeof(SortTupleCompat) elements.  In practice, we want
 		 * to increase it by considerably less, because we need to leave some
 		 * space for the tuples to which the new array slots will refer.  We
 		 * assume the new tuples will be about the same size as the tuples
@@ -1002,9 +1001,9 @@ grow_memtuples(Tuplesortstate *state)
 	 * impossible due to guc.c's MAX_KILOBYTES limitation on work_mem, but
 	 * don't rely on that at this distance.)
 	 */
-	if ((Size) newmemtupsize >= MaxAllocHugeSize / sizeof(SortTuple))
+	if ((Size) newmemtupsize >= MaxAllocHugeSize / sizeof(SortTupleCompat))
 	{
-		newmemtupsize = (int) (MaxAllocHugeSize / sizeof(SortTuple));
+		newmemtupsize = (int) (MaxAllocHugeSize / sizeof(SortTupleCompat));
 		state->growmemtuples = false;	/* can't grow any more */
 	}
 
@@ -1019,15 +1018,15 @@ grow_memtuples(Tuplesortstate *state)
 	 * both old and new arrays as separate chunks.  But we'll check LACKMEM
 	 * explicitly below just in case.)
 	 */
-	if (state->availMem < (int64) ((newmemtupsize - memtupsize) * sizeof(SortTuple)))
+	if (state->availMem < (int64) ((newmemtupsize - memtupsize) * sizeof(SortTupleCompat)))
 		goto noalloc;
 
 	/* OK, do it */
 	FREEMEM(state, GetMemoryChunkSpace(state->memtuples));
 	state->memtupsize = newmemtupsize;
-	state->memtuples = (SortTuple *)
+	state->memtuples = (SortTupleCompat *)
 		repalloc_huge(state->memtuples,
-					  state->memtupsize * sizeof(SortTuple));
+					  state->memtupsize * sizeof(SortTupleCompat));
 	USEMEM(state, GetMemoryChunkSpace(state->memtuples));
 	if (LACKMEM(state))
 		elog(ERROR, "unexpected out-of-memory situation in tuplesort");
@@ -1043,7 +1042,7 @@ noalloc:
  * Shared code for tuple and datum cases.
  */
 void
-tuplesort_puttuple_common(Tuplesortstate *state, SortTuple *tuple, bool useAbbrev)
+tuplesort_puttuple_common(Tuplesortstate *state, SortTupleCompat *tuple, bool useAbbrev)
 {
 	MemoryContext oldcontext = MemoryContextSwitchTo(state->base.sortcontext);
 
@@ -1196,11 +1195,11 @@ tuplesort_puttuple_common(Tuplesortstate *state, SortTuple *tuple, bool useAbbre
 /*
  * Write a stored tuple onto tape.  Unless the slab allocator is
  * used, after writing the tuple, pfree() the out-of-line data (not the
- * SortTuple struct!), and increase state->availMem by the amount of
+ * SortTupleCompat struct!), and increase state->availMem by the amount of
  * memory space thereby released.
  */
 static void
-writetuple(Tuplesortstate *state, int tapenum, SortTuple *stup)
+writetuple(Tuplesortstate *state, int tapenum, SortTupleCompat *stup)
 {
 	state->base.writetup(state, tapenum, stup);
 
@@ -1367,8 +1366,8 @@ tuplesort_performsort(Tuplesortstate *state)
  * recycled by any future fetch.
  */
 bool
-tuplesort_gettuple_common(Tuplesortstate *state, bool forward,
-						  SortTuple *stup)
+tuplesort_gettuple_common_compat(Tuplesortstate *state, bool forward,
+						  SortTupleCompat *stup)
 {
 	unsigned int tuplen;
 	size_t		nmoved;
@@ -1561,7 +1560,7 @@ tuplesort_gettuple_common(Tuplesortstate *state, bool forward,
 			if (state->memtupcount > 0)
 			{
 				int			srcTape = state->memtuples[0].srctape;
-				SortTuple	newtup;
+				SortTupleCompat	newtup;
 
 				*stup = state->memtuples[0];
 
@@ -1653,9 +1652,9 @@ tuplesort_skiptuples(Tuplesortstate *state, int64 ntuples, bool forward)
 			oldcontext = MemoryContextSwitchTo(state->base.sortcontext);
 			while (ntuples-- > 0)
 			{
-				SortTuple	stup;
+				SortTupleCompat	stup;
 
-				if (!tuplesort_gettuple_common(state, forward, &stup))
+				if (!tuplesort_gettuple_common_compat(state, forward, &stup))
 				{
 					MemoryContextSwitchTo(oldcontext);
 					return false;
@@ -1969,8 +1968,8 @@ mergeruns(Tuplesortstate *state)
 	 * from each input tape.
 	 */
 	state->memtupsize = numInputTapes;
-	state->memtuples = (SortTuple *) MemoryContextAlloc(state->base.maincontext,
-														numInputTapes * sizeof(SortTuple));
+	state->memtuples = (SortTupleCompat *) MemoryContextAlloc(state->base.maincontext,
+														numInputTapes * sizeof(SortTupleCompat));
 	USEMEM(state, GetMemoryChunkSpace(state->memtuples));
 
 	/*
@@ -2132,7 +2131,7 @@ mergeonerun(Tuplesortstate *state)
 	 */
 	while (state->memtupcount > 0)
 	{
-		SortTuple	stup;
+		SortTupleCompat	stup;
 
 		/* write the tuple to destTape */
 		srcTape = state->memtuples[0].srctape;
@@ -2209,7 +2208,7 @@ beginmerge(Tuplesortstate *state)
 	/* Load the merge heap with the first tuple from each input tape */
 	for (srcTape = 0; srcTape < state->maxTapes; srcTape++)
 	{
-		SortTuple	tup;
+		SortTupleCompat	tup;
 
 		if (mergereadnext(state, srcTape, &tup))
 		{
@@ -2225,7 +2224,7 @@ beginmerge(Tuplesortstate *state)
  * Returns false on EOF.
  */
 static bool
-mergereadnext(Tuplesortstate *state, int srcTape, SortTuple *stup)
+mergereadnext(Tuplesortstate *state, int srcTape, SortTupleCompat *stup)
 {
 	unsigned int tuplen;
 
@@ -2533,7 +2532,7 @@ tuplesort_space_type_name(TuplesortSpaceType t)
  */
 
 /*
- * Convert the existing unordered array of SortTuples to a bounded heap,
+ * Convert the existing unordered array of SortTupleCompats to a bounded heap,
  * discarding all but the smallest "state->bound" tuples.
  *
  * When working with a bounded heap, we want to keep the largest entry
@@ -2562,7 +2561,7 @@ make_bounded_heap(Tuplesortstate *state)
 		{
 			/* Insert next tuple into heap */
 			/* Must copy source tuple to avoid possible overwrite */
-			SortTuple	stup = state->memtuples[i];
+			SortTupleCompat	stup = state->memtuples[i];
 
 			tuplesort_heap_insert(state, &stup);
 		}
@@ -2607,7 +2606,7 @@ sort_bounded_heap(Tuplesortstate *state)
 	 */
 	while (state->memtupcount > 1)
 	{
-		SortTuple	stup = state->memtuples[0];
+		SortTupleCompat	stup = state->memtuples[0];
 
 		/* this sifts-up the next-largest entry and decreases memtupcount */
 		tuplesort_heap_delete_top(state);
@@ -2659,9 +2658,9 @@ tuplesort_sort_memtuples(Tuplesortstate *state)
  * is, it might get overwritten before being moved into the heap!
  */
 static void
-tuplesort_heap_insert(Tuplesortstate *state, SortTuple *tuple)
+tuplesort_heap_insert(Tuplesortstate *state, SortTupleCompat *tuple)
 {
-	SortTuple  *memtuples;
+	SortTupleCompat  *memtuples;
 	int			j;
 
 	memtuples = state->memtuples;
@@ -2696,8 +2695,8 @@ tuplesort_heap_insert(Tuplesortstate *state, SortTuple *tuple)
 static void
 tuplesort_heap_delete_top(Tuplesortstate *state)
 {
-	SortTuple  *memtuples = state->memtuples;
-	SortTuple  *tuple;
+	SortTupleCompat  *memtuples = state->memtuples;
+	SortTupleCompat  *tuple;
 
 	if (--state->memtupcount <= 0)
 		return;
@@ -2718,9 +2717,9 @@ tuplesort_heap_delete_top(Tuplesortstate *state)
  * Heapsort, steps H3-H8).
  */
 static void
-tuplesort_heap_replace_top(Tuplesortstate *state, SortTuple *tuple)
+tuplesort_heap_replace_top(Tuplesortstate *state, SortTupleCompat *tuple)
 {
-	SortTuple  *memtuples = state->memtuples;
+	SortTupleCompat  *memtuples = state->memtuples;
 	unsigned int i,
 				n;
 
@@ -3060,7 +3059,7 @@ leader_takeover_tapes(Tuplesortstate *state)
  * Convenience routine to free a tuple previously loaded into sort memory
  */
 static void
-free_sort_tuple(Tuplesortstate *state, SortTuple *stup)
+free_sort_tuple(Tuplesortstate *state, SortTupleCompat *stup)
 {
 	if (stup->tuple)
 	{

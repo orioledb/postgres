@@ -96,11 +96,11 @@ typedef struct TuplesortInstrumentation
 } TuplesortInstrumentation;
 
 /*
- * The objects we actually sort are SortTuple structs.  These contain
+ * The objects we actually sort are SortTupleCompat structs.  These contain
  * a pointer to the tuple proper (might be a MinimalTuple or IndexTuple),
  * which is a separate palloc chunk --- we assume it is just one chunk and
  * can be freed by a simple pfree() (except during merge, when we use a
- * simple slab allocator).  SortTuples also contain the tuple's first key
+ * simple slab allocator).  SortTupleCompats also contain the tuple's first key
  * column in Datum/nullflag format, and a source/input tape number that
  * tracks which tape each heap element/slot belongs to during merging.
  *
@@ -130,9 +130,9 @@ typedef struct
 	Datum		datum1;			/* value of first key column */
 	bool		isnull1;		/* is first key column NULL? */
 	int			srctape;		/* source tape number */
-} SortTuple;
+} SortTupleCompat;
 
-typedef int (*SortTupleComparator) (const SortTuple *a, const SortTuple *b,
+typedef int (*SortTupleCompatComparator) (const SortTupleCompat *a, const SortTupleCompat *b,
 									Tuplesortstate *state);
 
 /*
@@ -151,13 +151,13 @@ typedef struct
 	 * <0, 0, >0 according as a<b, a=b, a>b.  The API must match
 	 * qsort_arg_comparator.
 	 */
-	SortTupleComparator comparetup;
+	SortTupleCompatComparator comparetup;
 
 	/*
-	 * Alter datum1 representation in the SortTuple's array back from the
+	 * Alter datum1 representation in the SortTupleCompat's array back from the
 	 * abbreviated key to the first column value.
 	 */
-	void		(*removeabbrev) (Tuplesortstate *state, SortTuple *stups,
+	void		(*removeabbrev) (Tuplesortstate *state, SortTupleCompat *stups,
 								 int count);
 
 	/*
@@ -165,14 +165,14 @@ typedef struct
 	 * tuple on tape need not be the same as it is in memory.
 	 */
 	void		(*writetup) (Tuplesortstate *state, int tapenum,
-							 SortTuple *stup);
+							 SortTupleCompat *stup);
 
 	/*
 	 * Function to read a stored tuple from tape back into memory. 'len' is
 	 * the already-read length of the stored tuple.  The tuple is allocated
 	 * from the slab memory arena, or is palloc'd, see readtup_alloc().
 	 */
-	void		(*readtup) (Tuplesortstate *state, SortTuple *stup,
+	void		(*readtup) (Tuplesortstate *state, SortTupleCompat *stup,
 							int tapenum, unsigned int len);
 
 	/*
@@ -212,13 +212,13 @@ typedef struct
 
 	bool		randomAccess;	/* did caller request random access? */
 
-	bool		tuples;			/* Can SortTuple.tuple ever be set? */
+	bool		tuples;			/* Can SortTupleCompat.tuple ever be set? */
 
 	void	   *arg;			/* Specific information for the sort variant */
 } TuplesortPublic;
 
 /* Sort parallel code from state for sort__start probes */
-#define PARALLEL_SORT(coordinate)	(coordinate == NULL || \
+#define PARALLEL_SORT_COMPAT(coordinate)	(coordinate == NULL || \
 									 (coordinate)->sharedsort == NULL ? 0 : \
 									 (coordinate)->isWorker ? 1 : 2)
 
@@ -334,16 +334,16 @@ typedef struct
  */
 
 
-extern Tuplesortstate *tuplesort_begin_common(int workMem,
+extern Tuplesortstate *tuplesort_begin_common_compat(int workMem,
 											  SortCoordinate coordinate,
 											  bool randomAccess);
 extern void tuplesort_set_bound(Tuplesortstate *state, int64 bound);
 extern bool tuplesort_used_bound(Tuplesortstate *state);
 extern void tuplesort_puttuple_common(Tuplesortstate *state,
-									  SortTuple *tuple, bool useAbbrev);
+									  SortTupleCompat *tuple, bool useAbbrev);
 extern void tuplesort_performsort(Tuplesortstate *state);
-extern bool tuplesort_gettuple_common(Tuplesortstate *state, bool forward,
-									  SortTuple *stup);
+extern bool tuplesort_gettuple_common_compat(Tuplesortstate *state, bool forward,
+									  SortTupleCompat *stup);
 extern bool tuplesort_skiptuples(Tuplesortstate *state, int64 ntuples,
 								 bool forward);
 extern void tuplesort_end(Tuplesortstate *state);
