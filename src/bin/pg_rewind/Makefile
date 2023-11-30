@@ -17,10 +17,12 @@ include $(top_builddir)/src/Makefile.global
 
 override CPPFLAGS := -I$(libpq_srcdir) -DFRONTEND $(CPPFLAGS)
 LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
+LDFLAGS_EX += -Wl,--export-dynamic
 
 OBJS = \
 	$(WIN32RES) \
 	datapagemap.o \
+	extension.o \
 	file_ops.o \
 	filemap.o \
 	libpq_source.o \
@@ -42,12 +44,14 @@ xlogreader.c: % : $(top_srcdir)/src/backend/access/transam/%
 
 install: all installdirs
 	$(INSTALL_PROGRAM) pg_rewind$(X) '$(DESTDIR)$(bindir)/pg_rewind$(X)'
+	$(INSTALL_DATA) $(srcdir)/pg_rewind_ext.h '$(DESTDIR)$(includedir)'
 
 installdirs:
-	$(MKDIR_P) '$(DESTDIR)$(bindir)'
+	$(MKDIR_P) '$(DESTDIR)$(bindir)' '$(DESTDIR)$(includedir)'
 
 uninstall:
 	rm -f '$(DESTDIR)$(bindir)/pg_rewind$(X)'
+	rm -f '$(DESTDIR)$(includedir)/pg_rewind_ext.h'
 
 clean distclean maintainer-clean:
 	rm -f pg_rewind$(X) $(OBJS) xlogreader.c
