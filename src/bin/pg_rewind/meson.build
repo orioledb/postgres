@@ -2,6 +2,7 @@
 
 pg_rewind_sources = files(
   'datapagemap.c',
+	'extension.c',
   'file_ops.c',
   'filemap.c',
   'libpq_source.c',
@@ -23,6 +24,7 @@ pg_rewind = executable('pg_rewind',
   pg_rewind_sources,
   dependencies: [frontend_code, libpq, lz4, zstd],
   c_args: ['-DFRONTEND'], # needed for xlogreader et al
+  export_dynamic: true,
   kwargs: default_bin_args,
 )
 bin_targets += pg_rewind
@@ -48,3 +50,7 @@ tests += {
 }
 
 subdir('po', if_found: libintl)
+
+install_headers(
+  'pg_rewind_ext.h'
+)
