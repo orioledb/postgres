@@ -21,6 +21,7 @@ LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
 OBJS = \
 	$(WIN32RES) \
 	datapagemap.o \
+	extension.o \
 	file_ops.o \
 	filemap.o \
 	libpq_source.o \
@@ -35,19 +36,21 @@ EXTRA_CLEAN = xlogreader.c
 all: pg_rewind
 
 pg_rewind: $(OBJS) | submake-libpq submake-libpgport
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LDFLAGS_EX_BE) $(LIBS) -o $@$(X)
 
 xlogreader.c: % : $(top_srcdir)/src/backend/access/transam/%
 	rm -f $@ && $(LN_S) $< .
 
 install: all installdirs
 	$(INSTALL_PROGRAM) pg_rewind$(X) '$(DESTDIR)$(bindir)/pg_rewind$(X)'
+	$(INSTALL_DATA) $(srcdir)/pg_rewind_ext.h '$(DESTDIR)$(includedir)'
 
 installdirs:
-	$(MKDIR_P) '$(DESTDIR)$(bindir)'
+	$(MKDIR_P) '$(DESTDIR)$(bindir)' '$(DESTDIR)$(includedir)'
 
 uninstall:
 	rm -f '$(DESTDIR)$(bindir)/pg_rewind$(X)'
+	rm -f '$(DESTDIR)$(includedir)/pg_rewind_ext.h'
 
 clean distclean:
 	rm -f pg_rewind$(X) $(OBJS) xlogreader.c
