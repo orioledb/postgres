@@ -38,7 +38,7 @@ static const char *RmgrNames[RM_MAX_ID + 1] = {
 #define RmgrName(rmid) (((rmid) <= RM_MAX_BUILTIN_ID) ? \
 						RmgrNames[rmid] : "custom")
 
-static void extractPageInfo(XLogReaderState *record);
+static void extractPageInfo(XLogReaderState *record, void *arg);
 
 static int	xlogreadfd = -1;
 static XLogSegNo xlogreadsegno = 0;
@@ -54,17 +54,11 @@ static int	SimpleXLogPageRead(XLogReaderState *xlogreader,
 							   XLogRecPtr targetPagePtr,
 							   int reqLen, XLogRecPtr targetRecPtr, char *readBuf);
 
-/*
- * Read WAL from the datadir/pg_wal, starting from 'startpoint' on timeline
- * index 'tliIndex' in target timeline history, until 'endpoint'. Make note of
- * the data blocks touched by the WAL records, and return them in a page map.
- *
- * 'endpoint' is the end of the last record to read. The record starting at
- * 'endpoint' is the first one that is not read.
- */
 void
-extractPageMap(const char *datadir, XLogRecPtr startpoint, int tliIndex,
-			   XLogRecPtr endpoint, const char *restoreCommand)
+SimpleXLogRead(const char *datadir, XLogRecPtr startpoint, int tliIndex,
+			   XLogRecPtr endpoint, const char *restoreCommand,
+			   void (*page_callback) (XLogReaderState *, void *arg),
+			   void *arg)
 {
 	XLogRecord *record;
 	XLogReaderState *xlogreader;
@@ -97,7 +91,7 @@ extractPageMap(const char *datadir, XLogRecPtr startpoint, int tliIndex,
 						 LSN_FORMAT_ARGS(errptr));
 		}
 
-		extractPageInfo(xlogreader);
+		page_callback(xlogreader, arg);
 	} while (xlogreader->EndRecPtr < endpoint);
 
 	/*
@@ -114,6 +108,22 @@ extractPageMap(const char *datadir, XLogRecPtr startpoint, int tliIndex,
 		close(xlogreadfd);
 		xlogreadfd = -1;
 	}
+}
+
+/*
+ * Read WAL from the datadir/pg_wal, starting from 'startpoint' on timeline
+ * index 'tliIndex' in target timeline history, until 'endpoint'. Make note of
+ * the data blocks touched by the WAL records, and return them in a page map.
+ *
+ * 'endpoint' is the end of the last record to read. The record starting at
+ * 'endpoint' is the first one that is not read.
+ */
+void
+extractPageMap(const char *datadir, XLogRecPtr startpoint, int tliIndex,
+			   XLogRecPtr endpoint, const char *restoreCommand)
+{
+	SimpleXLogRead(datadir, startpoint, tliIndex, endpoint, restoreCommand,
+				   extractPageInfo, NULL);
 }
 
 /*
@@ -365,7 +375,7 @@ SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
  * Extract information on which blocks the current record modifies.
  */
 static void
-extractPageInfo(XLogReaderState *record)
+extractPageInfo(XLogReaderState *record, void *arg)
 {
 	int			block_id;
 	RmgrId		rmid = XLogRecGetRmid(record);
