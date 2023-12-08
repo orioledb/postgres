@@ -15,7 +15,9 @@
 #include "common/logging.h"
 #include "common/file_utils.h"
 #include "datapagemap.h"
+#include "fe_utils/simple_list.h"
 #include "libpq-fe.h"
+#include "pg_rewind_ext.h"
 #include "storage/block.h"
 #include "storage/relfilelocator.h"
 
@@ -54,5 +56,13 @@ extern void progress_report(bool finished);
 extern TimeLineHistoryEntry *rewind_parseTimeLineHistory(char *buffer,
 														 TimeLineID targetTLI,
 														 int *nentries);
+
+/* in extension.c */
+extern void process_extensions(SimpleStringList *extensions,
+							   const char *datadir_target, char *datadir_source,
+							   char *connstr_source, XLogRecPtr startpoint,
+							   int tliIndex, XLogRecPtr endpoint,
+							   const char *restoreCommand, const char *argv0,
+							   bool debug);
 
 #endif							/* PG_REWIND_H */
