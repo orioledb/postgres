@@ -302,6 +302,11 @@ PostgreSQL documentation
        </para>
        <para>
         This option has no effect when <option>--no-sync</option> is used.
+      <term><option>-e <replaceable class="parameter">path</replaceable></option></term>
+      <term><option>--extension=<replaceable class="parameter">path</replaceable></option></term>
+      <listitem>
+       <para>
+        Load shared library that performs custom rewind for postgres extension. The <replaceable class="parameter">path</replaceable> may be full or relative to PKGLIBDIR. File extension is optional. Multiple extensions can be selected by multiple <option>-e</option> switches.
        </para>
       </listitem>
      </varlistentry>
