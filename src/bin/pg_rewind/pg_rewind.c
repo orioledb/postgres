@@ -77,6 +77,8 @@ bool		do_sync = true;
 static bool restore_wal = false;
 DataDirSyncMethod sync_method = DATA_DIR_SYNC_METHOD_FSYNC;
 
+static SimpleStringList extensions = {NULL, NULL};
+
 /* Target history */
 TimeLineHistoryEntry *targetHistory;
 int			targetNentries;
@@ -110,6 +112,7 @@ usage(const char *progname)
 	printf(_("      --debug                    write a lot of debug messages\n"));
 	printf(_("      --no-ensure-shutdown       do not automatically fix unclean shutdown\n"));
 	printf(_("      --sync-method=METHOD       set method for syncing files to disk\n"));
+	printf(_("  -e, --extension=PATH           path to library performing rewind for extension\n"));
 	printf(_("  -V, --version                  output version information, then exit\n"));
 	printf(_("  -?, --help                     show this help, then exit\n"));
 	printf(_("\nReport bugs to <%s>.\n"), PACKAGE_BUGREPORT);
@@ -135,6 +138,7 @@ main(int argc, char **argv)
 		{"progress", no_argument, NULL, 'P'},
 		{"debug", no_argument, NULL, 3},
 		{"sync-method", required_argument, NULL, 6},
+		{"extension", required_argument, NULL, 'e'},
 		{NULL, 0, NULL, 0}
 	};
 	int			option_index;
@@ -173,7 +177,7 @@ main(int argc, char **argv)
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "cD:nNPR", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "cD:nNPRe", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -225,6 +229,9 @@ main(int argc, char **argv)
 			case 6:
 				if (!parse_sync_method(optarg, &sync_method))
 					exit(1);
+
+			case 'e':			/* -e or --extension */
+				simple_string_list_append(&extensions, optarg);
 				break;
 
 			default:
@@ -462,6 +469,12 @@ main(int argc, char **argv)
 
 	/* Initialize the hash table to track the status of each file */
 	filehash_init();
+
+	if (extensions.head != NULL)
+		process_extensions(&extensions, datadir_target, datadir_source,
+						   connstr_source, chkptrec, lastcommontliIndex,
+						   target_wal_endrec, restore_command, argv[0],
+						   debug);
 
 	/*
 	 * Collect information about all files in the both data directories.
