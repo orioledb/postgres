@@ -53,6 +53,7 @@
 #define FILEHASH_INITIAL_SIZE	1000
 
 static filehash_hash *filehash;
+static SimpleStringList extensions_exclude = {NULL, NULL};
 
 static bool isRelDataFile(const char *path);
 static char *datasegpath(RelFileLocator rlocator, ForkNumber forknum,
@@ -260,6 +261,8 @@ process_target_file(const char *path, file_type_t type, size_t size,
 	 * from the target data folder all paths which have been filtered out from
 	 * the source data folder when processing the source files.
 	 */
+	if (check_file_excluded(path, false))
+		return;
 
 	/*
 	 * Like in process_source_file, pretend that pg_wal is always a directory.
@@ -401,6 +404,31 @@ check_file_excluded(const char *path, bool is_source)
 				pg_log_debug("entry \"%s\" excluded from target file list",
 							 path);
 			return true;
+		}
+	}
+
+	/*
+	 * Exclude extensions directories
+	 */
+	if (extensions_exclude.head != NULL)
+	{
+		SimpleStringListCell *cell;
+
+		for (cell = extensions_exclude.head; cell; cell = cell->next)
+		{
+			char	   *exclude_dir = cell->val;
+
+			snprintf(localpath, sizeof(localpath), "%s/", exclude_dir);
+			if (strstr(path, localpath) == path)
+			{
+				if (is_source)
+					pg_log_debug("entry \"%s\" excluded from source file list",
+								 path);
+				else
+					pg_log_debug("entry \"%s\" excluded from target file list",
+								 path);
+				return true;
+			}
 		}
 	}
 
@@ -819,4 +847,16 @@ decide_file_actions(void)
 		  final_filemap_cmp);
 
 	return filemap;
+}
+
+void
+extensions_exclude_add(char **exclude_dirs)
+{
+	int			i;
+
+	for (i = 0; exclude_dirs[i] != NULL; i++)
+	{
+		simple_string_list_append(&extensions_exclude,
+								  pstrdup(exclude_dirs[i]));
+	}
 }
