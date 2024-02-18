@@ -1763,7 +1763,6 @@ AC_CHECK_FUNCS(m4_normalize([
 	mbstowcs_l
 	posix_fallocate
 	ppoll
-	pthread_is_threaded_np
 	setproctitle
 	setproctitle_fast
 	strsignal
