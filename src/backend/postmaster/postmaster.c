@@ -85,10 +85,6 @@
 #include <systemd/sd-daemon.h>
 #endif
 
-#ifdef HAVE_PTHREAD_IS_THREADED_NP
-#include <pthread.h>
-#endif
-
 #include "access/transam.h"
 #include "access/xlog.h"
 #include "access/xlogrecovery.h"
@@ -1424,26 +1420,6 @@ PostmasterMain(int argc, char *argv[])
 		 */
 	}
 
-#ifdef HAVE_PTHREAD_IS_THREADED_NP
-
-	/*
-	 * On macOS, libintl replaces setlocale() with a version that calls
-	 * CFLocaleCopyCurrent() when its second argument is "" and every relevant
-	 * environment variable is unset or empty.  CFLocaleCopyCurrent() makes
-	 * the process multithreaded.  The postmaster calls sigprocmask() and
-	 * calls fork() without an immediate exec(), both of which have undefined
-	 * behavior in a multithreaded program.  A multithreaded postmaster is the
-	 * normal case on Windows, which offers neither fork() nor sigprocmask().
-	 * Currently, macOS is the only platform having pthread_is_threaded_np(),
-	 * so we need not worry whether this HINT is appropriate elsewhere.
-	 */
-	if (pthread_is_threaded_np() != 0)
-		ereport(FATAL,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("postmaster became multithreaded during startup"),
-				 errhint("Set the LC_ALL environment variable to a valid locale.")));
-#endif
-
 	/*
 	 * Remember postmaster startup time
 	 */
@@ -1860,15 +1836,6 @@ ServerLoop(void)
 		/* Get other worker processes running, if needed */
 		if (StartWorkerNeeded || HaveCrashedWorker)
 			maybe_start_bgworkers();
-
-#ifdef HAVE_PTHREAD_IS_THREADED_NP
-
-		/*
-		 * With assertions enabled, check regularly for appearance of
-		 * additional threads.  All builds check at start and exit.
-		 */
-		Assert(pthread_is_threaded_np() == 0);
-#endif
 
 		/*
 		 * Lastly, check to see if it's time to do some things that we don't
@@ -5063,22 +5030,6 @@ SubPostmasterMain(int argc, char *argv[])
 static void
 ExitPostmaster(int status)
 {
-#ifdef HAVE_PTHREAD_IS_THREADED_NP
-
-	/*
-	 * There is no known cause for a postmaster to become multithreaded after
-	 * startup.  However, we might reach here via an error exit before
-	 * reaching the test in PostmasterMain, so provide the same hint as there.
-	 * This message uses LOG level, because an unclean shutdown at this point
-	 * would usually not look much different from a clean shutdown.
-	 */
-	if (pthread_is_threaded_np() != 0)
-		ereport(LOG,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("postmaster became multithreaded"),
-				 errhint("Set the LC_ALL environment variable to a valid locale.")));
-#endif
-
 	/* should cleanup shared memory and kill all backends */
 
 	/*
