@@ -684,11 +684,11 @@ pgarch_readyXlog(char *xlog)
 	{
 		for (int i = 0; i < arch_files->arch_files_size; i++)
 		{
-			char	   *xlog = arch_files->arch_files[i];
+			char	   *xlog1 = arch_files->arch_files[i];
 			char		pathname[MAXPGPATH];
 
-			snprintf(pathname, MAXPGPATH, XLOGDIR "/%s", xlog);
-			ArchiveContext.archive_preload_file_cb(xlog, pathname);
+			snprintf(pathname, MAXPGPATH, XLOGDIR "/%s", xlog1);
+			ArchiveContext.archive_preload_file_cb(xlog1, pathname);
 		}
 	}
 
