@@ -2303,7 +2303,7 @@ preprocess_rowmarks(PlannerInfo *root)
 	{
 		RangeTblEntry *rte = lfirst_node(RangeTblEntry, l);
 		PlanRowMark *newrc;
-		RowRefType refType;
+		RowRefType refType = ROW_REF_TID;
 
 		i++;
 		if (!bms_is_member(i, rels))
