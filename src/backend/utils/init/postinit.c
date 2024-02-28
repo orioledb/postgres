@@ -81,7 +81,7 @@ static void ClientCheckTimeoutHandler(void);
 static bool ThereIsAtLeastOneRole(void);
 static void process_startup_options(Port *port, bool am_superuser);
 static void process_settings(Oid databaseid, Oid roleid);
-
+base_init_startup_hook_type base_init_startup_hook = NULL;
 
 /*** InitPostgres support ***/
 
@@ -640,6 +640,9 @@ BaseInit(void)
 	 * files.
 	 */
 	InitFileAccess();
+
+	if (base_init_startup_hook)
+		base_init_startup_hook();
 
 	/*
 	 * Initialize statistics reporting. This needs to happen early to ensure
