@@ -372,7 +372,7 @@ ExecCheckTIDVisible(EState *estate,
 	if (!IsolationUsesXactSnapshot())
 		return;
 
-	if (!table_tuple_fetch_row_version(rel, PointerGetDatum(tid),
+	if (!table_tuple_fetch_row_version(rel, tid,
 									   SnapshotAny, tempSlot))
 		elog(ERROR, "failed to fetch conflicting tuple for ON CONFLICT");
 	ExecCheckTupleVisible(estate, rel, tempSlot);
@@ -419,7 +419,7 @@ heapam_tuple_insert_with_arbiter(ResultRelInfo *resultRelInfo,
 				* previous conclusion that the tuple is conclusively committed is not
 				* true anymore.
 				*/
-				test = table_tuple_lock(rel, PointerGetDatum(&conflictTid),
+				test = table_tuple_lock(rel, &conflictTid,
 										estate->es_snapshot,
 										lockedSlot, estate->es_output_cid,
 										lockmode, LockWaitBlock, 0,
