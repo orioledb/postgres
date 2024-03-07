@@ -209,7 +209,7 @@ retry:
 
 		PushActiveSnapshot(GetLatestSnapshot());
 
-		res = table_tuple_lock(rel, PointerGetDatum(&(outslot->tts_tid)),
+		res = table_tuple_lock(rel, &(outslot->tts_tid),
 							   GetLatestSnapshot(),
 							   outslot,
 							   GetCurrentCommandId(false),
@@ -394,7 +394,7 @@ retry:
 
 		PushActiveSnapshot(GetLatestSnapshot());
 
-		res = table_tuple_lock(rel, PointerGetDatum(&(outslot->tts_tid)),
+		res = table_tuple_lock(rel, &(outslot->tts_tid),
 							   GetLatestSnapshot(),
 							   outslot,
 							   GetCurrentCommandId(false),
