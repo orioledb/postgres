@@ -1296,7 +1296,7 @@ extern bool table_index_fetch_tuple_check(Relation rel,
  */
 static inline bool
 table_tuple_fetch_row_version(Relation rel,
-							  Datum tupleid,
+							  ItemPointer tid,
 							  Snapshot snapshot,
 							  TupleTableSlot *slot)
 {
@@ -1308,7 +1308,7 @@ table_tuple_fetch_row_version(Relation rel,
 	if (unlikely(TransactionIdIsValid(CheckXidAlive) && !bsysscan))
 		elog(ERROR, "unexpected table_tuple_fetch_row_version call during logical decoding");
 
-	return rel->rd_tableam->tuple_fetch_row_version(rel, tupleid, snapshot, slot);
+	return rel->rd_tableam->tuple_fetch_row_version(rel, PointerGetDatum(tid), snapshot, slot);
 }
 
 /*
@@ -1620,12 +1620,12 @@ table_tuple_update(Relation rel, Datum tupleid, TupleTableSlot *slot,
  * comments for struct TM_FailureData for additional info.
  */
 static inline TM_Result
-table_tuple_lock(Relation rel, Datum tupleid, Snapshot snapshot,
+table_tuple_lock(Relation rel, ItemPointer tid, Snapshot snapshot,
 				 TupleTableSlot *slot, CommandId cid, LockTupleMode mode,
 				 LockWaitPolicy wait_policy, uint8 flags,
 				 TM_FailureData *tmfd)
 {
-	return rel->rd_tableam->tuple_lock(rel, tupleid, snapshot, slot,
+	return rel->rd_tableam->tuple_lock(rel, PointerGetDatum(tid), snapshot, slot,
 									   cid, mode, wait_policy,
 									   flags, tmfd);
 }

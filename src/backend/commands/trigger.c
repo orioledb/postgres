@@ -3387,7 +3387,7 @@ GetTupleForTrigger(EState *estate,
 		if (!IsolationUsesXactSnapshot())
 			lockflags |= TUPLE_LOCK_FLAG_FIND_LAST_VERSION;
 
-		test = table_tuple_lock(relation, tupleid,
+		test = table_tuple_lock(relation, (ItemPointer) DatumGetPointer(tupleid),
 								estate->es_snapshot, oldslot,
 								estate->es_output_cid,
 								lockmode, LockWaitBlock,
@@ -3484,7 +3484,7 @@ GetTupleForTrigger(EState *estate,
 		 * We expect the tuple to be present, thus very simple error handling
 		 * suffices.
 		 */
-		if (!table_tuple_fetch_row_version(relation, tupleid,
+		if (!table_tuple_fetch_row_version(relation, (ItemPointer) DatumGetPointer(tupleid),
 										   SnapshotAny, oldslot))
 			elog(ERROR, "failed to fetch tuple for trigger");
 	}
@@ -4505,7 +4505,7 @@ AfterTriggerExecute(EState *estate,
 					tupleid = PointerGetDatum(&(event->ate_ctid1));
 				}
 
-				if (!table_tuple_fetch_row_version(src_rel, tupleid,
+				if (!table_tuple_fetch_row_version(src_rel, (ItemPointer) DatumGetPointer(tupleid),
 												   SnapshotAny,
 												   src_slot))
 					elog(ERROR, "failed to fetch tuple1 for AFTER trigger");
@@ -4544,20 +4544,20 @@ AfterTriggerExecute(EState *estate,
 				(ItemPointerIsValid(&(event->ate_ctid2)) ||
 				 (event->ate_flags & AFTER_TRIGGER_ROWID2)))
 			{
-				Datum		tupleid;
+				ItemPointer		tid;
 
 				TupleTableSlot *dst_slot = ExecGetTriggerNewSlot(estate,
 																 dst_relInfo);
 
 				if (event->ate_flags & AFTER_TRIGGER_ROWID2)
 				{
-					tupleid = PointerGetDatum(ptr);
+					tid = (ItemPointer) ptr;
 				}
 				else
 				{
-					tupleid = PointerGetDatum(&(event->ate_ctid2));
+					tid = &(event->ate_ctid2);
 				}
-				if (!table_tuple_fetch_row_version(dst_rel, tupleid,
+				if (!table_tuple_fetch_row_version(dst_rel, tid,
 												   SnapshotAny,
 												   dst_slot))
 					elog(ERROR, "failed to fetch tuple2 for AFTER trigger");

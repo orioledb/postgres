@@ -193,7 +193,7 @@ lnext:
 		if (!IsolationUsesXactSnapshot())
 			lockflags |= TUPLE_LOCK_FLAG_FIND_LAST_VERSION;
 
-		test = table_tuple_lock(erm->relation, datum, estate->es_snapshot,
+		test = table_tuple_lock(erm->relation, (ItemPointer) DatumGetPointer(datum), estate->es_snapshot,
 								markSlot, estate->es_output_cid,
 								lockmode, erm->waitPolicy,
 								lockflags,

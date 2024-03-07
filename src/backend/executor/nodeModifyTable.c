@@ -2540,7 +2540,7 @@ lmerge_matched:;
 	 * MVCC snapshot.
 	 */
 	if (!table_tuple_fetch_row_version(resultRelInfo->ri_RelationDesc,
-									   tupleid,
+									   (ItemPointer) DatumGetPointer(tupleid),
 									   SnapshotAny,
 									   resultRelInfo->ri_oldTupleSlot))
 		elog(ERROR, "failed to fetch the target tuple");
@@ -2718,7 +2718,7 @@ lmerge_matched:;
 					inputslot = EvalPlanQualSlot(epqstate, resultRelationDesc,
 												 resultRelInfo->ri_RangeTableIndex);
 
-					result = table_tuple_lock(resultRelationDesc, tupleid,
+					result = table_tuple_lock(resultRelationDesc, (ItemPointer) DatumGetPointer(tupleid),
 											  estate->es_snapshot,
 											  inputslot, estate->es_output_cid,
 											  lockmode, LockWaitBlock,
@@ -3556,7 +3556,7 @@ ExecModifyTable(PlanState *pstate)
 					Relation	relation = resultRelInfo->ri_RelationDesc;
 
 					Assert(DatumGetPointer(tupleid) != NULL);
-					if (!table_tuple_fetch_row_version(relation, tupleid,
+					if (!table_tuple_fetch_row_version(relation, (ItemPointer) DatumGetPointer(tupleid),
 													   SnapshotAny,
 													   oldSlot))
 						elog(ERROR, "failed to fetch tuple being updated");
