@@ -6345,12 +6345,32 @@ get_actual_variable_endpoint(Relation heapRel,
 	index_scan->xs_want_itup = true;
 	index_rescan(index_scan, scankeys, 1, NULL, 0);
 
-	/* Fetch first/next tuple in specified direction */
-	while ((tid = index_getnext_tid(index_scan, indexscandir)) != NULL)
+	while (true)
 	{
-		BlockNumber block = ItemPointerGetBlockNumber(tid);
+		BlockNumber block = InvalidBlockNumber;
 
-		if (!VM_ALL_VISIBLE(heapRel,
+		/* Fetch first/next tuple in specified direction */
+		if (index_scan->xs_want_rowid)
+		{
+			NullableDatum rowid;
+			rowid = index_getnext_rowid(index_scan, indexscandir);
+
+			if (rowid.isnull)
+				break;
+		}
+		else
+		{
+			tid = index_getnext_tid(index_scan, indexscandir);
+
+			if (tid == NULL)
+				break;
+
+			Assert(ItemPointerEquals(tid, &index_scan->xs_heaptid));
+			block = ItemPointerGetBlockNumber(tid);
+		}
+
+		if (!index_scan->xs_want_rowid &&
+			!VM_ALL_VISIBLE(heapRel,
 							block,
 							&vmbuffer))
 		{
