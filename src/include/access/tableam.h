@@ -469,7 +469,7 @@ typedef struct TableAmRoutine
 	 * future searches.
 	 */
 	bool		(*index_fetch_tuple) (struct IndexFetchTableData *scan,
-									  ItemPointer tid,
+									  Datum tupleid,
 									  Snapshot snapshot,
 									  TupleTableSlot *slot,
 									  bool *call_again, bool *all_dead);
@@ -1262,7 +1262,7 @@ table_index_fetch_end(struct IndexFetchTableData *scan)
  */
 static inline bool
 table_index_fetch_tuple(struct IndexFetchTableData *scan,
-						ItemPointer tid,
+						Datum tupleid,
 						Snapshot snapshot,
 						TupleTableSlot *slot,
 						bool *call_again, bool *all_dead)
@@ -1275,7 +1275,7 @@ table_index_fetch_tuple(struct IndexFetchTableData *scan,
 	if (unlikely(TransactionIdIsValid(CheckXidAlive) && !bsysscan))
 		elog(ERROR, "unexpected table_index_fetch_tuple call during logical decoding");
 
-	return scan->rel->rd_tableam->index_fetch_tuple(scan, tid, snapshot,
+	return scan->rel->rd_tableam->index_fetch_tuple(scan, tupleid, snapshot,
 													slot, call_again,
 													all_dead);
 }
