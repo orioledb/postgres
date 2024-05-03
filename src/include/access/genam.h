@@ -173,6 +173,9 @@ extern IndexScanDesc index_beginscan_parallel(Relation heaprel,
 											  ParallelIndexScanDesc pscan);
 extern ItemPointer index_getnext_tid(IndexScanDesc scan,
 									 ScanDirection direction);
+extern NullableDatum index_getnext_rowid(IndexScanDesc scan,
+										 ScanDirection direction);
+extern Datum index_getnext_tupleid(IndexScanDesc scan, ScanDirection direction);
 struct TupleTableSlot;
 extern bool index_fetch_heap(IndexScanDesc scan, struct TupleTableSlot *slot);
 extern bool index_getnext_slot(IndexScanDesc scan, ScanDirection direction,
