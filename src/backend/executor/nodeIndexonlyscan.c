@@ -66,7 +66,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 	ScanDirection direction;
 	IndexScanDesc scandesc;
 	TupleTableSlot *slot;
-	ItemPointer tid;
+	ItemPointer tid = NULL;
 
 	/*
 	 * extract necessary information from index scan node
@@ -118,11 +118,35 @@ IndexOnlyNext(IndexOnlyScanState *node)
 	/*
 	 * OK, now that we have what we need, fetch the next tuple.
 	 */
-	while ((tid = index_getnext_tid(scandesc, direction)) != NULL)
+	while (true)
 	{
 		bool		tuple_from_heap = false;
 
 		CHECK_FOR_INTERRUPTS();
+
+		if (scandesc->xs_want_rowid)
+		{
+			NullableDatum rowid;
+			/* Time to fetch the next TID from the index */
+			rowid = index_getnext_rowid(scandesc, direction);
+
+			/* If we're out of index entries, we're done */
+			if (rowid.isnull)
+				break;
+
+			/* Assert(RowidEquals(rowid, &scan->xs_rowid)); */
+		}
+		else
+		{
+			/* Time to fetch the next TID from the index */
+			tid = index_getnext_tid(scandesc, direction);
+
+			/* If we're out of index entries, we're done */
+			if (tid == NULL)
+				break;
+
+			Assert(ItemPointerEquals(tid, &scandesc->xs_heaptid));
+		}
 
 		/*
 		 * We can skip the heap fetch if the TID references a heap page on
@@ -158,7 +182,8 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * It's worth going through this complexity to avoid needing to lock
 		 * the VM buffer, which could cause significant contention.
 		 */
-		if (!VM_ALL_VISIBLE(scandesc->heapRelation,
+		if (!scandesc->xs_want_rowid &&
+			!VM_ALL_VISIBLE(scandesc->heapRelation,
 							ItemPointerGetBlockNumber(tid),
 							&node->ioss_VMBuffer))
 		{
@@ -243,7 +268,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * If we didn't access the heap, then we'll need to take a predicate
 		 * lock explicitly, as if we had.  For now we do that at page level.
 		 */
-		if (!tuple_from_heap)
+		if (!tuple_from_heap && !scandesc->xs_want_rowid)
 			PredicateLockPage(scandesc->heapRelation,
 							  ItemPointerGetBlockNumber(tid),
 							  estate->es_snapshot);
