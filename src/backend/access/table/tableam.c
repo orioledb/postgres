@@ -217,7 +217,7 @@ table_index_fetch_tuple_check(Relation rel,
 
 	slot = table_slot_create(rel, NULL);
 	scan = table_index_fetch_begin(rel);
-	found = table_index_fetch_tuple(scan, tid, snapshot, slot, &call_again,
+	found = table_index_fetch_tuple(scan, PointerGetDatum(tid), snapshot, slot, &call_again,
 									all_dead);
 	table_index_fetch_end(scan);
 	ExecDropSingleTupleTableSlot(slot);
