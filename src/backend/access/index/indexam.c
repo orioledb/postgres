@@ -611,6 +611,55 @@ index_getnext_tid(IndexScanDesc scan, ScanDirection direction)
 }
 
 /* ----------------
+ * index_getnext_rowid - get the next ROWID from a scan
+ *
+ * The result is the next ROWID satisfying the scan keys,
+ * or isnull if no more matching tuples exist.
+ * ----------------
+ */
+NullableDatum
+index_getnext_rowid(IndexScanDesc scan, ScanDirection direction)
+{
+	NullableDatum result;
+	bool		found;
+
+	SCAN_CHECKS;
+	CHECK_SCAN_PROCEDURE(amgettuple);
+
+	/* XXX: we should assert that a snapshot is pushed or registered */
+	Assert(TransactionIdIsValid(RecentXmin));
+
+	/*
+	 * The AM's amgettuple proc finds the next index entry matching the scan
+	 * keys, and puts the TID into scan->xs_heaptid.  It should also set
+	 * scan->xs_recheck and possibly scan->xs_itup/scan->xs_hitup, though we
+	 * pay no attention to those fields here.
+	 */
+	found = scan->indexRelation->rd_indam->amgettuple(scan, direction);
+
+	/* Reset kill flag immediately for safety */
+	scan->kill_prior_tuple = false;
+	scan->xs_heap_continue = false;
+
+	/* If we're out of index entries, we're done */
+	if (!found)
+	{
+		/* release resources (like buffer pins) from table accesses */
+		if (scan->xs_heapfetch)
+			table_index_fetch_reset(scan->xs_heapfetch);
+
+		result.isnull = true;
+		return result;
+	}
+	/* Assert(RowidIsValid(&scan->xs_rowid)); */
+
+	pgstat_count_index_tuples(scan->indexRelation, 1);
+
+	/* Return the ROWID of the tuple we found. */
+	return scan->xs_rowid;
+}
+
+/* ----------------
  *		index_fetch_heap - get the scan's next heap tuple
  *
  * The result is a visible heap tuple associated with the index TID most
@@ -633,8 +682,17 @@ index_fetch_heap(IndexScanDesc scan, TupleTableSlot *slot)
 {
 	bool		all_dead = false;
 	bool		found;
+	Datum		tupleid;
 
-	found = table_index_fetch_tuple(scan->xs_heapfetch, &scan->xs_heaptid,
+	if (scan->xs_want_rowid)
+	{
+		Assert(!scan->xs_rowid.isnull);
+		tupleid = scan->xs_rowid.value;
+	}
+	else {
+		tupleid = PointerGetDatum(&scan->xs_heaptid);
+	}
+	found = table_index_fetch_tuple(scan->xs_heapfetch, tupleid,
 									scan->xs_snapshot, slot,
 									&scan->xs_heap_continue, &all_dead);
 
@@ -676,16 +734,30 @@ index_getnext_slot(IndexScanDesc scan, ScanDirection direction, TupleTableSlot *
 	{
 		if (!scan->xs_heap_continue)
 		{
-			ItemPointer tid;
+			if (scan->xs_want_rowid)
+			{
+				NullableDatum rowid;
+				/* Time to fetch the next TID from the index */
+				rowid = index_getnext_rowid(scan, direction);
 
-			/* Time to fetch the next TID from the index */
-			tid = index_getnext_tid(scan, direction);
+				/* If we're out of index entries, we're done */
+				if (rowid.isnull)
+					break;
 
-			/* If we're out of index entries, we're done */
-			if (tid == NULL)
-				break;
+				/* Assert(RowidEquals(rowid, &scan->xs_rowid)); */
+			}
+			else
+			{
+				ItemPointer tid;
+				/* Time to fetch the next TID from the index */
+				tid = index_getnext_tid(scan, direction);
 
-			Assert(ItemPointerEquals(tid, &scan->xs_heaptid));
+				/* If we're out of index entries, we're done */
+				if (tid == NULL)
+					break;
+
+				Assert(ItemPointerEquals(tid, &scan->xs_heaptid));
+			}
 		}
 
 		/*
