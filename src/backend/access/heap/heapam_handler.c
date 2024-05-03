@@ -132,7 +132,7 @@ heapam_index_fetch_end(IndexFetchTableData *scan)
 
 static bool
 heapam_index_fetch_tuple(struct IndexFetchTableData *scan,
-						 ItemPointer tid,
+						 Datum tupleid,
 						 Snapshot snapshot,
 						 TupleTableSlot *slot,
 						 bool *call_again, bool *all_dead)
@@ -140,6 +140,7 @@ heapam_index_fetch_tuple(struct IndexFetchTableData *scan,
 	IndexFetchHeapData *hscan = (IndexFetchHeapData *) scan;
 	BufferHeapTupleTableSlot *bslot = (BufferHeapTupleTableSlot *) slot;
 	bool		got_heap_tuple;
+	ItemPointer tid = DatumGetItemPointer(tupleid);
 
 	Assert(TTS_IS_BUFFERTUPLE(slot));
 

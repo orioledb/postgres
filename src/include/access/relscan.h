@@ -122,6 +122,7 @@ typedef struct IndexScanDescData
 	struct ScanKeyData *keyData;	/* array of index qualifier descriptors */
 	struct ScanKeyData *orderByData;	/* array of ordering op descriptors */
 	bool		xs_want_itup;	/* caller requests index tuples */
+	bool		xs_want_rowid;	/* caller requests index tuples */
 	bool		xs_temp_snap;	/* unregister snapshot at scan end? */
 
 	/* signaling to index AM about killing index tuples */
@@ -145,6 +146,7 @@ typedef struct IndexScanDescData
 	struct TupleDescData *xs_hitupdesc; /* rowtype descriptor of xs_hitup */
 
 	ItemPointerData xs_heaptid; /* result */
+	NullableDatum	xs_rowid; /* result if xs_want_rowid */
 	bool		xs_heap_continue;	/* T if must keep walking, potential
 									 * further results */
 	IndexFetchTableData *xs_heapfetch;
