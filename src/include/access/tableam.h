@@ -895,17 +895,7 @@ typedef struct TableAmRoutine
 								  AcquireSampleRowsFunc *func,
 								  BlockNumber *totalpages);
 
-	bool		(*define_index_validate) (Relation rel, IndexStmt *stmt,
-										  bool skip_build, void **arg);
-
-	bool		(*define_index) (Relation rel, Oid indoid, bool reindex,
-								 bool skip_constraint_checks, bool skip_build,
-								 void *arg);
-
 	bytea	   *(*reloptions) (char relkind, Datum reloptions, bool validate);
-
-	bytea	   *(*indexoptions) (amoptions_function amoptions, char relkind,
-								 Datum reloptions, bool validate);
 } TableAmRoutine;
 
 
@@ -2189,30 +2179,6 @@ table_get_row_ref_type(Relation rel)
 		return ROW_REF_TID;
 }
 
-static inline bool
-table_define_index_validate(Relation rel, IndexStmt *stmt,
-									 bool skip_build, void **arg)
-{
-	if (rel->rd_tableam && rel->rd_tableam->define_index_validate)
-		return rel->rd_tableam->define_index_validate(rel, stmt,
-													  skip_build, arg);
-	else
-		return true;
-}
-
-static inline bool
-table_define_index(Relation rel, Oid indoid, bool reindex,
-				   bool skip_constraint_checks, bool skip_build,
-				   void *arg)
-{
-	if (rel->rd_tableam && rel->rd_tableam->define_index)
-		return rel->rd_tableam->define_index(rel, indoid, reindex,
-											 skip_constraint_checks,
-											 skip_build, arg);
-	else
-		return true;
-}
-
 static inline void
 table_free_rd_amcache(Relation rel)
 {
@@ -2255,20 +2221,6 @@ tableam_reloptions(const TableAmRoutine *tableam, char relkind,
 				   Datum reloptions, bool validate)
 {
 	return tableam->reloptions(relkind, reloptions, validate);
-}
-
-extern bytea *index_reloptions(amoptions_function amoptions, Datum reloptions,
-							   bool validate);
-
-static inline bytea *
-tableam_indexoptions(const TableAmRoutine *tableam,
-					 amoptions_function amoptions, char relkind,
-					 Datum reloptions, bool validate)
-{
-	if (tableam)
-		return tableam->indexoptions(amoptions, relkind, reloptions, validate);
-	else
-		return index_reloptions(amoptions, reloptions, validate);
 }
 
 #endif							/* TABLEAM_H */

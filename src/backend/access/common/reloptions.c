@@ -1413,8 +1413,7 @@ extractRelOptions(HeapTuple tuple, TupleDesc tupdesc,
 			break;
 		case RELKIND_INDEX:
 		case RELKIND_PARTITIONED_INDEX:
-			options = tableam_indexoptions(tableam, amoptions, classForm->relkind,
-										   datum, false);
+			options = index_reloptions(amoptions, datum, false);
 			break;
 		case RELKIND_FOREIGN_TABLE:
 			options = NULL;

@@ -2911,13 +2911,6 @@ heapam_reloptions(char relkind, Datum reloptions, bool validate)
 	return NULL;
 }
 
-static bytea *
-heapam_indexoptions(amoptions_function amoptions, char relkind,
-					Datum reloptions, bool validate)
-{
-	return index_reloptions(amoptions, reloptions, validate);
-}
-
 /* ------------------------------------------------------------------------
  * Definition of the heap table access method.
  * ------------------------------------------------------------------------
@@ -2984,8 +2977,7 @@ static const TableAmRoutine heapam_methods = {
 
 	.tuple_is_current = heapam_tuple_is_current,
 
-	.reloptions = heapam_reloptions,
-	.indexoptions = heapam_indexoptions
+	.reloptions = heapam_reloptions
 };
 
 

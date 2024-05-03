@@ -14368,13 +14368,7 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 			break;
 		case RELKIND_INDEX:
 		case RELKIND_PARTITIONED_INDEX:
-			{
-				Relation	tbl = relation_open(rel->rd_index->indrelid,
-												AccessShareLock);
-				tableam_indexoptions(tbl->rd_tableam, rel->rd_indam->amoptions,
-									 rel->rd_rel->relkind, newOptions, true);
-				relation_close(tbl, AccessShareLock);
-			}
+			(void) index_reloptions(rel->rd_indam->amoptions, newOptions, true);
 			break;
 		default:
 			ereport(ERROR,
