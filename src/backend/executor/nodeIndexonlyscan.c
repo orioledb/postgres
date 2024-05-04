@@ -136,7 +136,6 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		}
 		else
 		{
-			ItemPointer tid;
 			/* Time to fetch the next TID from the index */
 			tid = index_getnext_tid(scandesc, direction);
 
