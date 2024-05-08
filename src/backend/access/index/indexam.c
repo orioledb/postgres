@@ -758,7 +758,8 @@ index_getnext_slot(IndexScanDesc scan, ScanDirection direction, TupleTableSlot *
 		 * If we don't find anything, loop around and grab the next TID from
 		 * the index.
 		 */
-		Assert(ItemPointerIsValid(&scan->xs_heaptid));
+		if (!scan->xs_want_rowid)
+			Assert(ItemPointerIsValid(&scan->xs_heaptid));
 		if (index_fetch_heap(scan, slot))
 			return true;
 	}
