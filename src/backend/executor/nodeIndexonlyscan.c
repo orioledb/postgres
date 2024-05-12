@@ -180,7 +180,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * It's worth going through this complexity to avoid needing to lock
 		 * the VM buffer, which could cause significant contention.
 		 */
-		if (scandesc->xs_want_rowid ||
+		if (!scandesc->xs_want_rowid &&
 			!VM_ALL_VISIBLE(scandesc->heapRelation,
 							ItemPointerGetBlockNumber(tid),
 							&node->ioss_VMBuffer))
@@ -266,7 +266,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * If we didn't access the heap, then we'll need to take a predicate
 		 * lock explicitly, as if we had.  For now we do that at page level.
 		 */
-		if (!tuple_from_heap)
+		if (!tuple_from_heap && !scandesc->xs_want_rowid)
 			PredicateLockPage(scandesc->heapRelation,
 							  ItemPointerGetBlockNumber(tid),
 							  estate->es_snapshot);
