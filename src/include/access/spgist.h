@@ -197,7 +197,7 @@ extern IndexBuildResult *spgbuild(Relation heap, Relation index,
 								  struct IndexInfo *indexInfo);
 extern void spgbuildempty(Relation index);
 extern bool spginsert(Relation index, Datum *values, bool *isnull,
-					  ItemPointer ht_ctid, Relation heapRel,
+					  Datum tupleid, Relation heapRel,
 					  IndexUniqueCheck checkUnique,
 					  bool indexUnchanged,
 					  struct IndexInfo *indexInfo);
