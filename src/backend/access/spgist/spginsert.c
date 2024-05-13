@@ -181,7 +181,7 @@ spgbuildempty(Relation index)
  */
 bool
 spginsert(Relation index, Datum *values, bool *isnull,
-		  ItemPointer ht_ctid, Relation heapRel,
+		  Datum tupleid, Relation heapRel,
 		  IndexUniqueCheck checkUnique,
 		  bool indexUnchanged,
 		  IndexInfo *indexInfo)
@@ -189,6 +189,7 @@ spginsert(Relation index, Datum *values, bool *isnull,
 	SpGistState spgstate;
 	MemoryContext oldCtx;
 	MemoryContext insertCtx;
+	ItemPointer ht_ctid = DatumGetItemPointer(tupleid);
 
 	insertCtx = AllocSetContextCreate(CurrentMemoryContext,
 									  "SP-GiST insert temporary context",
