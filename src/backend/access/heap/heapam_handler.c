@@ -2311,7 +2311,7 @@ heapam_index_validate_scan(Relation heapRelation,
 			index_insert(indexRelation,
 						 values,
 						 isnull,
-						 &rootTuple,
+						 ItemPointerGetDatum(&rootTuple),
 						 heapRelation,
 						 indexInfo->ii_Unique ?
 						 UNIQUE_CHECK_YES : UNIQUE_CHECK_NO,
