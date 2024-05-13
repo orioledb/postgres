@@ -170,7 +170,7 @@ CatalogIndexInsert(CatalogIndexState indstate, HeapTuple heapTuple,
 		index_insert(index,		/* index relation */
 					 values,	/* array of index Datums */
 					 isnull,	/* is-null flags */
-					 &(heapTuple->t_self),	/* tid of heap tuple */
+					 ItemPointerGetDatum(&(heapTuple->t_self)),	/* tid of heap tuple */
 					 heapRelation,
 					 index->rd_index->indisunique ?
 					 UNIQUE_CHECK_YES : UNIQUE_CHECK_NO,

@@ -218,7 +218,7 @@ bool
 index_insert(Relation indexRelation,
 			 Datum *values,
 			 bool *isnull,
-			 ItemPointer heap_t_ctid,
+			 Datum tupleid,
 			 Relation heapRelation,
 			 IndexUniqueCheck checkUnique,
 			 bool indexUnchanged,
@@ -233,7 +233,7 @@ index_insert(Relation indexRelation,
 									   InvalidBlockNumber);
 
 	return indexRelation->rd_indam->aminsert(indexRelation, values, isnull,
-											 heap_t_ctid, heapRelation,
+											 tupleid, heapRelation,
 											 checkUnique, indexUnchanged,
 											 indexInfo);
 }
