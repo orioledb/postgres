@@ -107,7 +107,7 @@ typedef void (*ambuildempty_function) (Relation indexRelation);
 typedef bool (*aminsert_function) (Relation indexRelation,
 								   Datum *values,
 								   bool *isnull,
-								   ItemPointer heap_tid,
+								   Datum tupleid,
 								   Relation heapRelation,
 								   IndexUniqueCheck checkUnique,
 								   bool indexUnchanged,

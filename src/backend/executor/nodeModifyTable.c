@@ -158,6 +158,7 @@ static bool ExecMergeMatched(ModifyTableContext *context,
 							 bool canSetTag);
 static void ExecMergeNotMatched(ModifyTableContext *context,
 								ResultRelInfo *resultRelInfo,
+								Datum tupleid,
 								bool canSetTag);
 
 
@@ -1728,8 +1729,8 @@ ExecCrossPartitionUpdate(ModifyTableContext *context,
 
 	/* Tuple routing starts from the root table. */
 	context->cpUpdateReturningSlot =
-		ExecInsert(context, mtstate->rootResultRelInfo, slot, canSetTag,
-				   inserted_tuple, insert_destrel);
+		ExecInsert(context, mtstate->rootResultRelInfo,
+				   slot, canSetTag, inserted_tuple, insert_destrel);
 
 	/*
 	 * Reset the transition state that may possibly have been written by
@@ -2474,7 +2475,7 @@ ExecMerge(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	 * matches.
 	 */
 	if (!matched)
-		ExecMergeNotMatched(context, resultRelInfo, canSetTag);
+		ExecMergeNotMatched(context, resultRelInfo, tupleid, canSetTag);
 
 	/* No RETURNING support yet */
 	return NULL;
@@ -2866,7 +2867,7 @@ lmerge_matched:;
  */
 static void
 ExecMergeNotMatched(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
-					bool canSetTag)
+					Datum tupleid, bool canSetTag)
 {
 	ModifyTableState *mtstate = context->mtstate;
 	ExprContext *econtext = mtstate->ps.ps_ExprContext;
@@ -2922,8 +2923,8 @@ ExecMergeNotMatched(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 				newslot = ExecProject(action->mas_proj);
 				context->relaction = action;
 
-				(void) ExecInsert(context, mtstate->rootResultRelInfo, newslot,
-								  canSetTag, NULL, NULL);
+				(void) ExecInsert(context, mtstate->rootResultRelInfo,
+								  newslot, canSetTag, NULL, NULL);
 				mtstate->mt_merge_inserted += 1;
 				break;
 			case CMD_NOTHING:

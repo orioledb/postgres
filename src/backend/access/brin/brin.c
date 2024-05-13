@@ -152,7 +152,7 @@ brinhandler(PG_FUNCTION_ARGS)
  */
 bool
 brininsert(Relation idxRel, Datum *values, bool *nulls,
-		   ItemPointer heaptid, Relation heapRel,
+		   Datum tupleid, Relation heapRel,
 		   IndexUniqueCheck checkUnique,
 		   bool indexUnchanged,
 		   IndexInfo *indexInfo)
@@ -166,6 +166,7 @@ brininsert(Relation idxRel, Datum *values, bool *nulls,
 	MemoryContext tupcxt = NULL;
 	MemoryContext oldcxt = CurrentMemoryContext;
 	bool		autosummarize = BrinGetAutoSummarize(idxRel);
+	ItemPointer heaptid = DatumGetItemPointer(tupleid);
 
 	revmap = brinRevmapInitialize(idxRel, &pagesPerRange, NULL);
 
