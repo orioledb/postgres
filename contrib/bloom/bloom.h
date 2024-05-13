@@ -189,7 +189,7 @@ extern bool blvalidate(Oid opclassoid);
 
 /* index access method interface functions */
 extern bool blinsert(Relation index, Datum *values, bool *isnull,
-					 ItemPointer ht_ctid, Relation heapRel,
+					 Datum tupleid, Relation heapRel,
 					 IndexUniqueCheck checkUnique,
 					 bool indexUnchanged,
 					 struct IndexInfo *indexInfo);

@@ -401,7 +401,7 @@ typedef struct GiSTOptions
 /* gist.c */
 extern void gistbuildempty(Relation index);
 extern bool gistinsert(Relation r, Datum *values, bool *isnull,
-					   ItemPointer ht_ctid, Relation heapRel,
+					   Datum tupleid, Relation heapRel,
 					   IndexUniqueCheck checkUnique,
 					   bool indexUnchanged,
 					   struct IndexInfo *indexInfo);
