@@ -1752,8 +1752,8 @@ ExecCrossPartitionUpdate(ModifyTableContext *context,
 
 	/* Tuple routing starts from the root table. */
 	context->cpUpdateReturningSlot =
-		ExecInsert(context, mtstate->rootResultRelInfo, slot, canSetTag,
-				   inserted_tuple, insert_destrel);
+		ExecInsert(context, mtstate->rootResultRelInfo,
+				   slot, canSetTag, inserted_tuple, insert_destrel);
 
 	/*
 	 * Reset the transition state that may possibly have been written by
