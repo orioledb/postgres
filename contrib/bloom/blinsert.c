@@ -172,7 +172,7 @@ blbuildempty(Relation index)
  */
 bool
 blinsert(Relation index, Datum *values, bool *isnull,
-		 ItemPointer ht_ctid, Relation heapRel,
+		 Datum tupleid, Relation heapRel,
 		 IndexUniqueCheck checkUnique,
 		 bool indexUnchanged,
 		 IndexInfo *indexInfo)
@@ -189,6 +189,7 @@ blinsert(Relation index, Datum *values, bool *isnull,
 	BlockNumber blkno = InvalidBlockNumber;
 	OffsetNumber nStart;
 	GenericXLogState *state;
+	ItemPointer ht_ctid = DatumGetItemPointer(tupleid);
 
 	insertCtx = AllocSetContextCreate(CurrentMemoryContext,
 									  "Bloom insert temporary context",
