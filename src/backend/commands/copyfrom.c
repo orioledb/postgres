@@ -399,7 +399,6 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 		bool		line_buf_valid = cstate->line_buf_valid;
 		uint64		save_cur_lineno = cstate->cur_lineno;
 		MemoryContext oldcontext;
-		bool		insertIndexes;
 
 		Assert(buffer->bistate != NULL);
 
@@ -414,13 +413,12 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 		 * context before calling it.
 		 */
 		oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-		table_multi_insert_extended(resultRelInfo->ri_RelationDesc,
-									slots,
-									nused,
-									mycid,
-									ti_options,
-									buffer->bistate,
-									&insertIndexes);
+		table_multi_insert(resultRelInfo->ri_RelationDesc,
+						   slots,
+						   nused,
+						   mycid,
+						   ti_options,
+						   buffer->bistate);
 		MemoryContextSwitchTo(oldcontext);
 
 		for (i = 0; i < nused; i++)
@@ -429,7 +427,7 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 			 * If there are any indexes, update them for all the inserted
 			 * tuples, and run AFTER ROW INSERT triggers.
 			 */
-			if (insertIndexes && resultRelInfo->ri_NumIndices > 0)
+			if (resultRelInfo->ri_NumIndices > 0)
 			{
 				List	   *recheckIndexes;
 
@@ -832,8 +830,8 @@ CopyFrom(CopyFromState cstate)
 	/*
 	 * It's generally more efficient to prepare a bunch of tuples for
 	 * insertion, and insert them in one
-	 * table_multi_insert_extended()/ExecForeignBatchInsert() call, than call
-	 * table_tuple_insert_extended()/ExecForeignInsert() separately for every tuple.
+	 * table_multi_insert()/ExecForeignBatchInsert() call, than call
+	 * table_tuple_insert()/ExecForeignInsert() separately for every tuple.
 	 * However, there are a number of reasons why we might not be able to do
 	 * this.  These are explained below.
 	 */
@@ -1242,14 +1240,11 @@ CopyFrom(CopyFromState cstate)
 					}
 					else
 					{
-						bool		insertIndexes;
-
 						/* OK, store the tuple and create index entries for it */
-						table_tuple_insert_extended(resultRelInfo->ri_RelationDesc,
-										   myslot, mycid, ti_options, bistate,
-										   &insertIndexes);
+						table_tuple_insert(resultRelInfo->ri_RelationDesc,
+										   myslot, mycid, ti_options, bistate);
 
-						if (insertIndexes && resultRelInfo->ri_NumIndices > 0)
+						if (resultRelInfo->ri_NumIndices > 0)
 							recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
 																   myslot,
 																   estate,

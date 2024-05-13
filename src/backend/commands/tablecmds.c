@@ -5790,7 +5790,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		newrel = NULL;
 
 	/*
-	 * Prepare a BulkInsertState and options for table_tuple_insert_extended.  The FSM
+	 * Prepare a BulkInsertState and options for table_tuple_insert.  The FSM
 	 * is empty, so don't bother using it.
 	 */
 	if (newrel)

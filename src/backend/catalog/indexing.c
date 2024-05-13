@@ -170,7 +170,7 @@ CatalogIndexInsert(CatalogIndexState indstate, HeapTuple heapTuple,
 		index_insert(index,		/* index relation */
 					 values,	/* array of index Datums */
 					 isnull,	/* is-null flags */
-					 &(heapTuple->t_self),	/* tid of heap tuple */
+					 ItemPointerGetDatum(&(heapTuple->t_self)),	/* tid of heap tuple */
 					 heapRelation,
 					 index->rd_index->indisunique ?
 					 UNIQUE_CHECK_YES : UNIQUE_CHECK_NO,
@@ -273,14 +273,12 @@ void
 CatalogTuplesMultiInsertWithInfo(Relation heapRel, TupleTableSlot **slot,
 								 int ntuples, CatalogIndexState indstate)
 {
-	bool	insertIndexes;
-
 	/* Nothing to do */
 	if (ntuples <= 0)
 		return;
 
 	heap_multi_insert(heapRel, slot, ntuples,
-					  GetCurrentCommandId(true), 0, NULL, &insertIndexes);
+					  GetCurrentCommandId(true), 0, NULL);
 
 	/*
 	 * There is no equivalent to heap_multi_insert for the catalog indexes, so

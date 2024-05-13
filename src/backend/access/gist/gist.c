@@ -156,7 +156,7 @@ gistbuildempty(Relation index)
  */
 bool
 gistinsert(Relation r, Datum *values, bool *isnull,
-		   ItemPointer ht_ctid, Relation heapRel,
+		   Datum tupleid, Relation heapRel,
 		   IndexUniqueCheck checkUnique,
 		   bool indexUnchanged,
 		   IndexInfo *indexInfo)
@@ -164,6 +164,7 @@ gistinsert(Relation r, Datum *values, bool *isnull,
 	GISTSTATE  *giststate = (GISTSTATE *) indexInfo->ii_AmCache;
 	IndexTuple	itup;
 	MemoryContext oldCxt;
+	ItemPointer ht_ctid = DatumGetItemPointer(tupleid);
 
 	/* Initialize GISTSTATE cache if first call in this statement */
 	if (giststate == NULL)

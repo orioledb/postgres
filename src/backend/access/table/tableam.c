@@ -279,15 +279,13 @@ table_tuple_get_latest_tid(TableScanDesc scan, ItemPointer tid)
 /*
  * simple_table_tuple_insert - insert a tuple
  *
- * Currently, this routine differs from table_tuple_insert_extended only in supplying a
+ * Currently, this routine differs from table_tuple_insert only in supplying a
  * default command ID and not allowing access to the speedup options.
  */
 void
-simple_table_tuple_insert(Relation rel, TupleTableSlot *slot,
-						  bool *insert_indexes)
+simple_table_tuple_insert(Relation rel, TupleTableSlot *slot)
 {
-	table_tuple_insert_extended(rel, slot, GetCurrentCommandId(true), 0, NULL,
-					   insert_indexes);
+	table_tuple_insert(rel, slot, GetCurrentCommandId(true), 0, NULL);
 }
 
 /*

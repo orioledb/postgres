@@ -261,7 +261,7 @@ heapam_tuple_satisfies_snapshot(Relation rel, TupleTableSlot *slot,
 
 static TupleTableSlot *
 heapam_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
-					int options, BulkInsertState bistate, bool *insert_indexes)
+					int options, BulkInsertState bistate)
 {
 	bool		shouldFree = true;
 	HeapTuple	tuple = ExecFetchSlotHeapTuple(slot, true, &shouldFree);
@@ -273,7 +273,6 @@ heapam_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
 	/* Perform the insertion, and copy the resulting ItemPointer */
 	heap_insert(relation, tuple, cid, options, bistate);
 	ItemPointerCopy(&tuple->t_self, &slot->tts_tid);
-	*insert_indexes = true;
 
 	if (shouldFree)
 		pfree(tuple);
@@ -2311,7 +2310,7 @@ heapam_index_validate_scan(Relation heapRelation,
 			index_insert(indexRelation,
 						 values,
 						 isnull,
-						 &rootTuple,
+						 ItemPointerGetDatum(&rootTuple),
 						 heapRelation,
 						 indexInfo->ii_Unique ?
 						 UNIQUE_CHECK_YES : UNIQUE_CHECK_NO,
