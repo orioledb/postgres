@@ -481,7 +481,7 @@ ginHeapTupleInsert(GinState *ginstate, OffsetNumber attnum,
 
 bool
 gininsert(Relation index, Datum *values, bool *isnull,
-		  ItemPointer ht_ctid, Relation heapRel,
+		  Datum tupleid, Relation heapRel,
 		  IndexUniqueCheck checkUnique,
 		  bool indexUnchanged,
 		  IndexInfo *indexInfo)
@@ -490,6 +490,7 @@ gininsert(Relation index, Datum *values, bool *isnull,
 	MemoryContext oldCtx;
 	MemoryContext insertCtx;
 	int			i;
+	ItemPointer ht_ctid = DatumGetItemPointer(tupleid);
 
 	/* Initialize GinState cache if first call in this statement */
 	if (ginstate == NULL)
