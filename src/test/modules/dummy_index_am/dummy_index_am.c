@@ -164,7 +164,7 @@ dibuildempty(Relation index)
  */
 static bool
 diinsert(Relation index, Datum *values, bool *isnull,
-		 ItemPointer ht_ctid, Relation heapRel,
+		 Datum tupleid, Relation heapRel,
 		 IndexUniqueCheck checkUnique,
 		 bool indexUnchanged,
 		 IndexInfo *indexInfo)
