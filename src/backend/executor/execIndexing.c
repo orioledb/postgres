@@ -317,7 +317,6 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 					  List *arbiterIndexes,
 					  bool onlySummarizing)
 {
-	ItemPointer tupleid = &slot->tts_tid;
 	List	   *result = NIL;
 	int			i;
 	int			numIndices;
@@ -327,8 +326,20 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 	ExprContext *econtext;
 	Datum		values[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
+	Datum		tupleid;
 
-	Assert(ItemPointerIsValid(tupleid));
+
+	if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
+	{
+		bool	isnull;
+		tupleid = slot_getsysattr(slot, RowIdAttributeNumber, &isnull);
+		Assert(!isnull);
+	}
+	else
+	{
+		Assert(ItemPointerIsValid(&slot->tts_tid));
+		tupleid = PointerGetDatum(&slot->tts_tid);
+	}
 
 	/*
 	 * Get information from the result relation info structure.
@@ -475,6 +486,7 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 		{
 			bool		violationOK;
 			CEOUC_WAIT_MODE waitMode;
+			ItemPointer raw_tupleid = DatumGetItemPointer(tupleid);
 
 			if (applyNoDupErr)
 			{
@@ -495,7 +507,7 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 			satisfiesConstraint =
 				check_exclusion_or_unique_constraint(heapRelation,
 													 indexRelation, indexInfo,
-													 tupleid, values, isnull,
+													 raw_tupleid, values, isnull,
 													 estate, false,
 													 waitMode, violationOK, NULL);
 		}
