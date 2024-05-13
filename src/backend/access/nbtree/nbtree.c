@@ -188,13 +188,14 @@ btbuildempty(Relation index)
  */
 bool
 btinsert(Relation rel, Datum *values, bool *isnull,
-		 ItemPointer ht_ctid, Relation heapRel,
+		 Datum tupleid, Relation heapRel,
 		 IndexUniqueCheck checkUnique,
 		 bool indexUnchanged,
 		 IndexInfo *indexInfo)
 {
 	bool		result;
 	IndexTuple	itup;
+	ItemPointer ht_ctid = DatumGetItemPointer(tupleid);
 
 	/* generate an index tuple */
 	itup = index_form_tuple(RelationGetDescr(rel), values, isnull);

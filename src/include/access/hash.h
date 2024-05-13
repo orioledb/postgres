@@ -364,7 +364,7 @@ extern IndexBuildResult *hashbuild(Relation heap, Relation index,
 								   struct IndexInfo *indexInfo);
 extern void hashbuildempty(Relation index);
 extern bool hashinsert(Relation rel, Datum *values, bool *isnull,
-					   ItemPointer ht_ctid, Relation heapRel,
+					   Datum tupleid, Relation heapRel,
 					   IndexUniqueCheck checkUnique,
 					   bool indexUnchanged,
 					   struct IndexInfo *indexInfo);
