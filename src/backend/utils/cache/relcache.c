@@ -487,27 +487,7 @@ RelationParseRelOptions(Relation relation, HeapTuple tuple)
 			break;
 		case RELKIND_INDEX:
 		case RELKIND_PARTITIONED_INDEX:
-			{
-				Form_pg_class classForm;
-				HeapTuple	classTup;
-
-				/* fetch the relation's relcache entry */
-				if (relation->rd_index->indrelid >= FirstNormalObjectId)
-				{
-					classTup = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relation->rd_index->indrelid));
-					classForm = (Form_pg_class) GETSTRUCT(classTup);
-					if (classForm->relam >= FirstNormalObjectId)
-						tableam = GetTableAmRoutineByAmOid(classForm->relam);
-					else
-						tableam = GetHeapamTableAmRoutine();
-					heap_freetuple(classTup);
-				}
-				else
-				{
-					tableam = GetHeapamTableAmRoutine();
-				}
-				amoptsfn = relation->rd_indam->amoptions;
-			}
+			amoptsfn = relation->rd_indam->amoptions;
 			break;
 		default:
 			return;

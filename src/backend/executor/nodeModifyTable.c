@@ -164,6 +164,7 @@ static TupleTableSlot *ExecMergeMatched(ModifyTableContext *context,
 										bool *matched);
 static TupleTableSlot *ExecMergeNotMatched(ModifyTableContext *context,
 										   ResultRelInfo *resultRelInfo,
+										   Datum tupleid,
 										   bool canSetTag);
 
 /*
@@ -1752,8 +1753,8 @@ ExecCrossPartitionUpdate(ModifyTableContext *context,
 
 	/* Tuple routing starts from the root table. */
 	context->cpUpdateReturningSlot =
-		ExecInsert(context, mtstate->rootResultRelInfo, slot, canSetTag,
-				   inserted_tuple, insert_destrel);
+		ExecInsert(context, mtstate->rootResultRelInfo,
+				   slot, canSetTag, inserted_tuple, insert_destrel);
 
 	/*
 	 * Reset the transition state that may possibly have been written by
@@ -2522,7 +2523,7 @@ ExecMerge(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 		 * Otherwise, just process the action now.
 		 */
 		if (rslot == NULL)
-			rslot = ExecMergeNotMatched(context, resultRelInfo, canSetTag);
+			rslot = ExecMergeNotMatched(context, resultRelInfo, tupleid, canSetTag);
 		else
 			context->mtstate->mt_merge_pending_not_matched = context->planSlot;
 	}
@@ -3046,7 +3047,7 @@ lmerge_matched:
  */
 static TupleTableSlot *
 ExecMergeNotMatched(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
-					bool canSetTag)
+					Datum tupleid, bool canSetTag)
 {
 	ModifyTableState *mtstate = context->mtstate;
 	ExprContext *econtext = mtstate->ps.ps_ExprContext;
@@ -3564,7 +3565,7 @@ ExecModifyTable(PlanState *pstate)
 			context.planSlot = node->mt_merge_pending_not_matched;
 
 			slot = ExecMergeNotMatched(&context, node->resultRelInfo,
-									   node->canSetTag);
+									   0, node->canSetTag);
 
 			/* Clear the pending action */
 			node->mt_merge_pending_not_matched = NULL;
