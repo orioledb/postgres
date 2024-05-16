@@ -238,6 +238,66 @@ index_insert(Relation indexRelation,
 											 indexInfo);
 }
 
+/* ----------------
+ *		index_update - update an index tuple in a relation
+ * ----------------
+ */
+bool
+index_update(Relation indexRelation,
+			 bool new_valid,
+			 bool old_valid,
+			 Datum *values,
+			 bool *isnull,
+			 Datum tupleid,
+			 Datum *valuesOld,
+			 bool *isnullOld,
+			 Datum oldTupleid,
+			 Relation heapRelation,
+			 IndexUniqueCheck checkUnique,
+			 IndexInfo *indexInfo)
+{
+	RELATION_CHECKS;
+	CHECK_REL_PROCEDURE(amupdate);
+
+	if (!(indexRelation->rd_indam->ampredlocks))
+		CheckForSerializableConflictIn(indexRelation,
+									   (ItemPointer) NULL,
+									   InvalidBlockNumber);
+
+	return indexRelation->rd_indam->amupdate(indexRelation,
+											 new_valid, old_valid,
+											 values, isnull, tupleid,
+											 valuesOld, isnullOld, oldTupleid,
+											 heapRelation,
+											 checkUnique,
+											 indexInfo);
+}
+
+
+/* ----------------
+ *		index_delete - delete an index tuple from a relation
+ * ----------------
+ */
+bool
+index_delete(Relation indexRelation,
+			 Datum *values, bool *isnull, Datum tupleid,
+			 Relation heapRelation,
+			 IndexInfo *indexInfo)
+{
+	RELATION_CHECKS;
+	CHECK_REL_PROCEDURE(amdelete);
+
+	if (!(indexRelation->rd_indam->ampredlocks))
+		CheckForSerializableConflictIn(indexRelation,
+									   (ItemPointer) NULL,
+									   InvalidBlockNumber);
+
+	return indexRelation->rd_indam->amdelete(indexRelation,
+											 values, isnull, tupleid,
+											 heapRelation,
+											 indexInfo);
+}
+
 /*
  * index_beginscan - start a scan of an index with amgettuple
  *
