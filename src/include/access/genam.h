@@ -151,6 +151,21 @@ extern bool index_insert(Relation indexRelation,
 						 struct IndexInfo *indexInfo);
 extern void index_insert_cleanup(Relation indexRelation,
 								 struct IndexInfo *indexInfo);
+extern bool index_update(Relation indexRelation,
+						 bool new_valid,
+						 bool old_valid,
+						 Datum *values,
+						 bool *isnull,
+						 Datum tupleid,
+						 Datum *valuesOld,
+						 bool *isnullOld,
+						 Datum oldTupleid,
+						 Relation heapRelation,
+						 IndexUniqueCheck checkUnique,
+						 struct IndexInfo *indexInfo);
+extern bool index_delete(Relation indexRelation, Datum *values, bool *isnull,
+						 Datum tupleid, Relation heapRelation,
+						 struct IndexInfo *indexInfo);
 
 extern IndexScanDesc index_beginscan(Relation heapRelation,
 									 Relation indexRelation,
