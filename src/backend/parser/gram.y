@@ -373,6 +373,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	OptSchemaEltList parameter_name_list
 
 %type <chr>		am_type
+%type <str>		opt_for_tableam
 
 %type <boolean> TriggerForSpec TriggerForType
 %type <ival>	TriggerActionTime
@@ -5863,17 +5864,21 @@ row_security_cmd:
 /*****************************************************************************
  *
  *		QUERY:
- *             CREATE ACCESS METHOD name HANDLER handler_name
+ *				CREATE ACCESS METHOD name TYPE am_type
+ *					[FOR tableam_name]
+ *					HANDLER handler_name
  *
  *****************************************************************************/
 
-CreateAmStmt: CREATE ACCESS METHOD name TYPE_P am_type HANDLER handler_name
+CreateAmStmt: CREATE ACCESS METHOD name TYPE_P am_type
+				 opt_for_tableam HANDLER handler_name
 				{
 					CreateAmStmt *n = makeNode(CreateAmStmt);
 
 					n->amname = $4;
-					n->handler_name = $8;
 					n->amtype = $6;
+					n->tableam_name = $7;
+					n->handler_name = $9;
 					$$ = (Node *) n;
 				}
 		;
@@ -5881,6 +5886,11 @@ CreateAmStmt: CREATE ACCESS METHOD name TYPE_P am_type HANDLER handler_name
 am_type:
 			INDEX			{ $$ = AMTYPE_INDEX; }
 		|	TABLE			{ $$ = AMTYPE_TABLE; }
+		;
+
+opt_for_tableam:
+			FOR name							{ $$ = $2; }
+			| /*EMPTY*/							{ $$ = NULL; }
 		;
 
 /*****************************************************************************

@@ -644,6 +644,16 @@ extern List *ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 								   bool noDupErr,
 								   bool *specConflict, List *arbiterIndexes,
 								   bool onlySummarizing);
+extern List *ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
+								   TupleTableSlot *slot,
+								   TupleTableSlot *oldSlot,
+								   EState *estate,
+								   bool noDupErr,
+								   bool *specConflict, List *arbiterIndexes,
+								   bool onlySummarizing);
+extern void ExecDeleteIndexTuples(ResultRelInfo *resultRelInfo,
+								  TupleTableSlot *slot,
+								  EState *estate);
 extern bool ExecCheckIndexConstraints(ResultRelInfo *resultRelInfo,
 									  TupleTableSlot *slot,
 									  EState *estate, ItemPointer conflictTid,
