@@ -839,6 +839,16 @@ DefineIndex(Oid tableId,
 							accessMethodName)));
 	}
 	accessMethodForm = (Form_pg_am) GETSTRUCT(tuple);
+
+	if (accessMethodForm->amtableam != rel->rd_rel->relam)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+				 errmsg("index \"%s\" with access method \"%s\" cannot be created "
+				 		"for table \"%s\" with access method \"%s\"",
+						indexRelationName,
+						accessMethodForm->amname.data,
+						RelationGetRelationName(rel),
+						get_am_name(rel->rd_rel->relam))));
 	accessMethodId = accessMethodForm->oid;
 	amRoutine = GetIndexAmRoutine(accessMethodForm->amhandler);
 
