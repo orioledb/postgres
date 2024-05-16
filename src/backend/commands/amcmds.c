@@ -47,6 +47,7 @@ CreateAccessMethod(CreateAmStmt *stmt)
 	ObjectAddress referenced;
 	Oid			amoid;
 	Oid			amhandler;
+	Oid			tableamoid = InvalidOid;
 	bool		nulls[Natts_pg_am];
 	Datum		values[Natts_pg_am];
 	HeapTuple	tup;
@@ -72,6 +73,13 @@ CreateAccessMethod(CreateAmStmt *stmt)
 						stmt->amname)));
 	}
 
+	if (stmt->amtype == AMTYPE_INDEX)
+	{
+		if (!OidIsValid(stmt->tableam_name))
+			stmt->tableam_name = "heap";
+		tableamoid = get_table_am_oid(stmt->tableam_name, false);
+	}
+
 	/*
 	 * Get the handler function oid, verifying the AM type while at it.
 	 */
@@ -89,6 +97,7 @@ CreateAccessMethod(CreateAmStmt *stmt)
 		DirectFunctionCall1(namein, CStringGetDatum(stmt->amname));
 	values[Anum_pg_am_amhandler - 1] = ObjectIdGetDatum(amhandler);
 	values[Anum_pg_am_amtype - 1] = CharGetDatum(stmt->amtype);
+	values[Anum_pg_am_amtableam - 1] = ObjectIdGetDatum(tableamoid);
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
