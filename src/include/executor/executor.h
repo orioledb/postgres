@@ -625,6 +625,9 @@ extern List *ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 								   EState *estate,
 								   bool noDupErr,
 								   bool *specConflict, List *arbiterIndexes);
+extern void ExecDeleteIndexTuples(ResultRelInfo *resultRelInfo,
+								  TupleTableSlot *slot,
+								  EState *estate);
 extern bool ExecCheckIndexConstraints(ResultRelInfo *resultRelInfo,
 									  TupleTableSlot *slot,
 									  EState *estate, ItemPointer conflictTid,
