@@ -619,6 +619,12 @@ extern List *ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 								   bool update,
 								   bool noDupErr,
 								   bool *specConflict, List *arbiterIndexes);
+extern List *ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
+								   TupleTableSlot *slot,
+								   TupleTableSlot *oldSlot,
+								   EState *estate,
+								   bool noDupErr,
+								   bool *specConflict, List *arbiterIndexes);
 extern bool ExecCheckIndexConstraints(ResultRelInfo *resultRelInfo,
 									  TupleTableSlot *slot,
 									  EState *estate, ItemPointer conflictTid,

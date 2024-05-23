@@ -112,6 +112,19 @@ typedef bool (*aminsert_function) (Relation indexRelation,
 								   IndexUniqueCheck checkUnique,
 								   bool indexUnchanged,
 								   struct IndexInfo *indexInfo);
+/* update this tuple */
+typedef bool (*amupdate_function) (Relation indexRelation,
+								   bool new_valid,
+								   bool old_valid,
+								   Datum *values,
+								   bool *isnull,
+								   Datum tupleid,
+								   Datum *valuesOld,
+								   bool *isnullOld,
+								   Datum oldTupleid,
+								   Relation heapRelation,
+								   IndexUniqueCheck checkUnique,
+								   struct IndexInfo *indexInfo);
 
 /* bulk delete */
 typedef IndexBulkDeleteResult *(*ambulkdelete_function) (IndexVacuumInfo *info,
@@ -244,6 +257,8 @@ typedef struct IndexAmRoutine
 	bool		amcaninclude;
 	/* does AM use maintenance_work_mem? */
 	bool		amusemaintenanceworkmem;
+	/* does AM can provide MVCC */
+	bool		ammvccaware;
 	/* OR of parallel vacuum flags.  See vacuum.h for flags. */
 	uint8		amparallelvacuumoptions;
 	/* type of data stored in index, or InvalidOid if variable */
@@ -259,6 +274,7 @@ typedef struct IndexAmRoutine
 	ambuild_function ambuild;
 	ambuildempty_function ambuildempty;
 	aminsert_function aminsert;
+	amupdate_function amupdate;
 	ambulkdelete_function ambulkdelete;
 	amvacuumcleanup_function amvacuumcleanup;
 	amcanreturn_function amcanreturn;	/* can be NULL */
