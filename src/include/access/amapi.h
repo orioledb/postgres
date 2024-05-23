@@ -114,6 +114,8 @@ typedef bool (*aminsert_function) (Relation indexRelation,
 								   struct IndexInfo *indexInfo);
 /* update this tuple */
 typedef bool (*amupdate_function) (Relation indexRelation,
+								   bool new_valid,
+								   bool old_valid,
 								   Datum *values,
 								   bool *isnull,
 								   Datum tupleid,

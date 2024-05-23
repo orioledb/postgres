@@ -150,6 +150,8 @@ extern bool index_insert(Relation indexRelation,
 						 bool indexUnchanged,
 						 struct IndexInfo *indexInfo);
 extern bool index_update(Relation indexRelation,
+						 bool new_valid,
+						 bool old_valid,
 						 Datum *values,
 						 bool *isnull,
 						 Datum tupleid,

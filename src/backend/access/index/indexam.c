@@ -240,6 +240,8 @@ index_insert(Relation indexRelation,
  */
 bool
 index_update(Relation indexRelation,
+			 bool new_valid,
+			 bool old_valid,
 			 Datum *values,
 			 bool *isnull,
 			 Datum tupleid,
@@ -259,6 +261,7 @@ index_update(Relation indexRelation,
 									   InvalidBlockNumber);
 
 	return indexRelation->rd_indam->amupdate(indexRelation,
+											 new_valid, old_valid,
 											 values, isnull, tupleid,
 											 valuesOld, isnullOld, oldTupleid,
 											 heapRelation,

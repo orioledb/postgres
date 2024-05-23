@@ -567,6 +567,7 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 		bool		applyNoDupErr;
 		IndexUniqueCheck checkUnique;
 		bool		satisfiesConstraint;
+		bool		new_valid = true;
 
 		if (indexRelation == NULL)
 			continue;
@@ -583,6 +584,15 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 		 */
 		if (onlySummarizing && !indexInfo->ii_Summarizing)
 			continue;
+
+		/*
+		* We will use the EState's per-tuple context for evaluating predicates
+		* and index expressions (creating it if it's not already there).
+		*/
+		econtext = GetPerTupleExprContext(estate);
+
+		/* Arrange for econtext's scan tuple to be the tuple under test */
+		econtext->ecxt_scantuple = slot;
 
 		/* Check for partial index */
 		if (indexInfo->ii_Predicate != NIL)
@@ -602,22 +612,17 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 
 			/* Skip this index-update if the predicate isn't satisfied */
 			if (!ExecQual(predicate, econtext))
-				continue;
+			{
+				if (!indexRelation->rd_indam->ammvccaware)
+					continue;
+				new_valid = false;
+			}
 		}
 
 		/*
 		 * FormIndexDatum fills in its values and isnull parameters with the
 		 * appropriate values for the column(s) of the index.
 		 */
-		/*
-		* We will use the EState's per-tuple context for evaluating predicates
-		* and index expressions (creating it if it's not already there).
-		*/
-		econtext = GetPerTupleExprContext(estate);
-
-		/* Arrange for econtext's scan tuple to be the tuple under test */
-		econtext->ecxt_scantuple = slot;
-
 		FormIndexDatum(indexInfo,
 					   slot,
 					   estate,
@@ -657,6 +662,7 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 			Datum		valuesOld[INDEX_MAX_KEYS];
 			bool		isnullOld[INDEX_MAX_KEYS];
 			Datum		oldTupleid;
+			bool		old_valid = true;
 
 			if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
 			{
@@ -670,7 +676,6 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 				oldTupleid = PointerGetDatum(&oldSlot->tts_tid);
 			}
 
-			ResetPerTupleExprContext(estate);
 			econtext = GetPerTupleExprContext(estate);
 			econtext->ecxt_scantuple = oldSlot;
 
@@ -692,7 +697,7 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 
 				/* Skip this index-update if the predicate isn't satisfied */
 				if (!ExecQual(predicate, econtext))
-					continue;
+					old_valid = false;
 			}
 
 			FormIndexDatum(indexInfo,
@@ -703,6 +708,8 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 
 			satisfiesConstraint =
 				index_update(indexRelation, /* index relation */
+							 new_valid,
+							 old_valid,
 							 values,	/* array of index Datums */
 							 isnull,	/* null flags */
 							 tupleid,	/* tid of heap tuple */
