@@ -518,6 +518,301 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 	return result;
 }
 
+List *
+ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
+					  TupleTableSlot *slot,
+					  TupleTableSlot *oldSlot,
+					  EState *estate,
+					  bool noDupErr,
+					  bool *specConflict,
+					  List *arbiterIndexes,
+					  bool onlySummarizing)
+{
+	List	   *result = NIL;
+	int			i;
+	int			numIndices;
+	RelationPtr relationDescs;
+	Relation	heapRelation;
+	IndexInfo **indexInfoArray;
+	ExprContext *econtext;
+	Datum		values[INDEX_MAX_KEYS];
+	bool		isnull[INDEX_MAX_KEYS];
+	Datum		tupleid;
+
+	if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
+	{
+		bool	isnull;
+		tupleid = slot_getsysattr(slot, RowIdAttributeNumber, &isnull);
+		Assert(!isnull);
+	}
+	else
+	{
+		Assert(ItemPointerIsValid(&slot->tts_tid));
+		tupleid = PointerGetDatum(&slot->tts_tid);
+	}
+
+	/*
+	 * Get information from the result relation info structure.
+	 */
+	numIndices = resultRelInfo->ri_NumIndices;
+	relationDescs = resultRelInfo->ri_IndexRelationDescs;
+	indexInfoArray = resultRelInfo->ri_IndexRelationInfo;
+	heapRelation = resultRelInfo->ri_RelationDesc;
+
+	/* Sanity check: slot must belong to the same rel as the resultRelInfo. */
+	Assert(slot->tts_tableOid == RelationGetRelid(heapRelation));
+
+	/*
+	 * for each index, form and insert the index tuple
+	 */
+	for (i = 0; i < numIndices; i++)
+	{
+		Relation	indexRelation = relationDescs[i];
+		IndexInfo  *indexInfo;
+		bool		applyNoDupErr;
+		IndexUniqueCheck checkUnique;
+		bool		satisfiesConstraint;
+		bool		new_valid = true;
+
+		if (indexRelation == NULL)
+			continue;
+
+		indexInfo = indexInfoArray[i];
+
+		/* If the index is marked as read-only, ignore it */
+		if (!indexInfo->ii_ReadyForInserts)
+			continue;
+
+		/*
+		 * Skip processing of non-summarizing indexes if we only update
+		 * summarizing indexes
+		 */
+		if (onlySummarizing && !indexInfo->ii_Summarizing)
+			continue;
+
+		/*
+		* We will use the EState's per-tuple context for evaluating predicates
+		* and index expressions (creating it if it's not already there).
+		*/
+		econtext = GetPerTupleExprContext(estate);
+
+		/* Arrange for econtext's scan tuple to be the tuple under test */
+		econtext->ecxt_scantuple = slot;
+
+		/* Check for partial index */
+		if (indexInfo->ii_Predicate != NIL)
+		{
+			ExprState  *predicate;
+
+			/*
+			 * If predicate state not set up yet, create it (in the estate's
+			 * per-query context)
+			 */
+			predicate = indexInfo->ii_PredicateState;
+			if (predicate == NULL)
+			{
+				predicate = ExecPrepareQual(indexInfo->ii_Predicate, estate);
+				indexInfo->ii_PredicateState = predicate;
+			}
+
+			/* Skip this index-update if the predicate isn't satisfied */
+			if (!ExecQual(predicate, econtext))
+			{
+				if (!indexRelation->rd_indam->ammvccaware)
+					continue;
+				new_valid = false;
+			}
+		}
+
+		/*
+		 * FormIndexDatum fills in its values and isnull parameters with the
+		 * appropriate values for the column(s) of the index.
+		 */
+		FormIndexDatum(indexInfo,
+					   slot,
+					   estate,
+					   values,
+					   isnull);
+
+		/* Check whether to apply noDupErr to this index */
+		applyNoDupErr = noDupErr &&
+			(arbiterIndexes == NIL ||
+			 list_member_oid(arbiterIndexes,
+							 indexRelation->rd_index->indexrelid));
+
+		/*
+		 * The index AM does the actual insertion, plus uniqueness checking.
+		 *
+		 * For an immediate-mode unique index, we just tell the index AM to
+		 * throw error if not unique.
+		 *
+		 * For a deferrable unique index, we tell the index AM to just detect
+		 * possible non-uniqueness, and we add the index OID to the result
+		 * list if further checking is needed.
+		 *
+		 * For a speculative insertion (used by INSERT ... ON CONFLICT), do
+		 * the same as for a deferrable unique index.
+		 */
+		if (!indexRelation->rd_index->indisunique)
+			checkUnique = UNIQUE_CHECK_NO;
+		else if (applyNoDupErr)
+			checkUnique = UNIQUE_CHECK_PARTIAL;
+		else if (indexRelation->rd_index->indimmediate)
+			checkUnique = UNIQUE_CHECK_YES;
+		else
+			checkUnique = UNIQUE_CHECK_PARTIAL;
+
+		if (indexRelation->rd_indam->ammvccaware)
+		{
+			Datum		valuesOld[INDEX_MAX_KEYS];
+			bool		isnullOld[INDEX_MAX_KEYS];
+			Datum		oldTupleid;
+			bool		old_valid = true;
+
+			if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
+			{
+				bool	isnull;
+				oldTupleid = slot_getsysattr(oldSlot, RowIdAttributeNumber, &isnull);
+				Assert(!isnull);
+			}
+			else
+			{
+				Assert(ItemPointerIsValid(&oldSlot->tts_tid));
+				oldTupleid = PointerGetDatum(&oldSlot->tts_tid);
+			}
+
+			econtext = GetPerTupleExprContext(estate);
+			econtext->ecxt_scantuple = oldSlot;
+
+			/* Check for partial index */
+			if (indexInfo->ii_Predicate != NIL)
+			{
+				ExprState  *predicate;
+
+				/*
+				* If predicate state not set up yet, create it (in the estate's
+				* per-query context)
+				*/
+				predicate = indexInfo->ii_PredicateState;
+				if (predicate == NULL)
+				{
+					predicate = ExecPrepareQual(indexInfo->ii_Predicate, estate);
+					indexInfo->ii_PredicateState = predicate;
+				}
+
+				/* Skip this index-update if the predicate isn't satisfied */
+				if (!ExecQual(predicate, econtext))
+					old_valid = false;
+			}
+
+			FormIndexDatum(indexInfo,
+						   oldSlot,
+						   estate,
+						   valuesOld,
+						   isnullOld);
+
+			satisfiesConstraint =
+				index_update(indexRelation, /* index relation */
+							 new_valid,
+							 old_valid,
+							 values,	/* array of index Datums */
+							 isnull,	/* null flags */
+							 tupleid,	/* tid of heap tuple */
+							 valuesOld,
+							 isnullOld,
+							 oldTupleid,
+							 heapRelation,	/* heap relation */
+							 checkUnique,	/* type of uniqueness check to do */
+							 indexInfo);	/* index AM may need this */
+
+		}
+		else
+		{
+			bool		indexUnchanged;
+			/*
+			* There's definitely going to be an index_insert() call for this
+			* index.  If we're being called as part of an UPDATE statement,
+			* consider if the 'indexUnchanged' = true hint should be passed.
+			*/
+			indexUnchanged = index_unchanged_by_update(resultRelInfo,
+													   estate,
+													   indexInfo,
+													   indexRelation);
+
+			satisfiesConstraint =
+				index_insert(indexRelation, /* index relation */
+							 values,	/* array of index Datums */
+							 isnull,	/* null flags */
+							 tupleid,	/* tid of heap tuple */
+							 heapRelation,	/* heap relation */
+							 checkUnique,	/* type of uniqueness check to do */
+							 indexUnchanged,	/* UPDATE without logical change? */
+							 indexInfo);	/* index AM may need this */
+		}
+
+		/*
+		 * If the index has an associated exclusion constraint, check that.
+		 * This is simpler than the process for uniqueness checks since we
+		 * always insert first and then check.  If the constraint is deferred,
+		 * we check now anyway, but don't throw error on violation or wait for
+		 * a conclusive outcome from a concurrent insertion; instead we'll
+		 * queue a recheck event.  Similarly, noDupErr callers (speculative
+		 * inserters) will recheck later, and wait for a conclusive outcome
+		 * then.
+		 *
+		 * An index for an exclusion constraint can't also be UNIQUE (not an
+		 * essential property, we just don't allow it in the grammar), so no
+		 * need to preserve the prior state of satisfiesConstraint.
+		 */
+		if (indexInfo->ii_ExclusionOps != NULL)
+		{
+			bool		violationOK;
+			CEOUC_WAIT_MODE waitMode;
+			ItemPointer raw_tupleid = DatumGetItemPointer(tupleid);
+
+			if (applyNoDupErr)
+			{
+				violationOK = true;
+				waitMode = CEOUC_LIVELOCK_PREVENTING_WAIT;
+			}
+			else if (!indexRelation->rd_index->indimmediate)
+			{
+				violationOK = true;
+				waitMode = CEOUC_NOWAIT;
+			}
+			else
+			{
+				violationOK = false;
+				waitMode = CEOUC_WAIT;
+			}
+
+			satisfiesConstraint =
+				check_exclusion_or_unique_constraint(heapRelation,
+													 indexRelation, indexInfo,
+													 raw_tupleid, values, isnull,
+													 estate, false,
+													 waitMode, violationOK, NULL);
+		}
+
+		if ((checkUnique == UNIQUE_CHECK_PARTIAL ||
+			 indexInfo->ii_ExclusionOps != NULL) &&
+			!satisfiesConstraint)
+		{
+			/*
+			 * The tuple potentially violates the uniqueness or exclusion
+			 * constraint, so make a note of the index so that we can re-check
+			 * it later.  Speculative inserters are told if there was a
+			 * speculative conflict, since that always requires a restart.
+			 */
+			result = lappend_oid(result, RelationGetRelid(indexRelation));
+			if (indexRelation->rd_index->indimmediate && specConflict)
+				*specConflict = true;
+		}
+	}
+
+	return result;
+}
+
 /* ----------------------------------------------------------------
  *		ExecCheckIndexConstraints
  *
