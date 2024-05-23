@@ -123,6 +123,7 @@ NOTICE:  checking pg_opclass {opcfamily} => pg_opfamily {oid}
 NOTICE:  checking pg_opclass {opcintype} => pg_type {oid}
 NOTICE:  checking pg_opclass {opckeytype} => pg_type {oid}
 NOTICE:  checking pg_am {amhandler} => pg_proc {oid}
+NOTICE:  checking pg_am {amtableam} => pg_am {oid}
 NOTICE:  checking pg_amop {amopfamily} => pg_opfamily {oid}
 NOTICE:  checking pg_amop {amoplefttype} => pg_type {oid}
 NOTICE:  checking pg_amop {amoprighttype} => pg_type {oid}

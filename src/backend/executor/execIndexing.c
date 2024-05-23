@@ -867,6 +867,18 @@ ExecDeleteIndexTuples(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 		if (!indexInfo->ii_ReadyForInserts)
 			continue;
 
+		if (!indexRelation->rd_indam->ammvccaware)
+			continue;
+
+		/*
+		* We will use the EState's per-tuple context for evaluating predicates
+		* and index expressions (creating it if it's not already there).
+		*/
+		econtext = GetPerTupleExprContext(estate);
+
+		/* Arrange for econtext's scan tuple to be the tuple under test */
+		econtext->ecxt_scantuple = slot;
+
 		/* Check for partial index */
 		if (indexInfo->ii_Predicate != NIL)
 		{
@@ -892,30 +904,18 @@ ExecDeleteIndexTuples(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 		 * FormIndexDatum fills in its values and isnull parameters with the
 		 * appropriate values for the column(s) of the index.
 		 */
-		/*
-		* We will use the EState's per-tuple context for evaluating predicates
-		* and index expressions (creating it if it's not already there).
-		*/
-		econtext = GetPerTupleExprContext(estate);
-
-		/* Arrange for econtext's scan tuple to be the tuple under test */
-		econtext->ecxt_scantuple = slot;
-
 		FormIndexDatum(indexInfo,
 					   slot,
 					   estate,
 					   values,
 					   isnull);
 
-		if (indexRelation->rd_indam->ammvccaware)
-		{
-			index_delete(indexRelation, /* index relation */
-						 values,	/* array of index Datums */
-						 isnull,	/* null flags */
-						 tupleid,	/* tid of heap tuple */
-						 heapRelation,	/* heap relation */
-						 indexInfo);	/* index AM may need this */
-		}
+		index_delete(indexRelation, /* index relation */
+					 values,	/* array of index Datums */
+					 isnull,	/* null flags */
+					 tupleid,	/* tid of heap tuple */
+					 heapRelation,	/* heap relation */
+					 indexInfo);	/* index AM may need this */
 	}
 }
 
