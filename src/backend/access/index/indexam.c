@@ -266,7 +266,7 @@ index_update(Relation indexRelation,
 			 IndexInfo *indexInfo)
 {
 	RELATION_CHECKS;
-	CHECK_REL_PROCEDURE(aminsert);
+	CHECK_REL_PROCEDURE(amupdate);
 
 	if (!(indexRelation->rd_indam->ampredlocks))
 		CheckForSerializableConflictIn(indexRelation,
@@ -279,6 +279,31 @@ index_update(Relation indexRelation,
 											 valuesOld, isnullOld, oldTupleid,
 											 heapRelation,
 											 checkUnique,
+											 indexInfo);
+}
+
+
+/* ----------------
+ *		index_delete - delete an index tuple from a relation
+ * ----------------
+ */
+bool
+index_delete(Relation indexRelation,
+			 Datum *values, bool *isnull, Datum tupleid,
+			 Relation heapRelation,
+			 IndexInfo *indexInfo)
+{
+	RELATION_CHECKS;
+	CHECK_REL_PROCEDURE(amdelete);
+
+	if (!(indexRelation->rd_indam->ampredlocks))
+		CheckForSerializableConflictIn(indexRelation,
+									   (ItemPointer) NULL,
+									   InvalidBlockNumber);
+
+	return indexRelation->rd_indam->amdelete(indexRelation,
+											 values, isnull, tupleid,
+											 heapRelation,
 											 indexInfo);
 }
 

@@ -1232,6 +1232,14 @@ ExecDeletePrologue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	if (result)
 		*result = TM_Ok;
 
+	/*
+	 * Open the table's indexes, if we have not done so already, so that we
+	 * can delete index entries.
+	 */
+	if (resultRelInfo->ri_RelationDesc->rd_rel->relhasindex &&
+		resultRelInfo->ri_IndexRelationDescs == NULL)
+		ExecOpenIndices(resultRelInfo, false);
+
 	/* BEFORE ROW DELETE triggers */
 	if (resultRelInfo->ri_TrigDesc &&
 		resultRelInfo->ri_TrigDesc->trig_delete_before_row)
@@ -1287,6 +1295,10 @@ ExecDeleteEpilogue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	ModifyTableState *mtstate = context->mtstate;
 	EState	   *estate = context->estate;
 	TransitionCaptureState *ar_delete_trig_tcs;
+
+	/* delete index entries if necessary */
+	if (resultRelInfo->ri_NumIndices > 0)
+		ExecDeleteIndexTuples(resultRelInfo, slot, context->estate);
 
 	/*
 	 * If this delete is the result of a partition key update that moved the

@@ -125,6 +125,12 @@ typedef bool (*amupdate_function) (Relation indexRelation,
 								   Relation heapRelation,
 								   IndexUniqueCheck checkUnique,
 								   struct IndexInfo *indexInfo);
+/* delete this tuple */
+typedef bool (*amdelete_function) (Relation indexRelation,
+								   Datum *values, bool *isnull,
+								   Datum tupleid,
+								   Relation heapRelation,
+								   struct IndexInfo *indexInfo);
 
 /* cleanup after insert */
 typedef void (*aminsertcleanup_function) (Relation indexRelation,
@@ -284,6 +290,7 @@ typedef struct IndexAmRoutine
 	aminsert_function aminsert;
 	aminsertcleanup_function aminsertcleanup;
 	amupdate_function amupdate;
+	amdelete_function amdelete;
 	ambulkdelete_function ambulkdelete;
 	amvacuumcleanup_function amvacuumcleanup;
 	amcanreturn_function amcanreturn;	/* can be NULL */

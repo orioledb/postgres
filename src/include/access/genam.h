@@ -163,6 +163,9 @@ extern bool index_update(Relation indexRelation,
 						 Relation heapRelation,
 						 IndexUniqueCheck checkUnique,
 						 struct IndexInfo *indexInfo);
+extern bool index_delete(Relation indexRelation, Datum *values, bool *isnull,
+						 Datum tupleid, Relation heapRelation,
+						 struct IndexInfo *indexInfo);
 
 extern IndexScanDesc index_beginscan(Relation heapRelation,
 									 Relation indexRelation,
