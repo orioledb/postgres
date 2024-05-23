@@ -840,7 +840,8 @@ DefineIndex(Oid tableId,
 	}
 	accessMethodForm = (Form_pg_am) GETSTRUCT(tuple);
 
-	if (accessMethodForm->amtableam != rel->rd_rel->relam)
+	if (!partitioned &&
+		accessMethodForm->amtableam != rel->rd_rel->relam)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 				 errmsg("index \"%s\" with access method \"%s\" cannot be created "
