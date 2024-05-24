@@ -518,9 +518,6 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 					  TupleTableSlot *slot,
 					  TupleTableSlot *oldSlot,
 					  EState *estate,
-					  bool noDupErr,
-					  bool *specConflict,
-					  List *arbiterIndexes,
 					  bool onlySummarizing)
 {
 	List	   *result = NIL;
@@ -564,7 +561,6 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 	{
 		Relation	indexRelation = relationDescs[i];
 		IndexInfo  *indexInfo;
-		bool		applyNoDupErr;
 		IndexUniqueCheck checkUnique;
 		bool		satisfiesConstraint;
 		bool		new_valid = true;
@@ -629,12 +625,6 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 					   values,
 					   isnull);
 
-		/* Check whether to apply noDupErr to this index */
-		applyNoDupErr = noDupErr &&
-			(arbiterIndexes == NIL ||
-			 list_member_oid(arbiterIndexes,
-							 indexRelation->rd_index->indexrelid));
-
 		/*
 		 * The index AM does the actual insertion, plus uniqueness checking.
 		 *
@@ -650,8 +640,6 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 		 */
 		if (!indexRelation->rd_index->indisunique)
 			checkUnique = UNIQUE_CHECK_NO;
-		else if (applyNoDupErr)
-			checkUnique = UNIQUE_CHECK_PARTIAL;
 		else if (indexRelation->rd_index->indimmediate)
 			checkUnique = UNIQUE_CHECK_YES;
 		else
@@ -709,10 +697,10 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 			satisfiesConstraint =
 				index_update(indexRelation, /* index relation */
 							 new_valid,
-							 old_valid,
 							 values,	/* array of index Datums */
 							 isnull,	/* null flags */
 							 tupleid,	/* tid of heap tuple */
+							 old_valid,
 							 valuesOld,
 							 isnullOld,
 							 oldTupleid,
@@ -765,12 +753,7 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 			CEOUC_WAIT_MODE waitMode;
 			ItemPointer raw_tupleid = DatumGetItemPointer(tupleid);
 
-			if (applyNoDupErr)
-			{
-				violationOK = true;
-				waitMode = CEOUC_LIVELOCK_PREVENTING_WAIT;
-			}
-			else if (!indexRelation->rd_index->indimmediate)
+			if (!indexRelation->rd_index->indimmediate)
 			{
 				violationOK = true;
 				waitMode = CEOUC_NOWAIT;
@@ -800,8 +783,6 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 			 * speculative conflict, since that always requires a restart.
 			 */
 			result = lappend_oid(result, RelationGetRelid(indexRelation));
-			if (indexRelation->rd_index->indimmediate && specConflict)
-				*specConflict = true;
 		}
 	}
 

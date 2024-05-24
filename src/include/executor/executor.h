@@ -637,8 +637,6 @@ extern List *ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 								   TupleTableSlot *slot,
 								   TupleTableSlot *oldSlot,
 								   EState *estate,
-								   bool noDupErr,
-								   bool *specConflict, List *arbiterIndexes,
 								   bool onlySummarizing);
 extern void ExecDeleteIndexTuples(ResultRelInfo *resultRelInfo,
 								  TupleTableSlot *slot,

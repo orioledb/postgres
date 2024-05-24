@@ -2030,8 +2030,6 @@ ExecUpdateEpilogue(ModifyTableContext *context, UpdateContext *updateCxt,
 											   slot,
 											   oldSlot,
 											   context->estate,
-											   false,
-											   NULL, NIL,
 											   (updateCxt->updateIndexes == TU_Summarizing));
 	}
 

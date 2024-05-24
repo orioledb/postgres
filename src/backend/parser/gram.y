@@ -5760,8 +5760,8 @@ CreateAmStmt: CREATE ACCESS METHOD name TYPE_P am_type
 
 					n->amname = $4;
 					n->amtype = $6;
-					n->tableam_name = $7;
 					n->handler_name = $9;
+					n->tableam_name = $7;
 					$$ = (Node *) n;
 				}
 		;
