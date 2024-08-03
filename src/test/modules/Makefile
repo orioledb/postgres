@@ -4,6 +4,8 @@ subdir = src/test/modules
 top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
+# Subdirectories "xash" and "xtree" are excluded from the list, to prevent
+# `make check-world` from failing
 SUBDIRS = \
 		  brin \
 		  commit_ts \
@@ -40,7 +42,6 @@ SUBDIRS = \
 		  unsafe_tests \
 		  worker_spi \
 		  xid_wraparound
-
 
 ifeq ($(enable_injection_points),yes)
 SUBDIRS += injection_points gin

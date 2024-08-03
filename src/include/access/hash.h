@@ -273,8 +273,7 @@ typedef struct HashOptions
 } HashOptions;
 
 #define HashGetFillFactor(relation) \
-	(AssertMacro(relation->rd_rel->relkind == RELKIND_INDEX && \
-				 relation->rd_rel->relam == HASH_AM_OID), \
+	(AssertMacro(relation->rd_rel->relkind == RELKIND_INDEX), \
 	 (relation)->rd_options ? \
 	 ((HashOptions *) (relation)->rd_options)->fillfactor :	\
 	 HASH_DEFAULT_FILLFACTOR)

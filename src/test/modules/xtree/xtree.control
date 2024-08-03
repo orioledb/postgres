@@ -1,0 +1,5 @@
+# xtree extension
+comment = 'test copy of btree'
+default_version = '1.0'
+module_pathname = '$libdir/xtree'
+relocatable = true
