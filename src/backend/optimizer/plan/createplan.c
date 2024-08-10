@@ -163,6 +163,7 @@ static CustomScan *create_customscan_plan(PlannerInfo *root,
 static NestLoop *create_nestloop_plan(PlannerInfo *root, NestPath *best_path);
 static MergeJoin *create_mergejoin_plan(PlannerInfo *root, MergePath *best_path);
 static HashJoin *create_hashjoin_plan(PlannerInfo *root, HashPath *best_path);
+static Node *replace_nestloop_params(PlannerInfo *root, Node *expr);
 static Node *replace_nestloop_params_mutator(Node *node, PlannerInfo *root);
 static List *fix_indexorderby_references(PlannerInfo *root, IndexPath *index_path);
 static Node *fix_indexqual_clause(PlannerInfo *root,
@@ -4927,12 +4928,20 @@ create_hashjoin_plan(PlannerInfo *root,
  * root->curOuterRels are replaced by Params, and entries are added to
  * root->curOuterParams if not already present.
  */
-Node *
+static Node *
 replace_nestloop_params(PlannerInfo *root, Node *expr)
 {
 	/* No setup needed for tree walk, so away we go */
 	return replace_nestloop_params_mutator(expr, root);
 }
+
+Node *
+replace_nestloop_params_compat(PlannerInfo *root, Node *expr)
+{
+	/* No setup needed for tree walk, so away we go */
+	return replace_nestloop_params_mutator(expr, root);
+}
+
 
 static Node *
 replace_nestloop_params_mutator(Node *node, PlannerInfo *root)
