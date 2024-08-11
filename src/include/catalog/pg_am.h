@@ -38,9 +38,6 @@ CATALOG(pg_am,2601,AccessMethodRelationId)
 
 	/* see AMTYPE_xxx constants below */
 	char		amtype;
-
-	/* OID of table AM for which it is implemented if AMTYPE_INDEX, else 0 */
-	Oid			amtableam BKI_DEFAULT(0) BKI_LOOKUP_OPT(pg_am);
 } FormData_pg_am;
 
 /* ----------------
