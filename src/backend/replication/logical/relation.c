@@ -876,7 +876,7 @@ IsIndexUsableForReplicaIdentityFull(Relation idxrel, AttrMap *attrmap)
 	 * The given index access method must implement "amgettuple", which will
 	 * be used later to fetch the tuples.  See RelationFindReplTupleByIndex().
 	 */
-	if (GetIndexAmRoutineByAmId(idxrel->rd_rel->relam, false)->amgettuple == NULL)
+	if (GetIndexAmRoutineByAmId(InvalidOid, idxrel->rd_rel->relam, false)->amgettuple == NULL)
 		return false;
 
 	return true;
