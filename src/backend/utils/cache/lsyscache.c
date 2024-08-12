@@ -232,7 +232,8 @@ get_opmethod_canorder(Oid amoid)
 		default:
 			{
 				bool		result;
-				IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(amoid, false);
+				IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(InvalidOid,
+																	amoid, false);
 
 				result = amroutine->amcanorder;
 				pfree(amroutine);
@@ -790,7 +791,9 @@ get_op_index_interpretation(Oid opno)
 			{
 				HeapTuple	op_tuple = &catlist->members[i]->tuple;
 				Form_pg_amop op_form = (Form_pg_amop) GETSTRUCT(op_tuple);
-				IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(op_form->amopmethod, false);
+				IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(InvalidOid,
+																	op_form->amopmethod,
+																	false);
 				CompareType cmptype;
 
 				/* must be ordering index */
@@ -871,7 +874,9 @@ equality_ops_are_compatible(Oid opno1, Oid opno2)
 		 */
 		if (op_in_opfamily(opno2, op_form->amopfamily))
 		{
-			IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(op_form->amopmethod, false);
+			IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(InvalidOid,
+																op_form->amopmethod,
+																false);
 
 			if (amroutine->amconsistentequality)
 			{
@@ -927,7 +932,8 @@ comparison_ops_are_compatible(Oid opno1, Oid opno2)
 		 */
 		if (op_in_opfamily(opno2, op_form->amopfamily))
 		{
-			IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(op_form->amopmethod, false);
+			IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(InvalidOid,
+																op_form->amopmethod, false);
 
 			if (amroutine->amconsistentordering)
 			{
