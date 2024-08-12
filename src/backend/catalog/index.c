@@ -292,7 +292,7 @@ ConstructTupleDescriptor(Relation heapRelation,
 	int			i;
 
 	/* We need access to the index AM's API struct */
-	amroutine = GetIndexAmRoutineByAmId(accessMethodId, false);
+	amroutine = GetIndexAmRoutineByAmId(InvalidOid, accessMethodId, false);
 
 	/* ... and to the table's tuple descriptor */
 	heapTupDesc = RelationGetDescr(heapRelation);
