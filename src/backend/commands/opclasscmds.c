@@ -42,6 +42,7 @@
 #include "parser/parse_oper.h"
 #include "parser/parse_type.h"
 #include "utils/acl.h"
+#include "postgres_ext.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
@@ -377,7 +378,7 @@ DefineOpClass(CreateOpClassStmt *stmt)
 
 	amform = (Form_pg_am) GETSTRUCT(tup);
 	amoid = amform->oid;
-	amroutine = GetIndexAmRoutineByAmId(amoid, false);
+	amroutine = GetIndexAmRoutineByAmId(InvalidOid, amoid, false);
 	ReleaseSysCache(tup);
 
 	maxOpNumber = amroutine->amstrategies;
@@ -835,7 +836,7 @@ AlterOpFamily(AlterOpFamilyStmt *stmt)
 
 	amform = (Form_pg_am) GETSTRUCT(tup);
 	amoid = amform->oid;
-	amroutine = GetIndexAmRoutineByAmId(amoid, false);
+	amroutine = GetIndexAmRoutineByAmId(InvalidOid, amoid, false);
 	ReleaseSysCache(tup);
 
 	maxOpNumber = amroutine->amstrategies;
@@ -882,7 +883,7 @@ AlterOpFamilyAdd(AlterOpFamilyStmt *stmt, Oid amoid, Oid opfamilyoid,
 				 int maxOpNumber, int maxProcNumber, int optsProcNumber,
 				 List *items)
 {
-	IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(amoid, false);
+	IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(InvalidOid, amoid, false);
 	List	   *operators;		/* OpFamilyMember list for operators */
 	List	   *procedures;		/* OpFamilyMember list for support procs */
 	ListCell   *l;
@@ -1165,7 +1166,7 @@ assignOperTypes(OpFamilyMember *member, Oid amoid, Oid typeoid)
 		 * the family has been created but not yet populated with the required
 		 * operators.)
 		 */
-		IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(amoid, false);
+		IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(InvalidOid, amoid, false);
 
 		if (!amroutine->amcanorderbyop)
 			ereport(ERROR,
@@ -1249,7 +1250,7 @@ assignProcTypes(OpFamilyMember *member, Oid amoid, Oid typeoid,
 	 * a 1-arg proc returning int4, while proc 2 must be a 2-arg proc
 	 * returning int8. Otherwise we don't know.
 	 */
-	else if (GetIndexAmRoutineByAmId(amoid, false)->amcanorder)
+	else if (GetIndexAmRoutineByAmId(InvalidOid, amoid, false)->amcanorder)
 	{
 		if (member->number == BTORDER_PROC)
 		{
@@ -1357,7 +1358,7 @@ assignProcTypes(OpFamilyMember *member, Oid amoid, Oid typeoid,
 						 errmsg("btree skip support functions must not be cross-type")));
 		}
 	}
-	else if (GetIndexAmRoutineByAmId(amoid, false)->amcanhash)
+	else if (GetIndexAmRoutineByAmId(InvalidOid, amoid, false)->amcanhash)
 	{
 		if (member->number == HASHSTANDARD_PROC)
 		{
