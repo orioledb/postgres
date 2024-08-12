@@ -214,7 +214,7 @@ CheckIndexCompatible(Oid oldId,
 						accessMethodName)));
 	accessMethodForm = (Form_pg_am) GETSTRUCT(tuple);
 	accessMethodId = accessMethodForm->oid;
-	amRoutine = GetIndexAmRoutine(accessMethodForm->amhandler);
+	amRoutine = GetIndexAmRoutine(oldId, accessMethodForm->amhandler);
 	ReleaseSysCache(tuple);
 
 	amcanorder = amRoutine->amcanorder;
@@ -838,7 +838,7 @@ DefineIndex(Oid relationId,
 	}
 	accessMethodForm = (Form_pg_am) GETSTRUCT(tuple);
 	accessMethodId = accessMethodForm->oid;
-	amRoutine = GetIndexAmRoutine(accessMethodForm->amhandler);
+	amRoutine = GetIndexAmRoutineWithTableAM(rel->rd_rel->relam, accessMethodForm->amhandler);
 
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_ACCESS_METHOD_OID,
 								 accessMethodId);
