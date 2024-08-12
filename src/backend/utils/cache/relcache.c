@@ -1413,7 +1413,7 @@ InitIndexAmRoutine(Relation relation)
 	 * Call the amhandler in current, short-lived memory context, just in case
 	 * it leaks anything (it probably won't, but let's be paranoid).
 	 */
-	tmp = GetIndexAmRoutine(relation->rd_amhandler);
+	tmp = GetIndexAmRoutine(relation->rd_id, relation->rd_amhandler);
 
 	/* OK, now transfer the data into relation's rd_indexcxt. */
 	cached = (IndexAmRoutine *) MemoryContextAlloc(relation->rd_indexcxt,
