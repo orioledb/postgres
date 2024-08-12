@@ -16,24 +16,26 @@
 #include "access/amapi.h"
 #include "access/htup_details.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_class.h"
+#include "catalog/pg_index.h"
 #include "catalog/pg_opclass.h"
 #include "utils/fmgrprotos.h"
 #include "utils/syscache.h"
 
+IndexAMRoutineHookType IndexAMRoutineHook = NULL;
 
-/*
- * GetIndexAmRoutine - call the specified access method handler routine to get
- * its IndexAmRoutine struct, which will be palloc'd in the caller's context.
- *
- * Note that if the amhandler function is built-in, this will not involve
- * any catalog access.  It's therefore safe to use this while bootstrapping
- * indexes for the system catalogs.  relcache.c relies on that.
- */
 IndexAmRoutine *
-GetIndexAmRoutine(Oid amhandler)
+GetIndexAmRoutineWithTableAM(Oid tamoid, Oid amhandler)
 {
 	Datum		datum;
 	IndexAmRoutine *routine;
+
+	if (IndexAMRoutineHook != NULL)
+	{
+		routine = IndexAMRoutineHook(tamoid, amhandler);
+		if (routine)
+			return routine;
+	}
 
 	datum = OidFunctionCall0(amhandler);
 	routine = (IndexAmRoutine *) DatumGetPointer(datum);
@@ -45,6 +47,47 @@ GetIndexAmRoutine(Oid amhandler)
 	return routine;
 }
 
+
+/*
+ * GetIndexAmRoutine - call the specified access method handler routine to get
+ * its IndexAmRoutine struct, which will be palloc'd in the caller's context.
+ *
+ * Note that if the amhandler function is built-in, this will not involve
+ * any catalog access.  It's therefore safe to use this while bootstrapping
+ * indexes for the system catalogs.  relcache.c relies on that.
+ */
+IndexAmRoutine *
+GetIndexAmRoutine(Oid indoid, Oid amhandler)
+{
+	HeapTuple	ht_idx;
+	HeapTuple	ht_tblrel;
+	Form_pg_index idxrec;
+	Form_pg_class tblrelrec;
+	Oid			indrelid;
+	Oid			tamoid;
+
+	if (!OidIsValid((indoid)) || indoid < FirstNormalObjectId)
+		return GetIndexAmRoutineWithTableAM(HEAP_TABLE_AM_OID, amhandler);
+
+	ht_idx = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indoid));
+	if (!HeapTupleIsValid(ht_idx))
+		elog(ERROR, "cache lookup failed for index %u", indoid);
+	idxrec = (Form_pg_index) GETSTRUCT(ht_idx);
+	Assert(indoid == idxrec->indexrelid);
+	indrelid = idxrec->indrelid;
+
+	ht_tblrel = SearchSysCache1(RELOID, ObjectIdGetDatum(indrelid));
+	if (!HeapTupleIsValid(ht_tblrel))
+		elog(ERROR, "cache lookup failed for relation %u", indrelid);
+	tblrelrec = (Form_pg_class) GETSTRUCT(ht_tblrel);
+	tamoid = tblrelrec->relam;
+
+	ReleaseSysCache(ht_tblrel);
+	ReleaseSysCache(ht_idx);
+
+	return GetIndexAmRoutineWithTableAM(tamoid, amhandler);
+}
+
 /*
  * GetIndexAmRoutineByAmId - look up the handler of the index access method
  * with the given OID, and get its IndexAmRoutine struct.
@@ -53,7 +96,7 @@ GetIndexAmRoutine(Oid amhandler)
  * noerror is true, else throws error.
  */
 IndexAmRoutine *
-GetIndexAmRoutineByAmId(Oid amoid, bool noerror)
+GetIndexAmRoutineByAmId(Oid indoid, Oid amoid, bool noerror)
 {
 	HeapTuple	tuple;
 	Form_pg_am	amform;
@@ -103,7 +146,7 @@ GetIndexAmRoutineByAmId(Oid amoid, bool noerror)
 	ReleaseSysCache(tuple);
 
 	/* And finally, call the handler function to get the API struct. */
-	return GetIndexAmRoutine(amhandler);
+	return GetIndexAmRoutine(indoid, amhandler);
 }
 
 
@@ -129,7 +172,7 @@ amvalidate(PG_FUNCTION_ARGS)
 
 	ReleaseSysCache(classtup);
 
-	amroutine = GetIndexAmRoutineByAmId(amoid, false);
+	amroutine = GetIndexAmRoutineByAmId(InvalidOid, amoid, false);
 
 	if (amroutine->amvalidate == NULL)
 		elog(ERROR, "function amvalidate is not defined for index access method %u",
