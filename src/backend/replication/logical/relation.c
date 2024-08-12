@@ -834,7 +834,7 @@ IsIndexUsableForReplicaIdentityFull(IndexInfo *indexInfo, AttrMap *attrmap)
 		IndexAmRoutine *amroutine;
 
 		/* The given index access method must implement amgettuple. */
-		amroutine = GetIndexAmRoutineByAmId(indexInfo->ii_Am, false);
+		amroutine = GetIndexAmRoutineByAmId(InvalidOid, indexInfo->ii_Am, false);
 		Assert(amroutine->amgettuple != NULL);
 	}
 #endif
