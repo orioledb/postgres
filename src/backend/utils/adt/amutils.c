@@ -195,7 +195,7 @@ indexam_property(FunctionCallInfo fcinfo,
 	/*
 	 * Get AM information.  If we don't have a valid AM OID, return NULL.
 	 */
-	routine = GetIndexAmRoutineByAmId(amoid, true);
+	routine = GetIndexAmRoutineByAmId(index_oid, amoid, true);
 	if (routine == NULL)
 		PG_RETURN_NULL();
 
@@ -455,7 +455,7 @@ pg_indexam_progress_phasename(PG_FUNCTION_ARGS)
 	IndexAmRoutine *routine;
 	char	   *name;
 
-	routine = GetIndexAmRoutineByAmId(amoid, true);
+	routine = GetIndexAmRoutineByAmId(InvalidOid, amoid, true);
 	if (routine == NULL || !routine->ambuildphasename)
 		PG_RETURN_NULL();
 

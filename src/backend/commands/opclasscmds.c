@@ -43,6 +43,7 @@
 #include "parser/parse_func.h"
 #include "parser/parse_oper.h"
 #include "parser/parse_type.h"
+#include "postgres_ext.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
@@ -377,7 +378,7 @@ DefineOpClass(CreateOpClassStmt *stmt)
 
 	amform = (Form_pg_am) GETSTRUCT(tup);
 	amoid = amform->oid;
-	amroutine = GetIndexAmRoutineByAmId(amoid, false);
+	amroutine = GetIndexAmRoutineByAmId(InvalidOid, amoid, false);
 	ReleaseSysCache(tup);
 
 	maxOpNumber = amroutine->amstrategies;
@@ -835,7 +836,7 @@ AlterOpFamily(AlterOpFamilyStmt *stmt)
 
 	amform = (Form_pg_am) GETSTRUCT(tup);
 	amoid = amform->oid;
-	amroutine = GetIndexAmRoutineByAmId(amoid, false);
+	amroutine = GetIndexAmRoutineByAmId(InvalidOid, amoid, false);
 	ReleaseSysCache(tup);
 
 	maxOpNumber = amroutine->amstrategies;
@@ -882,7 +883,7 @@ AlterOpFamilyAdd(AlterOpFamilyStmt *stmt, Oid amoid, Oid opfamilyoid,
 				 int maxOpNumber, int maxProcNumber, int optsProcNumber,
 				 List *items)
 {
-	IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(amoid, false);
+	IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(InvalidOid, amoid, false);
 	List	   *operators;		/* OpFamilyMember list for operators */
 	List	   *procedures;		/* OpFamilyMember list for support procs */
 	ListCell   *l;
@@ -1165,7 +1166,7 @@ assignOperTypes(OpFamilyMember *member, Oid amoid, Oid typeoid)
 		 * the family has been created but not yet populated with the required
 		 * operators.)
 		 */
-		IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(amoid, false);
+		IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(InvalidOid, amoid, false);
 
 		if (!amroutine->amcanorderbyop)
 			ereport(ERROR,
