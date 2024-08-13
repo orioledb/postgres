@@ -40,6 +40,7 @@ typedef struct BulkInsertStateData *BulkInsertState;
 struct TupleTableSlot;
 
 #define MaxLockTupleMode	LockTupleExclusive
+#define ItemPointerGetDatum(X)       PointerGetDatum(X)
 
 /*
  * Descriptor for heap table scans.

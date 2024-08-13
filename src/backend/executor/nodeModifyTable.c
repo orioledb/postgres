@@ -2009,7 +2009,7 @@ ExecUpdateEpilogue(ModifyTableContext *context, UpdateContext *updateCxt,
 	List	   *recheckIndexes = NIL;
 
 	/* insert index entries for tuple if necessary */
-	if (resultRelInfo->ri_NumIndices > 0 && (updateCxt->updateIndexes != TU_None))
+	if (resultRelInfo->ri_NumIndices > 0 && updateCxt->updateIndexes)
 	{
 		recheckIndexes = ExecUpdateIndexTuples(resultRelInfo,
 											   slot,
