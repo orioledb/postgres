@@ -158,9 +158,7 @@ static bool ExecMergeMatched(ModifyTableContext *context,
 							 bool canSetTag);
 static void ExecMergeNotMatched(ModifyTableContext *context,
 								ResultRelInfo *resultRelInfo,
-								Datum tupleid,
 								bool canSetTag);
-
 
 /*
  * Verify that the tuples to be produced by INSERT match the
@@ -2491,7 +2489,7 @@ ExecMerge(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	 * matches.
 	 */
 	if (!matched)
-		ExecMergeNotMatched(context, resultRelInfo, tupleid, canSetTag);
+		ExecMergeNotMatched(context, resultRelInfo, canSetTag);
 
 	/* No RETURNING support yet */
 	return NULL;
@@ -2883,7 +2881,7 @@ lmerge_matched:;
  */
 static void
 ExecMergeNotMatched(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
-					Datum tupleid, bool canSetTag)
+					bool canSetTag)
 {
 	ModifyTableState *mtstate = context->mtstate;
 	ExprContext *econtext = mtstate->ps.ps_ExprContext;
