@@ -2940,7 +2940,7 @@ lmerge_matched:
 								 * we need to switch to the NOT MATCHED BY
 								 * SOURCE case.
 								 */
-								if (!table_tuple_fetch_row_version(resultRelationDesc,
+								if (!isNull && !table_tuple_fetch_row_version(resultRelationDesc,
 																   tupleid,
 																   SnapshotAny,
 																   resultRelInfo->ri_oldTupleSlot))
