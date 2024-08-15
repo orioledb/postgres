@@ -164,7 +164,6 @@ static TupleTableSlot *ExecMergeMatched(ModifyTableContext *context,
 										bool *matched);
 static TupleTableSlot *ExecMergeNotMatched(ModifyTableContext *context,
 										   ResultRelInfo *resultRelInfo,
-										   Datum tupleid,
 										   bool canSetTag);
 
 /*
@@ -2539,7 +2538,7 @@ ExecMerge(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 		 * Otherwise, just process the action now.
 		 */
 		if (rslot == NULL)
-			rslot = ExecMergeNotMatched(context, resultRelInfo, tupleid, canSetTag);
+			rslot = ExecMergeNotMatched(context, resultRelInfo, canSetTag);
 		else
 			context->mtstate->mt_merge_pending_not_matched = context->planSlot;
 	}
@@ -3063,7 +3062,7 @@ lmerge_matched:
  */
 static TupleTableSlot *
 ExecMergeNotMatched(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
-					Datum tupleid, bool canSetTag)
+					bool canSetTag)
 {
 	ModifyTableState *mtstate = context->mtstate;
 	ExprContext *econtext = mtstate->ps.ps_ExprContext;
@@ -3581,7 +3580,7 @@ ExecModifyTable(PlanState *pstate)
 			context.planSlot = node->mt_merge_pending_not_matched;
 
 			slot = ExecMergeNotMatched(&context, node->resultRelInfo,
-									   0, node->canSetTag);
+									   node->canSetTag);
 
 			/* Clear the pending action */
 			node->mt_merge_pending_not_matched = NULL;
