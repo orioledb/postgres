@@ -60,6 +60,7 @@ int			constraint_exclusion = CONSTRAINT_EXCLUSION_PARTITION;
 
 /* Hook for plugins to get control in get_relation_info() */
 get_relation_info_hook_type get_relation_info_hook = NULL;
+skip_tree_height_hook_type skip_tree_height_hook = NULL;
 
 
 static void get_relation_foreign_keys(PlannerInfo *root, RelOptInfo *rel,
@@ -457,7 +458,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 						info->tuples = rel->tuples;
 				}
 
-				if (info->relam == BTREE_AM_OID)
+				if (info->relam == BTREE_AM_OID && (!skip_tree_height_hook || !skip_tree_height_hook(indexRelation)))
 				{
 					/*
 					 * For btrees, get tree height while we have the index
