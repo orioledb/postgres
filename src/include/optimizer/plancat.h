@@ -24,6 +24,9 @@ typedef void (*get_relation_info_hook_type) (PlannerInfo *root,
 											 RelOptInfo *rel);
 extern PGDLLIMPORT get_relation_info_hook_type get_relation_info_hook;
 
+typedef bool (*skip_tree_height_hook_type) (Relation indexRelation);
+extern PGDLLIMPORT skip_tree_height_hook_type skip_tree_height_hook;
+
 
 extern void get_relation_info(PlannerInfo *root, Oid relationObjectId,
 							  bool inhparent, RelOptInfo *rel);
