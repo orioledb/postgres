@@ -48,8 +48,10 @@
 #include "access/xloginsert.h"
 #include "catalog/index.h"
 #include "commands/progress.h"
+#include "executor/executor.h"
 #include "executor/instrument.h"
 #include "miscadmin.h"
+#include "pg_trace.h"
 #include "pgstat.h"
 #include "storage/bulk_write.h"
 #include "tcop/tcopprot.h"		/* pgrminclude ignore */
@@ -1975,4 +1977,111 @@ _treeb_parallel_scan_and_sort(TreebSpool *treebspool, TreebSpool *treebspool2,
 	tuplesort_end(treebspool->sortstate);
 	if (treebspool2)
 		tuplesort_end(treebspool2->sortstate);
+}
+
+Tuplesortstate *
+tuplesort_begin_cluster_treeb(TupleDesc tupDesc,
+							  Relation indexRel,
+							  int workMem,
+							  SortCoordinate coordinate, int sortopt)
+{
+	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
+												   sortopt);
+	TuplesortPublic *base = TuplesortstateGetPublic(state);
+	TreebScanInsert indexScanKey;
+	MemoryContext oldcontext;
+	TuplesortClusterArg *arg;
+	int			i;
+
+	oldcontext = MemoryContextSwitchTo(base->maincontext);
+	arg = (TuplesortClusterArg *) palloc0(sizeof(TuplesortClusterArg));
+
+#ifdef TRACE_SORT
+	if (trace_sort)
+		elog(LOG,
+			 "begin tuple sort: nkeys = %d, workMem = %d, randomAccess = %c",
+			 RelationGetNumberOfAttributes(indexRel),
+			 workMem, sortopt & TUPLESORT_RANDOMACCESS ? 't' : 'f');
+#endif
+
+	base->nKeys = IndexRelationGetNumberOfKeyAttributes(indexRel);
+
+	TRACE_POSTGRESQL_SORT_START(CLUSTER_SORT,
+								false,	/* no unique check */
+								base->nKeys,
+								workMem,
+								sortopt & TUPLESORT_RANDOMACCESS,
+								PARALLEL_SORT(coordinate));
+
+	base->removeabbrev = removeabbrev_cluster;
+	base->comparetup = comparetup_cluster;
+	base->comparetup_tiebreak = comparetup_cluster_tiebreak;
+	base->writetup = writetup_cluster;
+	base->readtup = readtup_cluster;
+	base->freestate = freestate_cluster;
+	base->arg = arg;
+
+	arg->indexInfo = BuildIndexInfo(indexRel);
+
+	/*
+	 * If we don't have a simple leading attribute, we don't currently
+	 * initialize datum1, so disable optimizations that require it.
+	 */
+	if (arg->indexInfo->ii_IndexAttrNumbers[0] == 0)
+		base->haveDatum1 = false;
+	else
+		base->haveDatum1 = true;
+
+	arg->tupDesc = tupDesc;		/* assume we need not copy tupDesc */
+
+	indexScanKey = _treeb_mkscankey(indexRel, NULL);
+
+	if (arg->indexInfo->ii_Expressions != NULL)
+	{
+		TupleTableSlot *slot;
+		ExprContext *econtext;
+
+		/*
+		 * We will need to use FormIndexDatum to evaluate the index
+		 * expressions.  To do that, we need an EState, as well as a
+		 * TupleTableSlot to put the table tuples into.  The econtext's
+		 * scantuple has to point to that slot, too.
+		 */
+		arg->estate = CreateExecutorState();
+		slot = MakeSingleTupleTableSlot(tupDesc, &TTSOpsHeapTuple);
+		econtext = GetPerTupleExprContext(arg->estate);
+		econtext->ecxt_scantuple = slot;
+	}
+
+	/* Prepare SortSupport data for each column */
+	base->sortKeys = (SortSupport) palloc0(base->nKeys *
+										   sizeof(SortSupportData));
+
+	for (i = 0; i < base->nKeys; i++)
+	{
+		SortSupport sortKey = base->sortKeys + i;
+		ScanKey		scanKey = indexScanKey->scankeys + i;
+		int16		strategy;
+
+		sortKey->ssup_cxt = CurrentMemoryContext;
+		sortKey->ssup_collation = scanKey->sk_collation;
+		sortKey->ssup_nulls_first =
+			(scanKey->sk_flags & SK_TREEB_NULLS_FIRST) != 0;
+		sortKey->ssup_attno = scanKey->sk_attno;
+		/* Convey if abbreviation optimization is applicable in principle */
+		sortKey->abbreviate = (i == 0 && base->haveDatum1);
+
+		Assert(sortKey->ssup_attno != 0);
+
+		strategy = (scanKey->sk_flags & SK_TREEB_DESC) != 0 ?
+			TreebGreaterStrategyNumber : TreebLessStrategyNumber;
+
+		PrepareSortSupportFromIndexRel(indexRel, strategy, sortKey);
+	}
+
+	pfree(indexScanKey);
+
+	MemoryContextSwitchTo(oldcontext);
+
+	return state;
 }

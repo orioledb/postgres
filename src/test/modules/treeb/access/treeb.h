@@ -1349,7 +1349,11 @@ extern void treebadjustmembers(Oid opfamilyoid,
 extern IndexBuildResult *treebbuild(Relation heap, Relation index,
 								 struct IndexInfo *indexInfo);
 extern void _treeb_parallel_build_main(dsm_segment *seg, shm_toc *toc);
-
+extern Tuplesortstate *tuplesort_begin_cluster_treeb(TupleDesc tupDesc,
+													 Relation indexRel,
+													 int workMem,
+													 SortCoordinate coordinate,
+													 int sortopt);
 
 
 #define TreebVacuumLock BtreeVacuumLock

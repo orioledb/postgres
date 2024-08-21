@@ -156,6 +156,7 @@ treeb_indexam_handler(PG_FUNCTION_ARGS)
 	amroutine->ammarkpos = treebmarkpos;
 	amroutine->amrestrpos = treebrestrpos;
 	amroutine->amestimateparallelscan = treebestimateparallelscan;
+	amroutine->ambegintscluster = tuplesort_begin_cluster_treeb;
 	amroutine->aminitparallelscan = treebinitparallelscan;
 	amroutine->amparallelrescan = treebparallelrescan;
 
