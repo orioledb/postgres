@@ -279,6 +279,7 @@ brinhandler(PG_FUNCTION_ARGS)
 	amroutine->amvacuumcleanup = brinvacuumcleanup;
 	amroutine->amcanreturn = NULL;
 	amroutine->amcostestimate = brincostestimate;
+	amroutine->amgetrootheight = NULL;
 	amroutine->amoptions = brinoptions;
 	amroutine->amproperty = NULL;
 	amroutine->ambuildphasename = NULL;

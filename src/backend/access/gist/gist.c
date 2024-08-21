@@ -91,6 +91,7 @@ gisthandler(PG_FUNCTION_ARGS)
 	amroutine->amvacuumcleanup = gistvacuumcleanup;
 	amroutine->amcanreturn = gistcanreturn;
 	amroutine->amcostestimate = gistcostestimate;
+	amroutine->amgetrootheight = NULL;
 	amroutine->amoptions = gistoptions;
 	amroutine->amproperty = gistproperty;
 	amroutine->ambuildphasename = NULL;

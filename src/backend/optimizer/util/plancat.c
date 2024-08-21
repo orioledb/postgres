@@ -329,6 +329,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 				info->amcanmarkpos = (amroutine->ammarkpos != NULL &&
 									  amroutine->amrestrpos != NULL);
 				info->amcostestimate = amroutine->amcostestimate;
+				info->amgetrootheight = amroutine->amgetrootheight;
 				Assert(info->amcostestimate != NULL);
 
 				/* Fetch index opclass options */
@@ -485,13 +486,14 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 						info->tuples = rel->tuples;
 				}
 
-				if (info->relam == BTREE_AM_OID)
+				if (info->amgetrootheight)
 				{
+					amgetrootheight_function func = (amgetrootheight_function) info->amgetrootheight;
+
 					/*
-					 * For btrees, get tree height while we have the index
-					 * open
+					 * Get tree height while we have the index open
 					 */
-					info->tree_height = _bt_getrootheight(indexRelation);
+					info->tree_height = func(indexRelation);
 				}
 				else
 				{

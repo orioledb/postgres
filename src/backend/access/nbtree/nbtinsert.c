@@ -1420,10 +1420,10 @@ _bt_insertonpg(Relation rel,
 		 * its buffer lock, then cache it now.  Check the height of the tree
 		 * first, though.  We don't go for the optimization with small
 		 * indexes.  Defer final check to this point to ensure that we don't
-		 * call _bt_getrootheight while holding a buffer lock.
+		 * call btgetrootheight while holding a buffer lock.
 		 */
 		if (BlockNumberIsValid(blockcache) &&
-			_bt_getrootheight(rel) >= BTREE_FASTPATH_MIN_LEVEL)
+			btgetrootheight(rel) >= BTREE_FASTPATH_MIN_LEVEL)
 			RelationSetTargetBlock(rel, blockcache);
 	}
 

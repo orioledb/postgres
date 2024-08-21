@@ -1168,6 +1168,7 @@ extern bool btinsert(Relation rel, Datum *values, bool *isnull,
 					 struct IndexInfo *indexInfo);
 extern IndexScanDesc btbeginscan(Relation rel, int nkeys, int norderbys);
 extern Size btestimateparallelscan(int nkeys, int norderbys);
+extern int	btgetrootheight(Relation rel);
 extern void btinitparallelscan(void *target);
 extern bool btgettuple(IndexScanDesc scan, ScanDirection dir);
 extern int64 btgetbitmap(IndexScanDesc scan, TIDBitmap *tbm);
@@ -1240,7 +1241,6 @@ extern void _bt_set_cleanup_info(Relation rel, BlockNumber num_delpages);
 extern void _bt_upgrademetapage(Page page);
 extern Buffer _bt_getroot(Relation rel, Relation heaprel, int access);
 extern Buffer _bt_gettrueroot(Relation rel);
-extern int	_bt_getrootheight(Relation rel);
 extern void _bt_metaversion(Relation rel, bool *heapkeyspace,
 							bool *allequalimage);
 extern void _bt_checkpage(Relation rel, Buffer buf);

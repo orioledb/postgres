@@ -661,7 +661,7 @@ _bt_gettrueroot(Relation rel)
 }
 
 /*
- *	_bt_getrootheight() -- Get the height of the btree search tree.
+ *	btgetrootheight() -- Get the height of the btree search tree.
  *
  *		We return the level (counting from zero) of the current fast root.
  *		This represents the number of tree levels we'd have to descend through
@@ -672,7 +672,7 @@ _bt_gettrueroot(Relation rel)
  *		about updating previously cached data.
  */
 int
-_bt_getrootheight(Relation rel)
+btgetrootheight(Relation rel)
 {
 	BTMetaPageData *metad;
 

@@ -59,6 +59,7 @@ xash_indexam_handler(PG_FUNCTION_ARGS)
 	amroutine->amvacuumcleanup = hashvacuumcleanup;
 	amroutine->amcanreturn = NULL;
 	amroutine->amcostestimate = hashcostestimate;
+	amroutine->amgetrootheight = NULL;
 	amroutine->amoptions = hashoptions;
 	amroutine->amproperty = NULL;
 	amroutine->ambuildphasename = NULL;
@@ -71,6 +72,7 @@ xash_indexam_handler(PG_FUNCTION_ARGS)
 	amroutine->amendscan = hashendscan;
 	amroutine->ammarkpos = NULL;
 	amroutine->amrestrpos = NULL;
+	amroutine->amgetrootheight = NULL;
 	amroutine->amestimateparallelscan = NULL;
 	amroutine->aminitparallelscan = NULL;
 	amroutine->amparallelrescan = NULL;
