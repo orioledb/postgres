@@ -1256,6 +1256,7 @@ extern OffsetNumber _treeb_findsplitloc(Relation rel, Page origpage,
 /*
  * prototypes for functions in treebpage.c
  */
+extern int	treebgetrootheight(Relation rel);
 extern void _treeb_initmetapage(Page page, BlockNumber rootbknum, uint32 level,
 							 bool allequalimage);
 extern bool _treeb_vacuum_needs_cleanup(Relation rel);
@@ -1263,7 +1264,6 @@ extern void _treeb_set_cleanup_info(Relation rel, BlockNumber num_delpages);
 extern void _treeb_upgrademetapage(Page page);
 extern Buffer _treeb_getroot(Relation rel, Relation heaprel, int access);
 extern Buffer _treeb_gettrueroot(Relation rel);
-extern int	_treeb_getrootheight(Relation rel);
 extern void _treeb_metaversion(Relation rel, bool *heapkeyspace,
 							bool *allequalimage);
 extern void _treeb_checkpage(Relation rel, Buffer buf);

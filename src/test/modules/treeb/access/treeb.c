@@ -142,6 +142,7 @@ treeb_indexam_handler(PG_FUNCTION_ARGS)
 	amroutine->amvacuumcleanup = treebvacuumcleanup;
 	amroutine->amcanreturn = treebcanreturn;
 	amroutine->amcostestimate = treebcostestimate;
+	amroutine->amgetrootheight = treebgetrootheight;
 	amroutine->amoptions = treeboptions;
 	amroutine->amproperty = treebproperty;
 	amroutine->ambuildphasename = treebbuildphasename;

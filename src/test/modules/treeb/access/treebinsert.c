@@ -1421,10 +1421,10 @@ _treeb_insertonpg(Relation rel,
 		 * its buffer lock, then cache it now.  Check the height of the tree
 		 * first, though.  We don't go for the optimization with small
 		 * indexes.  Defer final check to this point to ensure that we don't
-		 * call _treeb_getrootheight while holding a buffer lock.
+		 * call treebgetrootheight while holding a buffer lock.
 		 */
 		if (BlockNumberIsValid(blockcache) &&
-			_treeb_getrootheight(rel) >= TREEB_FASTPATH_MIN_LEVEL)
+			treebgetrootheight(rel) >= TREEB_FASTPATH_MIN_LEVEL)
 			RelationSetTargetBlock(rel, blockcache);
 	}
 

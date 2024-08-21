@@ -661,7 +661,7 @@ _treeb_gettrueroot(Relation rel)
 }
 
 /*
- *	_treeb_getrootheight() -- Get the height of the treeb search tree.
+ *	treebgetrootheight() -- Get the height of the treeb search tree.
  *
  *		We return the level (counting from zero) of the current fast root.
  *		This represents the number of tree levels we'd have to descend through
@@ -672,7 +672,7 @@ _treeb_gettrueroot(Relation rel)
  *		about updating previously cached data.
  */
 int
-_treeb_getrootheight(Relation rel)
+treebgetrootheight(Relation rel)
 {
 	TreebMetaPageData *metad;
 
