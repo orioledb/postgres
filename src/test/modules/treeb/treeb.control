@@ -1,0 +1,5 @@
+# treeb extension
+comment = 'test copy of btree'
+default_version = '1.0'
+module_pathname = '$libdir/treeb'
+relocatable = true
