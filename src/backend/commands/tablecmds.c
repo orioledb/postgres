@@ -9827,9 +9827,9 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		 * strategy number is equality.  (Is it reasonable to insist that
 		 * every such index AM use btree's number for equality?)
 		 */
-		if (amid != BTREE_AM_OID)
-			elog(ERROR, "only b-tree indexes are supported for foreign keys");
-		eqstrategy = BTEqualStrategyNumber;
+		if (!IndexAmCanUnique(amid))
+			elog(ERROR, "only unique indexes are supported for foreign keys");
+		eqstrategy = rctype_get_strategy(amid, ROWCOMPARE_EQ, false);
 
 		/*
 		 * There had better be a primary equality operator for the index.
