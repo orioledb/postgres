@@ -253,8 +253,6 @@ tuplesort_begin_cluster(TupleDesc tupDesc,
 	TuplesortClusterArg *arg;
 	int			i;
 
-	Assert(indexRel->rd_rel->relam == BTREE_AM_OID);
-
 	oldcontext = MemoryContextSwitchTo(base->maincontext);
 	arg = (TuplesortClusterArg *) palloc0(sizeof(TuplesortClusterArg));
 
