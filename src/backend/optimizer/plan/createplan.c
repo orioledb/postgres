@@ -6841,7 +6841,7 @@ make_unique_from_pathkeys(Plan *lefttree, List *pathkeys, int numCols)
 								   ROWCOMPARE_EQ);
 		if (!OidIsValid(eqop))	/* should not happen */
 			elog(ERROR, "missing operator %d(%u,%u) in opfamily %u",
-				 BTEqualStrategyNumber, pk_datatype, pk_datatype,
+				 ROWCOMPARE_EQ, pk_datatype, pk_datatype,
 				 pathkey->pk_opfamily);
 
 		uniqColIdx[keyno] = tle->resno;

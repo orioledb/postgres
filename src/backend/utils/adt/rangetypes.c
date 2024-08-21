@@ -2914,21 +2914,22 @@ build_bound_expr(Expr *elemExpr, Datum val,
 	int16		elemTypeLen = typeCache->typlen;
 	bool		elemByValue = typeCache->typbyval;
 	Oid			elemCollation = typeCache->typcollation;
-	int16		strategy;
+	RowCompareType rctype;
 	Oid			oproid;
 	Expr	   *constExpr;
 
 	/* Identify the comparison operator to use */
 	if (isLowerBound)
-		strategy = isInclusive ? BTGreaterEqualStrategyNumber : BTGreaterStrategyNumber;
+		rctype = isInclusive ? ROWCOMPARE_GE : ROWCOMPARE_GT;
 	else
-		strategy = isInclusive ? BTLessEqualStrategyNumber : BTLessStrategyNumber;
+		rctype = isInclusive ? ROWCOMPARE_LE : ROWCOMPARE_LT;
 
 	/*
 	 * We could use exprType(elemExpr) here, if it ever becomes possible that
 	 * elemExpr is not the exact same type as the range elements.
 	 */
-	oproid = get_opfamily_member(opfamily, elemType, elemType, strategy);
+	oproid = get_opmethod_member(InvalidOid, opfamily, elemType, elemType,
+								 rctype);
 
 	/* We don't really expect failure here, but just in case ... */
 	if (!OidIsValid(oproid))

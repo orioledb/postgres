@@ -2959,6 +2959,7 @@ mergejoinscansel(PlannerInfo *root, Node *clause, Oid opfamily, int strategy,
 	VariableStatData leftvar,
 				rightvar;
 	int			op_strategy;
+	RowCompareType op_rctype;
 	Oid			op_lefttype;
 	Oid			op_righttype;
 	Oid			opno,
@@ -3001,10 +3002,10 @@ mergejoinscansel(PlannerInfo *root, Node *clause, Oid opfamily, int strategy,
 	get_op_opfamily_properties(opno, opfamily, false,
 							   NULL,		/* don't need opmethod */
 							   &op_strategy,
-							   NULL,		/* don't need rctype */
+							   &op_rctype,
 							   &op_lefttype,
 							   &op_righttype);
-	Assert(op_strategy == BTEqualStrategyNumber);
+	Assert(op_rctype == ROWCOMPARE_EQ);
 
 	/*
 	 * Look up the various operators we need.  If we don't find them all, it
@@ -6095,9 +6096,10 @@ get_actual_variable_range(PlannerInfo *root, VariableStatData *vardata,
 	{
 		IndexOptInfo *index = (IndexOptInfo *) lfirst(lc);
 		ScanDirection indexscandir;
+		StrategyNumber strategy;
 
-		/* Ignore non-btree indexes */
-		if (index->relam != BTREE_AM_OID)
+		/* Must be an ordering index */
+		if (!IndexAmCanOrder(index->relam))
 			continue;
 
 		/*
@@ -6122,15 +6124,16 @@ get_actual_variable_range(PlannerInfo *root, VariableStatData *vardata,
 			continue;			/* test first 'cause it's cheapest */
 		if (!match_index_to_operand(vardata->var, 0, index))
 			continue;
-		switch (get_op_opfamily_strategy(sortop, index->sortopfamily[0]))
+		strategy = get_op_opfamily_strategy(sortop, index->sortopfamily[0]);
+		switch (strategy_get_rctype(index->relam, strategy, true))
 		{
-			case BTLessStrategyNumber:
+			case ROWCOMPARE_LT:
 				if (index->reverse_sort[0])
 					indexscandir = BackwardScanDirection;
 				else
 					indexscandir = ForwardScanDirection;
 				break;
-			case BTGreaterStrategyNumber:
+			case ROWCOMPARE_GT:
 				if (index->reverse_sort[0])
 					indexscandir = ForwardScanDirection;
 				else

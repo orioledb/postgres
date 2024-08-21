@@ -681,23 +681,25 @@ get_op_index_interpretation(Oid opno)
 	{
 		HeapTuple	op_tuple = &catlist->members[i]->tuple;
 		Form_pg_amop op_form = (Form_pg_amop) GETSTRUCT(op_tuple);
-		StrategyNumber op_strategy;
+		RowCompareType rctype;
 
-		/* must be btree */
-		if (op_form->amopmethod != BTREE_AM_OID)
+		/* must be ordering index */
+		if (!IndexAmCanOrder(op_form->amopmethod))
 			continue;
 
-		/* Get the operator's btree strategy number */
-		op_strategy = (StrategyNumber) op_form->amopstrategy;
-		Assert(op_strategy >= 1 && op_strategy <= 5);
+		/* Get the operator's row comparision type */
+		rctype = strategy_get_rctype(op_form->amopmethod,
+									 op_form->amopstrategy, true);
+
+		/* should not happen */
+		if (rctype == ROWCOMPARE_NONE)
+			continue;
 
 		thisresult = (OpIndexInterpretation *)
 			palloc(sizeof(OpIndexInterpretation));
 		thisresult->opmethod = op_form->amopmethod;
 		thisresult->opfamily_id = op_form->amopfamily;
-		thisresult->rctype = strategy_get_rctype(thisresult->opmethod,
-												 op_strategy,
-												 false);
+		thisresult->rctype = rctype;
 		thisresult->oplefttype = op_form->amoplefttype;
 		thisresult->oprighttype = op_form->amoprighttype;
 		result = lappend(result, thisresult);
@@ -722,21 +724,21 @@ get_op_index_interpretation(Oid opno)
 			{
 				HeapTuple	op_tuple = &catlist->members[i]->tuple;
 				Form_pg_amop op_form = (Form_pg_amop) GETSTRUCT(op_tuple);
-				StrategyNumber op_strategy;
+				RowCompareType rctype;
 
-				/* must be btree */
-				if (op_form->amopmethod != BTREE_AM_OID)
+				/* must be ordering index */
+				if (!IndexAmCanOrder(op_form->amopmethod))
 					continue;
 
-				/* Get the operator's btree strategy number */
-				op_strategy = (StrategyNumber) op_form->amopstrategy;
-				Assert(op_strategy >= 1 && op_strategy <= 5);
+				/* Get the operator's row comparision type */
+				rctype = strategy_get_rctype(op_form->amopmethod,
+											 op_form->amopstrategy, true);
 
 				/* Only consider negators that are = */
-				if (op_strategy != BTEqualStrategyNumber)
+				if (rctype != ROWCOMPARE_EQ)
 					continue;
 
-				/* OK, report it with "strategy" ROWCOMPARE_NE */
+				/* OK, report it as ROWCOMPARE_NE */
 				thisresult = (OpIndexInterpretation *)
 					palloc(sizeof(OpIndexInterpretation));
 				thisresult->opfamily_id = op_form->amopfamily;

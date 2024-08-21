@@ -2691,6 +2691,7 @@ match_rowcompare_to_indexcol(PlannerInfo *root,
 	bool		var_on_left;
 	Oid			expr_op;
 	Oid			expr_coll;
+	StrategyNumber opstrategy;
 
 	/* Forget it if we're not dealing with a btree index */
 	if (!IndexAmCanOrder(index->relam))
@@ -2743,18 +2744,24 @@ match_rowcompare_to_indexcol(PlannerInfo *root,
 		return NULL;
 
 	/* We're good if the operator is the right type of opfamily member */
-	switch (get_op_opfamily_strategy(expr_op, opfamily))
+	opstrategy = get_op_opfamily_strategy(expr_op, opfamily);
+	switch (strategy_get_rctype(index->relam, opstrategy, true))
 	{
-		case BTLessStrategyNumber:
-		case BTLessEqualStrategyNumber:
-		case BTGreaterEqualStrategyNumber:
-		case BTGreaterStrategyNumber:
+		case ROWCOMPARE_LT:
+		case ROWCOMPARE_LE:
+		case ROWCOMPARE_GE:
+		case ROWCOMPARE_GT:
 			return expand_indexqual_rowcompare(root,
 											   rinfo,
 											   indexcol,
 											   index,
 											   expr_op,
 											   var_on_left);
+		case ROWCOMPARE_NONE:
+		case ROWCOMPARE_INVALID:
+		case ROWCOMPARE_EQ:
+		case ROWCOMPARE_NE:
+			break;
 	}
 
 	return NULL;

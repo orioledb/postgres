@@ -766,7 +766,7 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 										 ROWCOMPARE_EQ);
 				if (!OidIsValid(op))
 					elog(ERROR, "missing operator %d(%u,%u) in opfamily %u",
-						 BTEqualStrategyNumber, opcintype, opcintype, opfamily);
+						 ROWCOMPARE_EQ, opcintype, opcintype, opfamily);
 
 				/*
 				 * If we find the same column with the same equality semantics
