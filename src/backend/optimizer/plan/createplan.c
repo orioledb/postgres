@@ -246,7 +246,7 @@ static MergeJoin *make_mergejoin(List *tlist,
 								 List *mergeclauses,
 								 Oid *mergefamilies,
 								 Oid *mergecollations,
-								 int *mergestrategies,
+								 bool *mergereversals,
 								 bool *mergenullsfirst,
 								 Plan *lefttree, Plan *righttree,
 								 JoinType jointype, bool inner_unique,
@@ -4449,7 +4449,7 @@ create_mergejoin_plan(PlannerInfo *root,
 	int			nClauses;
 	Oid		   *mergefamilies;
 	Oid		   *mergecollations;
-	int		   *mergestrategies;
+	bool	   *mergereversals;
 	bool	   *mergenullsfirst;
 	PathKey    *opathkey;
 	EquivalenceClass *opeclass;
@@ -4579,7 +4579,7 @@ create_mergejoin_plan(PlannerInfo *root,
 	Assert(nClauses == list_length(best_path->path_mergeclauses));
 	mergefamilies = (Oid *) palloc(nClauses * sizeof(Oid));
 	mergecollations = (Oid *) palloc(nClauses * sizeof(Oid));
-	mergestrategies = (int *) palloc(nClauses * sizeof(int));
+	mergereversals = (bool *) palloc(nClauses * sizeof(bool));
 	mergenullsfirst = (bool *) palloc(nClauses * sizeof(bool));
 
 	opathkey = NULL;
@@ -4706,7 +4706,7 @@ create_mergejoin_plan(PlannerInfo *root,
 		/* OK, save info for executor */
 		mergefamilies[i] = opathkey->pk_opfamily;
 		mergecollations[i] = opathkey->pk_eclass->ec_collation;
-		mergestrategies[i] = opathkey->pk_strategy;
+		mergereversals[i] = (opathkey->pk_strategy == BTGreaterStrategyNumber ? true : false);
 		mergenullsfirst[i] = opathkey->pk_nulls_first;
 		i++;
 	}
@@ -4726,7 +4726,7 @@ create_mergejoin_plan(PlannerInfo *root,
 							   mergeclauses,
 							   mergefamilies,
 							   mergecollations,
-							   mergestrategies,
+							   mergereversals,
 							   mergenullsfirst,
 							   outer_plan,
 							   inner_plan,
@@ -6036,7 +6036,7 @@ make_mergejoin(List *tlist,
 			   List *mergeclauses,
 			   Oid *mergefamilies,
 			   Oid *mergecollations,
-			   int *mergestrategies,
+			   bool *mergereversals,
 			   bool *mergenullsfirst,
 			   Plan *lefttree,
 			   Plan *righttree,
@@ -6055,7 +6055,7 @@ make_mergejoin(List *tlist,
 	node->mergeclauses = mergeclauses;
 	node->mergeFamilies = mergefamilies;
 	node->mergeCollations = mergecollations;
-	node->mergeStrategies = mergestrategies;
+	node->mergeReversals = mergereversals;
 	node->mergeNullsFirst = mergenullsfirst;
 	node->join.jointype = jointype;
 	node->join.inner_unique = inner_unique;
