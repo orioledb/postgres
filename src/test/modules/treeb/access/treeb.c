@@ -115,6 +115,8 @@ treeb_indexam_handler(PG_FUNCTION_ARGS)
 	amroutine->amsupport = TreebNProcs;
 	amroutine->amoptsprocnum = TREEBOPTIONS_PROC;
 	amroutine->amcanorder = true;
+	amroutine->amcanhash = false;
+	amroutine->amcancrosscompare = true;
 	amroutine->amcanorderbyop = false;
 	amroutine->amcanbackward = true;
 	amroutine->amcanunique = true;
