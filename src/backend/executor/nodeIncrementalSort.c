@@ -78,6 +78,7 @@
 
 #include "postgres.h"
 
+#include "catalog/pg_am.h"			/* for BTREE_AM_OID */
 #include "executor/execdebug.h"
 #include "executor/nodeIncrementalSort.h"
 #include "miscadmin.h"
@@ -180,7 +181,7 @@ preparePresortedCols(IncrementalSortState *node)
 		key->attno = plannode->sort.sortColIdx[i];
 
 		equalityOp = get_equality_op_for_ordering_op(plannode->sort.sortOperators[i],
-													 NULL);
+													 BTREE_AM_OID, NULL);
 		if (!OidIsValid(equalityOp))
 			elog(ERROR, "missing equality operator for ordering operator %u",
 				 plannode->sort.sortOperators[i]);

@@ -208,10 +208,11 @@ extern Selectivity rowcomparesel(PlannerInfo *root,
 								 RowCompareExpr *clause,
 								 int varRelid, JoinType jointype, SpecialJoinInfo *sjinfo);
 
-extern void mergejoinscansel(PlannerInfo *root, Node *clause,
-							 Oid opfamily, int strategy, bool nulls_first,
-							 Selectivity *leftstart, Selectivity *leftend,
-							 Selectivity *rightstart, Selectivity *rightend);
+extern void mergejoinscansel(PlannerInfo *root, Node *clause, Oid opfamily,
+							 int strategy, RowCompareType rctype,
+							 bool nulls_first, Selectivity *leftstart,
+							 Selectivity *leftend, Selectivity *rightstart,
+							 Selectivity *rightend);
 
 extern double estimate_num_groups(PlannerInfo *root, List *groupExprs,
 								  double input_rows, List **pgset,

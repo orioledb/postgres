@@ -249,9 +249,11 @@ extern List *build_join_pathkeys(PlannerInfo *root,
 								 JoinType jointype,
 								 List *outer_pathkeys);
 extern List *make_pathkeys_for_sortclauses(PlannerInfo *root,
+										   Oid opmethodfilter,
 										   List *sortclauses,
 										   List *tlist);
 extern List *make_pathkeys_for_sortclauses_extended(PlannerInfo *root,
+													Oid opmethodfilter,
 													List **sortclauses,
 													List *tlist,
 													bool remove_redundant,
@@ -279,8 +281,10 @@ extern List *truncate_useless_pathkeys(PlannerInfo *root,
 extern bool has_useful_pathkeys(PlannerInfo *root, RelOptInfo *rel);
 extern List *append_pathkeys(List *target, List *source);
 extern PathKey *make_canonical_pathkey(PlannerInfo *root,
-									   EquivalenceClass *eclass, Oid opfamily,
-									   int strategy, bool nulls_first);
+									   EquivalenceClass *eclass, Oid opmethod,
+									   Oid opfamily, int strategy,
+									   RowCompareType rctype,
+									   bool nulls_first);
 extern void add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 									List *live_childrels);
 

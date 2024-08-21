@@ -30,6 +30,7 @@
 
 #include "access/htup_details.h"
 #include "catalog/pg_aggregate.h"
+#include "catalog/pg_am.h"			/* for BTREE_AM_OID */
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -160,7 +161,7 @@ preprocess_minmax_aggregates(PlannerInfo *root)
 		 * We'll need the equality operator that goes with the aggregate's
 		 * ordering operator.
 		 */
-		eqop = get_equality_op_for_ordering_op(mminfo->aggsortop, &reverse);
+		eqop = get_equality_op_for_ordering_op(mminfo->aggsortop, BTREE_AM_OID, &reverse);
 		if (!OidIsValid(eqop))	/* shouldn't happen */
 			elog(ERROR, "could not find equality operator for ordering operator %u",
 				 mminfo->aggsortop);
@@ -485,6 +486,7 @@ minmax_qp_callback(PlannerInfo *root, void *extra)
 
 	root->sort_pathkeys =
 		make_pathkeys_for_sortclauses(root,
+									  BTREE_AM_OID,
 									  root->parse->sortClause,
 									  root->parse->targetList);
 

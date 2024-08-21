@@ -2047,7 +2047,9 @@ ExecInitExprRec(Expr *node, ExprState *state,
 					FunctionCallInfo fcinfo;
 
 					get_op_opfamily_properties(opno, opfamily, false,
+											   NULL,		/* don't need opmethod */
 											   &strategy,
+											   NULL,		/* don't need rctype */
 											   &lefttype,
 											   &righttype);
 					proc = get_opfamily_proc(opfamily,

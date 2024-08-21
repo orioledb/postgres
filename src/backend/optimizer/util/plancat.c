@@ -383,27 +383,36 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 					{
 						int16		opt = indexRelation->rd_indoption[i];
 						Oid			ltopr;
-						Oid			btopfamily;
-						Oid			btopcintype;
-						int16		btstrategy;
+						Oid			opmethod;
+						Oid			opfamily;
+						Oid			opcintype;
+						RowCompareType rctype;
 
 						info->reverse_sort[i] = (opt & INDOPTION_DESC) != 0;
 						info->nulls_first[i] = (opt & INDOPTION_NULLS_FIRST) != 0;
 
-						ltopr = get_opfamily_member(info->opfamily[i],
+						ltopr = get_opmethod_member(info->relam,
+													info->opfamily[i],
 													info->opcintype[i],
 													info->opcintype[i],
-													BTLessStrategyNumber);
+													ROWCOMPARE_LT);
 						if (OidIsValid(ltopr) &&
 							get_ordering_op_properties(ltopr,
-													   &btopfamily,
-													   &btopcintype,
-													   &btstrategy) &&
-							btopcintype == info->opcintype[i] &&
-							btstrategy == BTLessStrategyNumber)
+													   info->relam,
+													   &opmethod,
+													   &opfamily,
+													   &opcintype,
+													   NULL,
+													   &rctype) &&
+							opcintype == info->opcintype[i] &&
+							rctype == ROWCOMPARE_LT)
 						{
 							/* Successful mapping */
-							info->sortopfamily[i] = btopfamily;
+							Assert(info->relam == opmethod);
+							Assert(info->relam == get_opfamily_method(opfamily));
+							info->sortopfamily[i] = opfamily;
+
+							/* TODO: OPMETHOD: store opmethod here? */
 						}
 						else
 						{

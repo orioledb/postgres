@@ -1120,15 +1120,15 @@ match_network_subset(Node *leftop,
 	 */
 	if (is_eq)
 	{
-		opr1oid = get_opfamily_member(opfamily, datatype, datatype,
-									  BTGreaterEqualStrategyNumber);
+		opr1oid = get_opmethod_member(InvalidOid, opfamily, datatype, datatype,
+									  ROWCOMPARE_GE);
 		if (opr1oid == InvalidOid)
 			elog(ERROR, "no >= operator for opfamily %u", opfamily);
 	}
 	else
 	{
-		opr1oid = get_opfamily_member(opfamily, datatype, datatype,
-									  BTGreaterStrategyNumber);
+		opr1oid = get_opmethod_member(InvalidOid, opfamily, datatype, datatype,
+									  ROWCOMPARE_GT);
 		if (opr1oid == InvalidOid)
 			elog(ERROR, "no > operator for opfamily %u", opfamily);
 	}
@@ -1146,8 +1146,8 @@ match_network_subset(Node *leftop,
 
 	/* create clause "key <= network_scan_last( rightopval )" */
 
-	opr2oid = get_opfamily_member(opfamily, datatype, datatype,
-								  BTLessEqualStrategyNumber);
+	opr2oid = get_opmethod_member(InvalidOid, opfamily, datatype, datatype,
+								  ROWCOMPARE_LE);
 	if (opr2oid == InvalidOid)
 		elog(ERROR, "no <= operator for opfamily %u", opfamily);
 

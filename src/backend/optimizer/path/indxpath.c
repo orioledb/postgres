@@ -2793,6 +2793,8 @@ expand_indexqual_rowcompare(PlannerInfo *root,
 {
 	IndexClause *iclause = makeNode(IndexClause);
 	RowCompareExpr *clause = (RowCompareExpr *) rinfo->clause;
+	RowCompareType op_rctype;
+	Oid			op_method;
 	int			op_strategy;
 	Oid			op_lefttype;
 	Oid			op_righttype;
@@ -2820,7 +2822,9 @@ expand_indexqual_rowcompare(PlannerInfo *root,
 	}
 
 	get_op_opfamily_properties(expr_op, index->opfamily[indexcol], false,
+							   &op_method,
 							   &op_strategy,
+							   &op_rctype,
 							   &op_lefttype,
 							   &op_righttype);
 
@@ -2881,7 +2885,9 @@ expand_indexqual_rowcompare(PlannerInfo *root,
 
 		/* Add operator info to lists */
 		get_op_opfamily_properties(expr_op, index->opfamily[i], false,
+								   &op_method,
 								   &op_strategy,
+								   &op_rctype,
 								   &op_lefttype,
 								   &op_righttype);
 		expr_ops = lappend_oid(expr_ops, expr_op);
@@ -2914,8 +2920,7 @@ expand_indexqual_rowcompare(PlannerInfo *root,
 			/* very easy, just use the commuted operators */
 			new_ops = expr_ops;
 		}
-		else if (op_strategy == BTLessEqualStrategyNumber ||
-				 op_strategy == BTGreaterEqualStrategyNumber)
+		else if (op_rctype == ROWCOMPARE_LE || op_rctype == ROWCOMPARE_GE)
 		{
 			/* easy, just use the same (possibly commuted) operators */
 			new_ops = list_truncate(expr_ops, matching_cols);
@@ -2926,10 +2931,16 @@ expand_indexqual_rowcompare(PlannerInfo *root,
 			ListCell   *lefttypes_cell;
 			ListCell   *righttypes_cell;
 
-			if (op_strategy == BTLessStrategyNumber)
-				op_strategy = BTLessEqualStrategyNumber;
-			else if (op_strategy == BTGreaterStrategyNumber)
-				op_strategy = BTGreaterEqualStrategyNumber;
+			if (op_rctype == ROWCOMPARE_LT)
+			{
+				op_rctype = ROWCOMPARE_LE;
+				op_strategy = rctype_get_strategy(op_method, op_rctype, true);
+			}
+			else if (op_rctype == ROWCOMPARE_GT)
+			{
+				op_rctype = ROWCOMPARE_GE;
+				op_strategy = rctype_get_strategy(op_method, op_rctype, true);
+			}
 			else
 				elog(ERROR, "unexpected strategy number %d", op_strategy);
 			new_ops = NIL;
@@ -2955,7 +2966,7 @@ expand_indexqual_rowcompare(PlannerInfo *root,
 		{
 			RowCompareExpr *rc = makeNode(RowCompareExpr);
 
-			rc->rctype = strategy_get_rctype(index->relam, op_strategy, false);
+			rc->rctype = (RowCompareType) op_strategy;
 			rc->opnos = new_ops;
 			rc->opfamilies = list_copy_head(clause->opfamilies,
 											matching_cols);
@@ -3027,8 +3038,7 @@ match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
 
 
 		/* Pathkey must request default sort order for the target opfamily */
-		if (pathkey->pk_strategy != BTLessStrategyNumber ||
-			pathkey->pk_nulls_first)
+		if (pathkey->pk_rctype != ROWCOMPARE_LT || pathkey->pk_nulls_first)
 			return;
 
 		/* If eclass is volatile, no hope of using an indexscan */

@@ -2893,7 +2893,7 @@ make_row_comparison_op(ParseState *pstate, List *opname,
 		Bitmapset  *this_strats;
 		ListCell   *j;
 
-		opinfo_lists[i] = get_op_btree_interpretation(opno);
+		opinfo_lists[i] = get_op_index_interpretation(opno);
 
 		/*
 		 * convert strategy numbers into a Bitmapset to make the intersection
@@ -2902,7 +2902,7 @@ make_row_comparison_op(ParseState *pstate, List *opname,
 		this_strats = NULL;
 		foreach(j, opinfo_lists[i])
 		{
-			OpBtreeInterpretation *opinfo = lfirst(j);
+			OpIndexInterpretation *opinfo = lfirst(j);
 
 			this_strats = bms_add_member(this_strats, opinfo->strategy);
 		}
@@ -2952,7 +2952,7 @@ make_row_comparison_op(ParseState *pstate, List *opname,
 
 		foreach(j, opinfo_lists[i])
 		{
-			OpBtreeInterpretation *opinfo = lfirst(j);
+			OpIndexInterpretation *opinfo = lfirst(j);
 
 			if (opinfo->strategy == rctype)
 			{

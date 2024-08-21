@@ -762,8 +762,8 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 				opcintype = cla_tup->opcintype;
 				ReleaseSysCache(cla_ht);
 
-				op = get_opfamily_member(opfamily, opcintype, opcintype,
-										 BTEqualStrategyNumber);
+				op = get_opmethod_member(InvalidOid, opfamily, opcintype, opcintype,
+										 ROWCOMPARE_EQ);
 				if (!OidIsValid(op))
 					elog(ERROR, "missing operator %d(%u,%u) in opfamily %u",
 						 BTEqualStrategyNumber, opcintype, opcintype, opfamily);

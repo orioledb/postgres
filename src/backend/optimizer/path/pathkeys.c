@@ -18,6 +18,7 @@
 #include "postgres.h"
 
 #include "access/stratnum.h"
+#include "catalog/pg_am.h"			/* for BTREE_AM_OID */
 #include "catalog/pg_opfamily.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/cost.h"
@@ -52,17 +53,40 @@ static bool right_merge_direction(PlannerInfo *root, PathKey *pathkey);
  * merging EquivalenceClasses.
  */
 PathKey *
-make_canonical_pathkey(PlannerInfo *root,
-					   EquivalenceClass *eclass, Oid opfamily,
-					   int strategy, bool nulls_first)
+make_canonical_pathkey(PlannerInfo *root, EquivalenceClass *eclass,
+					   Oid opmethod, Oid opfamily, int strategy,
+					   RowCompareType rctype, bool nulls_first)
 {
 	PathKey    *pk;
 	ListCell   *lc;
 	MemoryContext oldcontext;
 
+	Assert(OidIsValid(opmethod));
+	Assert(OidIsValid(opfamily));
+	Assert(opmethod == get_opfamily_method(opfamily));
+
 	/* Can't make canonical pathkeys if the set of ECs might still change */
 	if (!root->ec_merging_done)
 		elog(ERROR, "too soon to build canonical pathkeys");
+
+	/*
+	 * Can't make canonical pathkeys if neither the strategy nor the rctype
+	 * were supplied.  For callers who only gave us one of them, help out
+	 * by looking up the other.  This simplifies the work the caller needs
+	 * to do and reduces code duplication.
+	 */
+	if (strategy == InvalidStrategy)
+	{
+		Assert(rctype != ROWCOMPARE_NONE);
+		Assert(rctype != ROWCOMPARE_INVALID);
+		Assert(OidIsValid(opfamily));
+		strategy = rctype_get_strategy(opmethod, rctype, false);
+	}
+	else if (rctype == ROWCOMPARE_NONE || rctype == ROWCOMPARE_INVALID)
+	{
+		Assert(OidIsValid(opfamily));
+		rctype = strategy_get_rctype(opmethod, strategy, false);
+	}
 
 	/* The passed eclass might be non-canonical, so chase up to the top */
 	while (eclass->ec_merged)
@@ -74,6 +98,7 @@ make_canonical_pathkey(PlannerInfo *root,
 		if (eclass == pk->pk_eclass &&
 			opfamily == pk->pk_opfamily &&
 			strategy == pk->pk_strategy &&
+			rctype == pk->pk_rctype &&
 			nulls_first == pk->pk_nulls_first)
 			return pk;
 	}
@@ -88,6 +113,7 @@ make_canonical_pathkey(PlannerInfo *root,
 	pk->pk_eclass = eclass;
 	pk->pk_opfamily = opfamily;
 	pk->pk_strategy = strategy;
+	pk->pk_rctype = rctype;
 	pk->pk_nulls_first = nulls_first;
 
 	root->canon_pathkeys = lappend(root->canon_pathkeys, pk);
@@ -196,6 +222,7 @@ pathkey_is_redundant(PathKey *new_pathkey, List *pathkeys)
 static PathKey *
 make_pathkey_from_sortinfo(PlannerInfo *root,
 						   Expr *expr,
+						   Oid opmethod,
 						   Oid opfamily,
 						   Oid opcintype,
 						   Oid collation,
@@ -205,12 +232,18 @@ make_pathkey_from_sortinfo(PlannerInfo *root,
 						   Relids rel,
 						   bool create_it)
 {
+	RowCompareType rctype;
 	int16		strategy;
 	Oid			equality_op;
 	List	   *opfamilies;
 	EquivalenceClass *eclass;
 
-	strategy = reverse_sort ? BTGreaterStrategyNumber : BTLessStrategyNumber;
+	Assert(OidIsValid(opmethod));
+	Assert(OidIsValid(opfamily));
+	Assert(opmethod == get_opfamily_method(opfamily));
+
+	rctype = reverse_sort ? ROWCOMPARE_GT : ROWCOMPARE_LT;
+	strategy = rctype_get_strategy(opmethod, rctype, false);
 
 	/*
 	 * EquivalenceClasses need to contain opfamily lists based on the family
@@ -218,10 +251,11 @@ make_pathkey_from_sortinfo(PlannerInfo *root,
 	 * more than one opfamily.  So we have to look up the opfamily's equality
 	 * operator and get its membership.
 	 */
-	equality_op = get_opfamily_member(opfamily,
+	equality_op = get_opmethod_member(opmethod,
+									  opfamily,
 									  opcintype,
 									  opcintype,
-									  BTEqualStrategyNumber);
+									  ROWCOMPARE_EQ);
 	if (!OidIsValid(equality_op))	/* shouldn't happen */
 		elog(ERROR, "missing operator %d(%u,%u) in opfamily %u",
 			 BTEqualStrategyNumber, opcintype, opcintype, opfamily);
@@ -240,8 +274,8 @@ make_pathkey_from_sortinfo(PlannerInfo *root,
 		return NULL;
 
 	/* And finally we can find or create a PathKey node */
-	return make_canonical_pathkey(root, eclass, opfamily,
-								  strategy, nulls_first);
+	return make_canonical_pathkey(root, eclass, opmethod, opfamily,
+								  strategy, rctype, nulls_first);
 }
 
 /*
@@ -254,20 +288,21 @@ make_pathkey_from_sortinfo(PlannerInfo *root,
 static PathKey *
 make_pathkey_from_sortop(PlannerInfo *root,
 						 Expr *expr,
+						 Oid opmethodfilter,
 						 Oid ordering_op,
 						 bool reverse_sort,
 						 bool nulls_first,
 						 Index sortref,
 						 bool create_it)
 {
-	Oid			opfamily,
+	Oid			opmethod,
+				opfamily,
 				opcintype,
 				collation;
-	int16		strategy;
 
 	/* Find the operator in pg_amop --- failure shouldn't happen */
-	if (!get_ordering_op_properties(ordering_op,
-									&opfamily, &opcintype, &strategy))
+	if (!get_ordering_op_properties(ordering_op, opmethodfilter, &opmethod,
+									&opfamily, &opcintype, NULL, NULL))
 		elog(ERROR, "operator %u is not a valid ordering operator",
 			 ordering_op);
 
@@ -276,6 +311,7 @@ make_pathkey_from_sortop(PlannerInfo *root,
 
 	return make_pathkey_from_sortinfo(root,
 									  expr,
+									  opmethod,
 									  opfamily,
 									  opcintype,
 									  collation,
@@ -782,6 +818,7 @@ build_index_pathkeys(PlannerInfo *root,
 		 */
 		cpathkey = make_pathkey_from_sortinfo(root,
 											  indexkey,
+											  index->relam,
 											  index->sortopfamily[i],
 											  index->opcintype[i],
 											  index->indexcollations[i],
@@ -941,6 +978,7 @@ build_partition_pathkeys(PlannerInfo *root, RelOptInfo *partrel,
 		 */
 		cpathkey = make_pathkey_from_sortinfo(root,
 											  keyCol,
+											  get_opfamily_method(partscheme->partopfamily[i]),		/* TODO: OPMETHOD */
 											  partscheme->partopfamily[i],
 											  partscheme->partopcintype[i],
 											  partscheme->partcollation[i],
@@ -1003,24 +1041,26 @@ build_expression_pathkey(PlannerInfo *root,
 						 bool create_it)
 {
 	List	   *pathkeys;
-	Oid			opfamily,
+	Oid			opmethod,
+				opfamily,
 				opcintype;
-	int16		strategy;
+	RowCompareType rctype;
 	PathKey    *cpathkey;
 
 	/* Find the operator in pg_amop --- failure shouldn't happen */
-	if (!get_ordering_op_properties(opno,
-									&opfamily, &opcintype, &strategy))
+	if (!get_ordering_op_properties(opno, BTREE_AM_OID, &opmethod, &opfamily,
+									&opcintype, NULL, &rctype))
 		elog(ERROR, "operator %u is not a valid ordering operator",
 			 opno);
 
 	cpathkey = make_pathkey_from_sortinfo(root,
 										  expr,
+										  opmethod,
 										  opfamily,
 										  opcintype,
 										  exprCollation((Node *) expr),
-										  (strategy == BTGreaterStrategyNumber),
-										  (strategy == BTGreaterStrategyNumber),
+										  (rctype == ROWCOMPARE_GT),
+										  (rctype == ROWCOMPARE_GT),
 										  0,
 										  rel,
 										  create_it);
@@ -1116,8 +1156,10 @@ convert_subquery_pathkeys(PlannerInfo *root, RelOptInfo *rel,
 					best_pathkey =
 						make_canonical_pathkey(root,
 											   outer_ec,
+											   get_opfamily_method(sub_pathkey->pk_opfamily),
 											   sub_pathkey->pk_opfamily,
 											   sub_pathkey->pk_strategy,
+											   sub_pathkey->pk_rctype,
 											   sub_pathkey->pk_nulls_first);
 			}
 		}
@@ -1198,8 +1240,10 @@ convert_subquery_pathkeys(PlannerInfo *root, RelOptInfo *rel,
 
 					outer_pk = make_canonical_pathkey(root,
 													  outer_ec,
+													  get_opfamily_method(sub_pathkey->pk_opfamily),
 													  sub_pathkey->pk_opfamily,
 													  sub_pathkey->pk_strategy,
+													  sub_pathkey->pk_rctype,
 													  sub_pathkey->pk_nulls_first);
 					/* score = # of equivalence peers */
 					score = list_length(outer_ec->ec_members) - 1;
@@ -1329,6 +1373,7 @@ build_join_pathkeys(PlannerInfo *root,
  */
 List *
 make_pathkeys_for_sortclauses(PlannerInfo *root,
+							  Oid opmethodfilter,
 							  List *sortclauses,
 							  List *tlist)
 {
@@ -1336,6 +1381,7 @@ make_pathkeys_for_sortclauses(PlannerInfo *root,
 	bool		sortable;
 
 	result = make_pathkeys_for_sortclauses_extended(root,
+													opmethodfilter,
 													&sortclauses,
 													tlist,
 													false,
@@ -1370,6 +1416,7 @@ make_pathkeys_for_sortclauses(PlannerInfo *root,
  */
 List *
 make_pathkeys_for_sortclauses_extended(PlannerInfo *root,
+									   Oid opmethodfilter,
 									   List **sortclauses,
 									   List *tlist,
 									   bool remove_redundant,
@@ -1394,6 +1441,7 @@ make_pathkeys_for_sortclauses_extended(PlannerInfo *root,
 		}
 		pathkey = make_pathkey_from_sortop(root,
 										   sortkey,
+										   opmethodfilter,
 										   sortcl->sortop,
 										   sortcl->reverse_sort,
 										   sortcl->nulls_first,
@@ -1798,8 +1846,10 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 		scores[best_j] = -1;
 		pathkey = make_canonical_pathkey(root,
 										 ec,
+										 get_opfamily_method(linitial_oid(ec->ec_opfamilies)),
 										 linitial_oid(ec->ec_opfamilies),
-										 BTLessStrategyNumber,
+										 InvalidStrategy,
+										 ROWCOMPARE_LT,
 										 false);
 		/* can't be redundant because no duplicate ECs */
 		Assert(!pathkey_is_redundant(pathkey, pathkeys));
@@ -1891,8 +1941,10 @@ make_inner_pathkeys_for_merge(PlannerInfo *root,
 		else
 			pathkey = make_canonical_pathkey(root,
 											 ieclass,
+											 get_opfamily_method(opathkey->pk_opfamily),
 											 opathkey->pk_opfamily,
 											 opathkey->pk_strategy,
+											 opathkey->pk_rctype,
 											 opathkey->pk_nulls_first);
 
 		/*
@@ -2117,12 +2169,13 @@ right_merge_direction(PlannerInfo *root, PathKey *pathkey)
 			 * want to prefer only one of the two possible directions, and we
 			 * might as well use this one.
 			 */
-			return (pathkey->pk_strategy == query_pathkey->pk_strategy);
+			return (pathkey->pk_strategy == query_pathkey->pk_strategy &&
+					pathkey->pk_rctype == query_pathkey->pk_rctype);
 		}
 	}
 
 	/* If no matching ORDER BY request, prefer the ASC direction */
-	return (pathkey->pk_strategy == BTLessStrategyNumber);
+	return (pathkey->pk_rctype == ROWCOMPARE_LT);
 }
 
 /*

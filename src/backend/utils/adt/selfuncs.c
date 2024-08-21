@@ -2949,8 +2949,8 @@ scalargejoinsel(PG_FUNCTION_ARGS)
  *		*rightstart, *rightend similarly for the right-hand variable.
  */
 void
-mergejoinscansel(PlannerInfo *root, Node *clause,
-				 Oid opfamily, int strategy, bool nulls_first,
+mergejoinscansel(PlannerInfo *root, Node *clause, Oid opfamily, int strategy,
+				 RowCompareType rctype, bool nulls_first,
 				 Selectivity *leftstart, Selectivity *leftend,
 				 Selectivity *rightstart, Selectivity *rightend)
 {
@@ -2999,7 +2999,9 @@ mergejoinscansel(PlannerInfo *root, Node *clause,
 
 	/* Extract the operator's declared left/right datatypes */
 	get_op_opfamily_properties(opno, opfamily, false,
+							   NULL,		/* don't need opmethod */
 							   &op_strategy,
+							   NULL,		/* don't need rctype */
 							   &op_lefttype,
 							   &op_righttype);
 	Assert(op_strategy == BTEqualStrategyNumber);
@@ -3011,19 +3013,17 @@ mergejoinscansel(PlannerInfo *root, Node *clause,
 	 * Note: we expect that pg_statistic histograms will be sorted by the '<'
 	 * operator, regardless of which sort direction we are considering.
 	 */
-	switch (strategy)
+	switch (rctype)
 	{
-		case BTLessStrategyNumber:
+		case ROWCOMPARE_LT:
 			isgt = false;
 			if (op_lefttype == op_righttype)
 			{
 				/* easy case */
-				ltop = get_opfamily_member(opfamily,
-										   op_lefttype, op_righttype,
-										   BTLessStrategyNumber);
-				leop = get_opfamily_member(opfamily,
-										   op_lefttype, op_righttype,
-										   BTLessEqualStrategyNumber);
+				ltop = get_opmethod_member(InvalidOid, opfamily, op_lefttype,
+										   op_righttype, ROWCOMPARE_LT);
+				leop = get_opmethod_member(InvalidOid, opfamily, op_lefttype,
+										   op_righttype, ROWCOMPARE_LE);
 				lsortop = ltop;
 				rsortop = ltop;
 				lstatop = lsortop;
@@ -3033,75 +3033,61 @@ mergejoinscansel(PlannerInfo *root, Node *clause,
 			}
 			else
 			{
-				ltop = get_opfamily_member(opfamily,
-										   op_lefttype, op_righttype,
-										   BTLessStrategyNumber);
-				leop = get_opfamily_member(opfamily,
-										   op_lefttype, op_righttype,
-										   BTLessEqualStrategyNumber);
-				lsortop = get_opfamily_member(opfamily,
-											  op_lefttype, op_lefttype,
-											  BTLessStrategyNumber);
-				rsortop = get_opfamily_member(opfamily,
-											  op_righttype, op_righttype,
-											  BTLessStrategyNumber);
+				ltop = get_opmethod_member(InvalidOid, opfamily, op_lefttype,
+										   op_righttype, ROWCOMPARE_LT);
+				leop = get_opmethod_member(InvalidOid, opfamily, op_lefttype,
+										   op_righttype, ROWCOMPARE_LE);
+				lsortop = get_opmethod_member(InvalidOid, opfamily, op_lefttype,
+											  op_lefttype, ROWCOMPARE_LT);
+				rsortop = get_opmethod_member(InvalidOid, opfamily, op_righttype,
+											  op_righttype, ROWCOMPARE_LT);
 				lstatop = lsortop;
 				rstatop = rsortop;
-				revltop = get_opfamily_member(opfamily,
-											  op_righttype, op_lefttype,
-											  BTLessStrategyNumber);
-				revleop = get_opfamily_member(opfamily,
-											  op_righttype, op_lefttype,
-											  BTLessEqualStrategyNumber);
+				revltop = get_opmethod_member(InvalidOid, opfamily, op_righttype,
+											  op_lefttype, ROWCOMPARE_LT);
+				revleop = get_opmethod_member(InvalidOid, opfamily, op_righttype,
+											  op_lefttype, ROWCOMPARE_LE);
 			}
 			break;
-		case BTGreaterStrategyNumber:
+		case ROWCOMPARE_GT:
 			/* descending-order case */
 			isgt = true;
 			if (op_lefttype == op_righttype)
 			{
 				/* easy case */
-				ltop = get_opfamily_member(opfamily,
-										   op_lefttype, op_righttype,
-										   BTGreaterStrategyNumber);
-				leop = get_opfamily_member(opfamily,
-										   op_lefttype, op_righttype,
-										   BTGreaterEqualStrategyNumber);
+				ltop = get_opmethod_member(InvalidOid,
+										   opfamily, op_lefttype, op_righttype,
+										   ROWCOMPARE_GT);
+				leop = get_opmethod_member(InvalidOid,
+										   opfamily, op_lefttype, op_righttype,
+										   ROWCOMPARE_GE);
 				lsortop = ltop;
 				rsortop = ltop;
-				lstatop = get_opfamily_member(opfamily,
-											  op_lefttype, op_lefttype,
-											  BTLessStrategyNumber);
+				lstatop = get_opmethod_member(InvalidOid,
+											  opfamily, op_lefttype, op_lefttype,
+											  ROWCOMPARE_LT);
 				rstatop = lstatop;
 				revltop = ltop;
 				revleop = leop;
 			}
 			else
 			{
-				ltop = get_opfamily_member(opfamily,
-										   op_lefttype, op_righttype,
-										   BTGreaterStrategyNumber);
-				leop = get_opfamily_member(opfamily,
-										   op_lefttype, op_righttype,
-										   BTGreaterEqualStrategyNumber);
-				lsortop = get_opfamily_member(opfamily,
-											  op_lefttype, op_lefttype,
-											  BTGreaterStrategyNumber);
-				rsortop = get_opfamily_member(opfamily,
-											  op_righttype, op_righttype,
-											  BTGreaterStrategyNumber);
-				lstatop = get_opfamily_member(opfamily,
-											  op_lefttype, op_lefttype,
-											  BTLessStrategyNumber);
-				rstatop = get_opfamily_member(opfamily,
-											  op_righttype, op_righttype,
-											  BTLessStrategyNumber);
-				revltop = get_opfamily_member(opfamily,
-											  op_righttype, op_lefttype,
-											  BTGreaterStrategyNumber);
-				revleop = get_opfamily_member(opfamily,
-											  op_righttype, op_lefttype,
-											  BTGreaterEqualStrategyNumber);
+				ltop = get_opmethod_member(InvalidOid, opfamily, op_lefttype,
+										   op_righttype, ROWCOMPARE_GT);
+				leop = get_opmethod_member(InvalidOid, opfamily, op_lefttype,
+										   op_righttype, ROWCOMPARE_GE);
+				lsortop = get_opmethod_member(InvalidOid, opfamily, op_lefttype,
+											  op_lefttype, ROWCOMPARE_GT);
+				rsortop = get_opmethod_member(InvalidOid, opfamily, op_righttype,
+											  op_righttype, ROWCOMPARE_GT);
+				lstatop = get_opmethod_member(InvalidOid, opfamily, op_lefttype,
+											  op_lefttype, ROWCOMPARE_LT);
+				rstatop = get_opmethod_member(InvalidOid, opfamily, op_righttype,
+											  op_righttype, ROWCOMPARE_LT);
+				revltop = get_opmethod_member(InvalidOid, opfamily, op_righttype,
+											  op_lefttype, ROWCOMPARE_GT);
+				revleop = get_opmethod_member(InvalidOid, opfamily, op_righttype,
+											  op_lefttype, ROWCOMPARE_GE);
 			}
 			break;
 		default:
@@ -7092,10 +7078,11 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 		Oid			sortop;
 		AttStatsSlot sslot;
 
-		sortop = get_opfamily_member(index->opfamily[0],
+		sortop = get_opmethod_member(InvalidOid,
+									 index->opfamily[0],
 									 index->opcintype[0],
 									 index->opcintype[0],
-									 BTLessStrategyNumber);
+									 ROWCOMPARE_LT);
 		if (OidIsValid(sortop) &&
 			get_attstatsslot(&sslot, vardata.statsTuple,
 							 STATISTIC_KIND_CORRELATION, sortop,
@@ -7326,7 +7313,10 @@ gincost_pattern(IndexOptInfo *index, int indexcol,
 	 * find a matching pg_amop entry.)
 	 */
 	get_op_opfamily_properties(clause_op, index->opfamily[indexcol], false,
-							   &strategy_op, &lefttype, &righttype);
+							   NULL,		/* don't need opmethod */
+							   &strategy_op,
+							   NULL,		/* don't need rctype */
+							   &lefttype, &righttype);
 
 	/*
 	 * GIN always uses the "default" support functions, which are those with

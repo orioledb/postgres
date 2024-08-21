@@ -555,10 +555,11 @@ lookup_type_cache(Oid type_id, int flags)
 		Oid			eq_opr = InvalidOid;
 
 		if (typentry->btree_opf != InvalidOid)
-			eq_opr = get_opfamily_member(typentry->btree_opf,
+			eq_opr = get_opmethod_member(InvalidOid,
+										 typentry->btree_opf,
 										 typentry->btree_opintype,
 										 typentry->btree_opintype,
-										 BTEqualStrategyNumber);
+										 ROWCOMPARE_EQ);
 		if (eq_opr == InvalidOid &&
 			typentry->hash_opf != InvalidOid)
 			eq_opr = get_opfamily_member(typentry->hash_opf,
@@ -602,10 +603,11 @@ lookup_type_cache(Oid type_id, int flags)
 		Oid			lt_opr = InvalidOid;
 
 		if (typentry->btree_opf != InvalidOid)
-			lt_opr = get_opfamily_member(typentry->btree_opf,
+			lt_opr = get_opmethod_member(InvalidOid,
+										 typentry->btree_opf,
 										 typentry->btree_opintype,
 										 typentry->btree_opintype,
-										 BTLessStrategyNumber);
+										 ROWCOMPARE_LT);
 
 		/*
 		 * As above, make sure array_cmp or record_cmp will succeed; but again
@@ -627,10 +629,11 @@ lookup_type_cache(Oid type_id, int flags)
 		Oid			gt_opr = InvalidOid;
 
 		if (typentry->btree_opf != InvalidOid)
-			gt_opr = get_opfamily_member(typentry->btree_opf,
+			gt_opr = get_opmethod_member(InvalidOid,
+										 typentry->btree_opf,
 										 typentry->btree_opintype,
 										 typentry->btree_opintype,
-										 BTGreaterStrategyNumber);
+										 ROWCOMPARE_GT);
 
 		/*
 		 * As above, make sure array_cmp or record_cmp will succeed; but again

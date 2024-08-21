@@ -24,6 +24,7 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "catalog/pg_am.h"
 #include "catalog/pg_type.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -750,7 +751,9 @@ generate_union_paths(SetOperationStmt *op, PlannerInfo *root,
 		{
 			try_sorted = true;
 			/* Determine the pathkeys for sorting by the whole target list */
-			union_pathkeys = make_pathkeys_for_sortclauses(root, groupList,
+			union_pathkeys = make_pathkeys_for_sortclauses(root,
+														   BTREE_AM_OID,
+														   groupList,
 														   tlist);
 
 			root->query_pathkeys = union_pathkeys;
@@ -946,7 +949,10 @@ generate_union_paths(SetOperationStmt *op, PlannerInfo *root,
 			/* Try Sort -> Unique on the Append path */
 			if (groupList != NIL)
 				path = (Path *) create_sort_path(root, result_rel, path,
-												 make_pathkeys_for_sortclauses(root, groupList, tlist),
+												 make_pathkeys_for_sortclauses(root,
+																			   BTREE_AM_OID,
+																			   groupList,
+																			   tlist),
 												 -1.0);
 
 			path = (Path *) create_upper_unique_path(root,
@@ -963,7 +969,10 @@ generate_union_paths(SetOperationStmt *op, PlannerInfo *root,
 				path = gpath;
 
 				path = (Path *) create_sort_path(root, result_rel, path,
-												 make_pathkeys_for_sortclauses(root, groupList, tlist),
+												 make_pathkeys_for_sortclauses(root,
+																			   BTREE_AM_OID,
+																			   groupList,
+																			   tlist),
 												 -1.0);
 
 				path = (Path *) create_upper_unique_path(root,
@@ -1156,6 +1165,7 @@ generate_nonunion_paths(SetOperationStmt *op, PlannerInfo *root,
 										 result_rel,
 										 path,
 										 make_pathkeys_for_sortclauses(root,
+																	   BTREE_AM_OID,
 																	   groupList,
 																	   tlist),
 										 -1.0);

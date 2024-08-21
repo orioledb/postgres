@@ -14,6 +14,7 @@
 #include "postgres.h"
 
 #include "access/xact.h"
+#include "catalog/pg_am.h"		/* for BTREE_AM_OID */
 #include "catalog/pg_type.h"
 #include "commands/createas.h"
 #include "commands/defrem.h"
@@ -2850,7 +2851,7 @@ show_sortorder_options(StringInfo buf, Node *sortexpr,
 			elog(ERROR, "cache lookup failed for operator %u", sortOperator);
 		appendStringInfo(buf, " USING %s", opname);
 		/* Determine whether operator would be considered ASC or DESC */
-		(void) get_equality_op_for_ordering_op(sortOperator, &reverse);
+		(void) get_equality_op_for_ordering_op(sortOperator, BTREE_AM_OID, &reverse);
 	}
 
 	/* Add NULLS FIRST/LAST only if it wouldn't be default */

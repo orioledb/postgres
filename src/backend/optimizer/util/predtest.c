@@ -1613,7 +1613,7 @@ clause_is_strict_for(Node *clause, Node *subexpr, bool allow_false)
  * and in addition we use 6 to represent <>.  <> is not a btree-indexable
  * operator, but we assume here that if an equality operator of a btree
  * opfamily has a negator operator, the negator behaves as <> for the opfamily.
- * (This convention is also known to get_op_btree_interpretation().)
+ * (This convention is also known to get_op_index_interpretation().)
  *
  * BT_implies_table[] and BT_refutes_table[] are used for cases where we have
  * two identical subexpressions and we want to know whether one operator
@@ -2165,20 +2165,20 @@ lookup_proof_cache(Oid pred_op, Oid clause_op, bool refute_it)
 	 * operator.  This can happen in cases with incomplete sets of cross-type
 	 * comparison operators.
 	 */
-	clause_op_infos = get_op_btree_interpretation(clause_op);
+	clause_op_infos = get_op_index_interpretation(clause_op);
 	if (clause_op_infos)
-		pred_op_infos = get_op_btree_interpretation(pred_op);
+		pred_op_infos = get_op_index_interpretation(pred_op);
 	else						/* no point in looking */
 		pred_op_infos = NIL;
 
 	foreach(lcp, pred_op_infos)
 	{
-		OpBtreeInterpretation *pred_op_info = lfirst(lcp);
+		OpIndexInterpretation *pred_op_info = lfirst(lcp);
 		Oid			opfamily_id = pred_op_info->opfamily_id;
 
 		foreach(lcc, clause_op_infos)
 		{
-			OpBtreeInterpretation *clause_op_info = lfirst(lcc);
+			OpIndexInterpretation *clause_op_info = lfirst(lcc);
 			StrategyNumber pred_strategy,
 						clause_strategy,
 						test_strategy;
@@ -2187,7 +2187,8 @@ lookup_proof_cache(Oid pred_op, Oid clause_op, bool refute_it)
 			if (opfamily_id != clause_op_info->opfamily_id)
 				continue;
 			/* Lefttypes should match */
-			Assert(clause_op_info->oplefttype == pred_op_info->oplefttype);
+			if (clause_op_info->oplefttype != pred_op_info->oplefttype)
+				continue;
 
 			pred_strategy = pred_op_info->strategy;
 			clause_strategy = clause_op_info->strategy;
@@ -2221,10 +2222,11 @@ lookup_proof_cache(Oid pred_op, Oid clause_op, bool refute_it)
 			 */
 			if (test_strategy == BTNE)
 			{
-				test_op = get_opfamily_member(opfamily_id,
+				test_op = get_opmethod_member(InvalidOid,
+											  opfamily_id,
 											  pred_op_info->oprighttype,
 											  clause_op_info->oprighttype,
-											  BTEqualStrategyNumber);
+											  ROWCOMPARE_EQ);
 				if (OidIsValid(test_op))
 					test_op = get_negator(test_op);
 			}

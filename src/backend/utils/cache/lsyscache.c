@@ -32,6 +32,7 @@
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_operator.h"
+#include "catalog/pg_opfamily.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_publication.h"
 #include "catalog/pg_range.h"
@@ -135,7 +136,9 @@ get_op_opfamily_sortfamily(Oid opno, Oid opfamily)
  */
 void
 get_op_opfamily_properties(Oid opno, Oid opfamily, bool ordering_op,
+						   Oid *opmethod,
 						   int *strategy,
+						   RowCompareType *rctype,
 						   Oid *lefttype,
 						   Oid *righttype)
 {
@@ -150,10 +153,42 @@ get_op_opfamily_properties(Oid opno, Oid opfamily, bool ordering_op,
 		elog(ERROR, "operator %u is not a member of opfamily %u",
 			 opno, opfamily);
 	amop_tup = (Form_pg_amop) GETSTRUCT(tp);
-	*strategy = amop_tup->amopstrategy;
-	*lefttype = amop_tup->amoplefttype;
-	*righttype = amop_tup->amoprighttype;
+	if (opmethod)
+		*opmethod = amop_tup->amopmethod;
+	if (strategy)
+		*strategy = amop_tup->amopstrategy;
+	if (rctype)
+		*rctype = strategy_get_rctype(amop_tup->amopmethod,
+									  amop_tup->amopstrategy,
+									  true);
+	if (lefttype)
+		*lefttype = amop_tup->amoplefttype;
+	if (righttype)
+		*righttype = amop_tup->amoprighttype;
 	ReleaseSysCache(tp);
+}
+
+/*
+ * get_opmethod_member
+ *		Get the OID of the operator that implements the specified row
+ *		comparison with the specified datatypes for the specified opfamily.
+ *
+ * Returns InvalidOid if there is no pg_amop entry for the given keys.
+ */
+Oid
+get_opmethod_member(Oid opmethod, Oid opfamily, Oid lefttype, Oid righttype,
+					RowCompareType rctype)
+{
+	StrategyNumber	strategy;
+
+	if (!OidIsValid(opmethod))
+	{
+		Assert(OidIsValid(opfamily));
+		opmethod = get_opfamily_method(opfamily);
+	}
+
+	strategy = rctype_get_strategy(opmethod, rctype, false);
+	return get_opfamily_member(opfamily, lefttype, righttype, strategy);
 }
 
 /*
@@ -186,9 +221,9 @@ get_opfamily_member(Oid opfamily, Oid lefttype, Oid righttype,
 
 /*
  * get_ordering_op_properties
- *		Given the OID of an ordering operator (a btree "<" or ">" operator),
- *		determine its opfamily, its declared input datatype, and its
- *		strategy number (BTLessStrategyNumber or BTGreaterStrategyNumber).
+ *		Given the OID of an ordering operator (a "<" or ">" operator),
+ *		determine its opmethod, its opfamily, its declared input datatype, its
+ *		strategy number, and its row comparison type.
  *
  * Returns true if successful, false if no matching pg_amop entry exists.
  * (This indicates that the operator is not a valid ordering operator.)
@@ -205,17 +240,26 @@ get_opfamily_member(Oid opfamily, Oid lefttype, Oid righttype,
  * additional effort on ensuring consistency.
  */
 bool
-get_ordering_op_properties(Oid opno,
-						   Oid *opfamily, Oid *opcintype, int16 *strategy)
+get_ordering_op_properties(Oid opno, Oid opmethodfilter,
+						   Oid *opmethod, Oid *opfamily,
+						   Oid *opcintype, int16 *strategy,
+						   RowCompareType *rctype)
 {
 	bool		result = false;
 	CatCList   *catlist;
 	int			i;
 
 	/* ensure outputs are initialized on failure */
-	*opfamily = InvalidOid;
-	*opcintype = InvalidOid;
-	*strategy = 0;
+	if (opmethod)
+		*opmethod = InvalidOid;
+	if (opfamily)
+		*opfamily = InvalidOid;
+	if (opcintype)
+		*opcintype = InvalidOid;
+	if (strategy)
+		*strategy = InvalidStrategy;
+	if (rctype)
+		*rctype = ROWCOMPARE_INVALID;
 
 	/*
 	 * Search pg_amop to see if the target operator is registered as the "<"
@@ -227,21 +271,34 @@ get_ordering_op_properties(Oid opno,
 	{
 		HeapTuple	tuple = &catlist->members[i]->tuple;
 		Form_pg_amop aform = (Form_pg_amop) GETSTRUCT(tuple);
+		RowCompareType am_rctype;
 
-		/* must be btree */
-		if (aform->amopmethod != BTREE_AM_OID)
+		/* must be acceptable to our opmethod filter */
+		if (OidIsValid(opmethodfilter) && aform->amopmethod != opmethodfilter)
 			continue;
 
-		if (aform->amopstrategy == BTLessStrategyNumber ||
-			aform->amopstrategy == BTGreaterStrategyNumber)
+		am_rctype = strategy_get_rctype(aform->amopmethod,
+										aform->amopstrategy,
+										true);
+
+		if (am_rctype == ROWCOMPARE_LT || am_rctype == ROWCOMPARE_GT)
 		{
 			/* Found it ... should have consistent input types */
 			if (aform->amoplefttype == aform->amoprighttype)
 			{
 				/* Found a suitable opfamily, return info */
-				*opfamily = aform->amopfamily;
-				*opcintype = aform->amoplefttype;
-				*strategy = aform->amopstrategy;
+				if (opmethod)
+					*opmethod = aform->amopmethod;
+				if (opfamily)
+					*opfamily = aform->amopfamily;
+				if (opcintype)
+					*opcintype = aform->amoplefttype;
+				if (strategy)
+					*strategy = aform->amopstrategy;
+				if (rctype)
+					*rctype = strategy_get_rctype(aform->amopmethod,
+												  aform->amopstrategy,
+												  false);
 				result = true;
 				break;
 			}
@@ -265,24 +322,27 @@ get_ordering_op_properties(Oid opno,
  * (This indicates that the operator is not a valid ordering operator.)
  */
 Oid
-get_equality_op_for_ordering_op(Oid opno, bool *reverse)
+get_equality_op_for_ordering_op(Oid opno, Oid opmethodfilter, bool *reverse)
 {
 	Oid			result = InvalidOid;
+	Oid			opmethod;
 	Oid			opfamily;
 	Oid			opcintype;
 	int16		strategy;
+	RowCompareType rctype;
 
 	/* Find the operator in pg_amop */
-	if (get_ordering_op_properties(opno,
-								   &opfamily, &opcintype, &strategy))
+	if (get_ordering_op_properties(opno, opmethodfilter, &opmethod, &opfamily,
+								   &opcintype, &strategy, &rctype))
 	{
 		/* Found a suitable opfamily, get matching equality operator */
-		result = get_opfamily_member(opfamily,
+		result = get_opmethod_member(opmethod,
+									 opfamily,
 									 opcintype,
 									 opcintype,
-									 BTEqualStrategyNumber);
+									 ROWCOMPARE_EQ);
 		if (reverse)
-			*reverse = (strategy == BTGreaterStrategyNumber);
+			*reverse = (rctype == ROWCOMPARE_GT);
 	}
 
 	return result;
@@ -330,9 +390,10 @@ get_ordering_op_for_equality_op(Oid opno, bool use_lhs_type)
 			Oid			typid;
 
 			typid = use_lhs_type ? aform->amoplefttype : aform->amoprighttype;
-			result = get_opfamily_member(aform->amopfamily,
+			result = get_opmethod_member(InvalidOid,
+										 aform->amopfamily,
 										 typid, typid,
-										 BTLessStrategyNumber);
+										 ROWCOMPARE_LT);
 			if (OidIsValid(result))
 				break;
 			/* failure probably shouldn't happen, but keep looking if so */
@@ -589,20 +650,20 @@ get_op_hash_functions(Oid opno,
 }
 
 /*
- * get_op_btree_interpretation
+ * get_op_index_interpretation
  *		Given an operator's OID, find out which btree opfamilies it belongs to,
  *		and what properties it has within each one.  The results are returned
- *		as a palloc'd list of OpBtreeInterpretation structs.
+ *		as a palloc'd list of OpIndexInterpretation structs.
  *
  * In addition to the normal btree operators, we consider a <> operator to be
  * a "member" of an opfamily if its negator is an equality operator of the
  * opfamily.  ROWCOMPARE_NE is returned as the strategy number for this case.
  */
 List *
-get_op_btree_interpretation(Oid opno)
+get_op_index_interpretation(Oid opno)
 {
 	List	   *result = NIL;
-	OpBtreeInterpretation *thisresult;
+	OpIndexInterpretation *thisresult;
 	CatCList   *catlist;
 	int			i;
 
@@ -625,10 +686,14 @@ get_op_btree_interpretation(Oid opno)
 		op_strategy = (StrategyNumber) op_form->amopstrategy;
 		Assert(op_strategy >= 1 && op_strategy <= 5);
 
-		thisresult = (OpBtreeInterpretation *)
-			palloc(sizeof(OpBtreeInterpretation));
+		thisresult = (OpIndexInterpretation *)
+			palloc(sizeof(OpIndexInterpretation));
+		thisresult->opmethod = op_form->amopmethod;
 		thisresult->opfamily_id = op_form->amopfamily;
 		thisresult->strategy = op_strategy;
+		thisresult->rctype = strategy_get_rctype(thisresult->opmethod,
+												 thisresult->strategy,
+												 false);
 		thisresult->oplefttype = op_form->amoplefttype;
 		thisresult->oprighttype = op_form->amoprighttype;
 		result = lappend(result, thisresult);
@@ -668,8 +733,8 @@ get_op_btree_interpretation(Oid opno)
 					continue;
 
 				/* OK, report it with "strategy" ROWCOMPARE_NE */
-				thisresult = (OpBtreeInterpretation *)
-					palloc(sizeof(OpBtreeInterpretation));
+				thisresult = (OpIndexInterpretation *)
+					palloc(sizeof(OpIndexInterpretation));
 				thisresult->opfamily_id = op_form->amopfamily;
 				thisresult->strategy = ROWCOMPARE_NE;
 				thisresult->oplefttype = op_form->amoplefttype;
@@ -1178,6 +1243,30 @@ get_language_name(Oid langoid, bool missing_ok)
 		elog(ERROR, "cache lookup failed for language %u",
 			 langoid);
 	return NULL;
+}
+
+/*				---------- OPFAMILY CACHE ----------						 */
+
+/*
+ * get_opfamily_method
+ *
+ *		Returns the OID of the operator method the opfamily belongs to.
+ */
+Oid
+get_opfamily_method(Oid opfamily)
+{
+	HeapTuple	tp;
+	Form_pg_opfamily opf_tup;
+	Oid			result;
+
+	tp = SearchSysCache1(OPFAMILYOID, ObjectIdGetDatum(opfamily));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for opfamily %u", opfamily);
+	opf_tup = (Form_pg_opfamily) GETSTRUCT(tp);
+
+	result = opf_tup->opfmethod;
+	ReleaseSysCache(tp);
+	return result;
 }
 
 /*				---------- OPCLASS CACHE ----------						 */
@@ -3728,10 +3817,13 @@ strategy_get_rctype(Oid amoid, int16 strategy, bool missing_ok)
 {
 	RowCompareType	result;
 
+	if (strategy == InvalidStrategy)
+		result = ROWCOMPARE_INVALID;
+
 	/*
 	 * Avoid looking up the amroutine for common cases.
 	 */
-	if (amoid == BTREE_AM_OID)
+	else if (amoid == BTREE_AM_OID)
 		result = bttranslatestrategy(strategy);
 	else if (amoid == HASH_AM_OID)
 		result = hashtranslatestrategy(strategy);

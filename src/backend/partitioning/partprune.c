@@ -1425,7 +1425,9 @@ gen_prune_steps_from_opexps(GeneratePruningStepsContext *context,
 				get_op_opfamily_properties(pc->opno,
 										   part_scheme->partopfamily[i],
 										   false,
+										   NULL,		/* don't need opmethod */
 										   &pc->op_strategy,
+										   NULL,		/* don't need rctype */
 										   &lefttype,
 										   &righttype);
 
@@ -1953,7 +1955,10 @@ match_clause_to_partition_key(GeneratePruningStepsContext *context,
 		if (op_in_opfamily(opno, partopfamily))
 		{
 			get_op_opfamily_properties(opno, partopfamily, false,
-									   &op_strategy, &op_lefttype,
+									   NULL,		/* don't need opmethod */
+									   &op_strategy,
+									   NULL,		/* don't need rctype */
+									   &op_lefttype,
 									   &op_righttype);
 		}
 		else
@@ -1967,7 +1972,10 @@ match_clause_to_partition_key(GeneratePruningStepsContext *context,
 			if (OidIsValid(negator) && op_in_opfamily(negator, partopfamily))
 			{
 				get_op_opfamily_properties(negator, partopfamily, false,
-										   &op_strategy, &op_lefttype,
+										   NULL,		/* don't need opmethod */
+										   &op_strategy,
+										   NULL,		/* don't need rctype */
+										   &op_lefttype,
 										   &op_righttype);
 				if (op_strategy == BTEqualStrategyNumber)
 					is_opne_listp = true;	/* bingo */
@@ -2182,7 +2190,10 @@ match_clause_to_partition_key(GeneratePruningStepsContext *context,
 							righttype;
 
 				get_op_opfamily_properties(negator, partopfamily,
-										   false, &strategy,
+										   false,
+										   NULL,		/* don't need opmethod */
+										   &strategy,
+										   NULL,		/* don't need rctype */
 										   &lefttype, &righttype);
 				if (strategy != BTEqualStrategyNumber)
 					return PARTCLAUSE_NOMATCH;

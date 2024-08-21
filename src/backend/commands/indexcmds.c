@@ -1029,10 +1029,11 @@ DefineIndex(Oid tableId,
 						Oid			idx_eqop = InvalidOid;
 
 						if (stmt->unique)
-							idx_eqop = get_opfamily_member(idx_opfamily,
+							idx_eqop = get_opmethod_member(InvalidOid,
+														   idx_opfamily,
 														   idx_opcintype,
 														   idx_opcintype,
-														   BTEqualStrategyNumber);
+														   ROWCOMPARE_EQ);
 						else if (stmt->excludeOpNames)
 							idx_eqop = indexInfo->ii_ExclusionOps[j];
 						Assert(idx_eqop);

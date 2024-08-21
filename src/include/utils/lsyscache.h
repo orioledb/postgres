@@ -21,14 +21,16 @@
 /* avoid including subscripting.h here */
 struct SubscriptRoutines;
 
-/* Result list element for get_op_btree_interpretation */
-typedef struct OpBtreeInterpretation
+/* Result list element for get_op_index_interpretation */
+typedef struct OpIndexInterpretation
 {
+	Oid			opmethod;		/* index access method of opfamily */
 	Oid			opfamily_id;	/* btree opfamily containing operator */
 	int			strategy;		/* its strategy number */
+	RowCompareType rctype;		/* its generic row comparison type */
 	Oid			oplefttype;		/* declared left input datatype */
 	Oid			oprighttype;	/* declared right input datatype */
-} OpBtreeInterpretation;
+} OpIndexInterpretation;
 
 /* I/O function selector for get_type_io_data */
 typedef enum IOFuncSelector
@@ -69,22 +71,31 @@ extern PGDLLIMPORT get_attavgwidth_hook_type get_attavgwidth_hook;
 extern bool op_in_opfamily(Oid opno, Oid opfamily);
 extern int	get_op_opfamily_strategy(Oid opno, Oid opfamily);
 extern Oid	get_op_opfamily_sortfamily(Oid opno, Oid opfamily);
-extern void get_op_opfamily_properties(Oid opno, Oid opfamily, bool ordering_op,
+extern void get_op_opfamily_properties(Oid opno,
+									   Oid opfamily,
+									   bool ordering_op,
+									   Oid *opmethod,
 									   int *strategy,
+									   RowCompareType *rctype,
 									   Oid *lefttype,
 									   Oid *righttype);
+extern Oid	get_opmethod_member(Oid opmethod, Oid opfamily, Oid lefttype,
+								Oid righttype, RowCompareType rctype);
 extern Oid	get_opfamily_member(Oid opfamily, Oid lefttype, Oid righttype,
 								int16 strategy);
-extern bool get_ordering_op_properties(Oid opno,
-									   Oid *opfamily, Oid *opcintype, int16 *strategy);
-extern Oid	get_equality_op_for_ordering_op(Oid opno, bool *reverse);
+extern bool get_ordering_op_properties(Oid opno, Oid opmethodfilter,
+									   Oid *opmethod, Oid *opfamily,
+									   Oid *opcintype, int16 *strategy,
+									   RowCompareType *rctype);
+extern Oid	get_equality_op_for_ordering_op(Oid opno, Oid opmethodfilter,
+											bool *reverse);
 extern Oid	get_ordering_op_for_equality_op(Oid opno, bool use_lhs_type);
 extern List *get_mergejoin_opfamilies(Oid opno);
 extern bool get_compatible_hash_operators(Oid opno,
 										  Oid *lhs_opno, Oid *rhs_opno);
 extern bool get_op_hash_functions(Oid opno,
 								  RegProcedure *lhs_procno, RegProcedure *rhs_procno);
-extern List *get_op_btree_interpretation(Oid opno);
+extern List *get_op_index_interpretation(Oid opno);
 extern bool equality_ops_are_compatible(Oid opno1, Oid opno2);
 extern bool comparison_ops_are_compatible(Oid opno1, Oid opno2);
 extern Oid	get_opfamily_proc(Oid opfamily, Oid lefttype, Oid righttype,
@@ -104,6 +115,7 @@ extern Oid	get_constraint_index(Oid conoid);
 extern char get_constraint_type(Oid conoid);
 
 extern char *get_language_name(Oid langoid, bool missing_ok);
+extern Oid	get_opfamily_method(Oid opfamily);
 extern Oid	get_opclass_family(Oid opclass);
 extern Oid	get_opclass_input_type(Oid opclass);
 extern bool get_opclass_opfamily_and_input_type(Oid opclass,

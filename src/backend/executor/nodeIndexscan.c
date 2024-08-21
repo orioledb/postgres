@@ -1180,6 +1180,7 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 		RegProcedure opfuncid;	/* operator proc id used in scan */
 		Oid			opfamily;	/* opfamily of index column */
 		int			op_strategy;	/* operator's strategy number */
+		RowCompareType op_rctype;
 		Oid			op_lefttype;	/* operator's declared input types */
 		Oid			op_righttype;
 		Expr	   *leftop;		/* expr on lhs of operator */
@@ -1222,7 +1223,9 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 			opfamily = index->rd_opfamily[varattno - 1];
 
 			get_op_opfamily_properties(opno, opfamily, isorderby,
+									   NULL,		/* don't need opmethod */
 									   &op_strategy,
+									   NULL,		/* don't need rctype */
 									   &op_lefttype,
 									   &op_righttype);
 
@@ -1340,11 +1343,13 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 				opfamily = index->rd_opfamily[varattno - 1];
 
 				get_op_opfamily_properties(opno, opfamily, isorderby,
+										   NULL,		/* don't need opmethod */
 										   &op_strategy,
+										   &op_rctype,
 										   &op_lefttype,
 										   &op_righttype);
 
-				if (op_strategy != rc->rctype)
+				if (op_rctype != rc->rctype)
 					elog(ERROR, "RowCompare index qualification contains wrong operator");
 
 				opfuncid = get_opfamily_proc(opfamily,
@@ -1421,7 +1426,9 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 			MemSet(this_scan_key, 0, sizeof(ScanKeyData));
 			this_scan_key->sk_flags = SK_ROW_HEADER;
 			this_scan_key->sk_attno = first_sub_key->sk_attno;
-			this_scan_key->sk_strategy = rc->rctype;
+			this_scan_key->sk_strategy = rctype_get_strategy(index->rd_rel->relam,
+															 rc->rctype,
+															 false);
 			/* sk_subtype, sk_collation, sk_func not used in a header */
 			this_scan_key->sk_argument = PointerGetDatum(first_sub_key);
 		}
@@ -1463,7 +1470,9 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 			opfamily = index->rd_opfamily[varattno - 1];
 
 			get_op_opfamily_properties(opno, opfamily, isorderby,
+									   NULL,		/* don't need opmethod */
 									   &op_strategy,
+									   NULL,		/* don't need rctype */
 									   &op_lefttype,
 									   &op_righttype);
 

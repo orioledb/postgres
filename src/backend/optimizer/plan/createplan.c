@@ -19,6 +19,7 @@
 #include <math.h>
 
 #include "access/sysattr.h"
+#include "catalog/pg_am.h"			/* for BTREE_AM_OID */
 #include "catalog/pg_class.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
@@ -1876,7 +1877,7 @@ create_unique_plan(PlannerInfo *root, UniquePath *best_path, int flags)
 			 * cross-type operators then the equality operators are the ones
 			 * for the IN clause operators' RHS datatype.
 			 */
-			eqop = get_equality_op_for_ordering_op(sortop, NULL);
+			eqop = get_equality_op_for_ordering_op(sortop, BTREE_AM_OID, NULL);
 			if (!OidIsValid(eqop))	/* shouldn't happen */
 				elog(ERROR, "could not find equality operator for ordering operator %u",
 					 sortop);
@@ -4700,13 +4701,14 @@ create_mergejoin_plan(PlannerInfo *root,
 			elog(ERROR, "left and right pathkeys do not match in mergejoin");
 		if (first_inner_match &&
 			(opathkey->pk_strategy != ipathkey->pk_strategy ||
+			 opathkey->pk_rctype != ipathkey->pk_rctype ||
 			 opathkey->pk_nulls_first != ipathkey->pk_nulls_first))
 			elog(ERROR, "left and right pathkeys do not match in mergejoin");
 
 		/* OK, save info for executor */
 		mergefamilies[i] = opathkey->pk_opfamily;
 		mergecollations[i] = opathkey->pk_eclass->ec_collation;
-		mergereversals[i] = (opathkey->pk_strategy == BTGreaterStrategyNumber ? true : false);
+		mergereversals[i] = opathkey->pk_rctype == ROWCOMPARE_GT ? true : false;
 		mergenullsfirst[i] = opathkey->pk_nulls_first;
 		i++;
 	}
@@ -6832,10 +6834,11 @@ make_unique_from_pathkeys(Plan *lefttree, List *pathkeys, int numCols)
 		 * Look up the correct equality operator from the PathKey's slightly
 		 * abstracted representation.
 		 */
-		eqop = get_opfamily_member(pathkey->pk_opfamily,
+		eqop = get_opmethod_member(InvalidOid,
+								   pathkey->pk_opfamily,
 								   pk_datatype,
 								   pk_datatype,
-								   BTEqualStrategyNumber);
+								   ROWCOMPARE_EQ);
 		if (!OidIsValid(eqop))	/* should not happen */
 			elog(ERROR, "missing operator %d(%u,%u) in opfamily %u",
 				 BTEqualStrategyNumber, pk_datatype, pk_datatype,

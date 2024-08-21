@@ -2177,6 +2177,8 @@ treebtranslatestrategy(uint16 strategy)
 			return ROWCOMPARE_GE;
 		case TreebGreaterStrategyNumber:
 			return ROWCOMPARE_GT;
+		case InvalidStrategy:
+			return ROWCOMPARE_INVALID;
 		default:
 			return ROWCOMPARE_NONE;
 	}

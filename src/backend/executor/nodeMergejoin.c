@@ -196,6 +196,7 @@ MJExamineQuals(List *mergeclauses,
 		bool		reversed = mergereversals[iClause];
 		bool		nulls_first = mergenullsfirst[iClause];
 		int			op_strategy;
+		RowCompareType op_rctype;
 		Oid			op_lefttype;
 		Oid			op_righttype;
 		Oid			sortfunc;
@@ -217,10 +218,12 @@ MJExamineQuals(List *mergeclauses,
 
 		/* Extract the operator's declared left/right datatypes */
 		get_op_opfamily_properties(qual->opno, opfamily, false,
+								   NULL,		/* don't need opmethod */
 								   &op_strategy,
+								   &op_rctype,
 								   &op_lefttype,
 								   &op_righttype);
-		if (op_strategy != BTEqualStrategyNumber)	/* should not happen */
+		if (op_rctype != ROWCOMPARE_EQ)			/* should not happen */
 			elog(ERROR, "cannot merge using non-equality operator %u",
 				 qual->opno);
 

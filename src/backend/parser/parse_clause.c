@@ -2915,7 +2915,6 @@ transformWindowDefinitions(ParseState *pstate,
 		{
 			SortGroupClause *sortcl;
 			Node	   *sortkey;
-			int16		rangestrategy;
 
 			if (list_length(wc->orderClause) != 1)
 				ereport(ERROR,
@@ -2926,9 +2925,12 @@ transformWindowDefinitions(ParseState *pstate,
 			sortkey = get_sortgroupclause_expr(sortcl, *targetlist);
 			/* Find the sort operator in pg_amop */
 			if (!get_ordering_op_properties(sortcl->sortop,
+											BTREE_AM_OID,
+											NULL,
 											&rangeopfamily,
 											&rangeopcintype,
-											&rangestrategy))
+											NULL,
+											NULL))
 				elog(ERROR, "operator %u is not a valid ordering operator",
 					 sortcl->sortop);
 			/* Record properties of sort ordering */
@@ -3455,7 +3457,7 @@ addTargetToSortList(ParseState *pstate, TargetEntry *tle,
 			 * equality operator, and determine whether to consider it like
 			 * ASC or DESC.
 			 */
-			eqop = get_equality_op_for_ordering_op(sortop, &reverse);
+			eqop = get_equality_op_for_ordering_op(sortop, BTREE_AM_OID, &reverse);
 			if (!OidIsValid(eqop))
 				ereport(ERROR,
 						(errcode(ERRCODE_WRONG_OBJECT_TYPE),

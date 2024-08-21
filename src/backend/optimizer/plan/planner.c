@@ -23,6 +23,7 @@
 #include "access/sysattr.h"
 #include "access/table.h"
 #include "catalog/pg_aggregate.h"
+#include "catalog/pg_am.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_proc.h"
@@ -1386,6 +1387,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction,
 		 */
 		Assert(parse->distinctClause == NIL);
 		root->sort_pathkeys = make_pathkeys_for_sortclauses(root,
+															BTREE_AM_OID,
 															parse->sortClause,
 															root->processed_tlist);
 	}
@@ -3327,7 +3329,9 @@ adjust_group_pathkeys_for_groupagg(PlannerInfo *root)
 			else
 				sortlist = aggref->aggorder;
 
-			pathkeys = make_pathkeys_for_sortclauses(root, sortlist,
+			pathkeys = make_pathkeys_for_sortclauses(root,
+													 BTREE_AM_OID,
+													 sortlist,
 													 aggref->args);
 
 			/*
@@ -3461,6 +3465,7 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 		if (grouping_is_sortable(groupClause))
 		{
 			root->group_pathkeys = make_pathkeys_for_sortclauses(root,
+																 BTREE_AM_OID,
 																 groupClause,
 																 tlist);
 			root->num_groupby_pathkeys = list_length(root->group_pathkeys);
@@ -3489,6 +3494,7 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 		 */
 		root->group_pathkeys =
 			make_pathkeys_for_sortclauses_extended(root,
+												   BTREE_AM_OID,
 												   &root->processed_groupClause,
 												   tlist,
 												   true,
@@ -3540,6 +3546,7 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 		root->processed_distinctClause = list_copy(parse->distinctClause);
 		root->distinct_pathkeys =
 			make_pathkeys_for_sortclauses_extended(root,
+												   BTREE_AM_OID,
 												   &root->processed_distinctClause,
 												   tlist,
 												   true,
@@ -3553,6 +3560,7 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 
 	root->sort_pathkeys =
 		make_pathkeys_for_sortclauses(root,
+									  BTREE_AM_OID,
 									  parse->sortClause,
 									  tlist);
 
@@ -3567,6 +3575,7 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 
 		root->setop_pathkeys =
 			make_pathkeys_for_sortclauses_extended(root,
+												   BTREE_AM_OID,
 												   &groupClauses,
 												   tlist,
 												   false,
@@ -6153,6 +6162,7 @@ make_pathkeys_for_window(PlannerInfo *root, WindowClause *wc,
 		bool		sortable;
 
 		window_pathkeys = make_pathkeys_for_sortclauses_extended(root,
+																 BTREE_AM_OID,
 																 &wc->partitionClause,
 																 tlist,
 																 true,
@@ -6174,6 +6184,7 @@ make_pathkeys_for_window(PlannerInfo *root, WindowClause *wc,
 		List	   *orderby_pathkeys;
 
 		orderby_pathkeys = make_pathkeys_for_sortclauses(root,
+														 BTREE_AM_OID,
 														 wc->orderClause,
 														 tlist);
 
