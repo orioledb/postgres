@@ -1665,4 +1665,7 @@ extern Tuplesortstate *tuplesort_begin_index_treeb(Relation heapRel,
 												   int workMem, SortCoordinate coordinate,
 												   int sortopt);
 
+extern RowCompareType treebtranslatestrategy(uint16 strategy);
+extern uint16 treebtranslaterctype(RowCompareType rctype);
+
 #endif							/* TREEB_H */

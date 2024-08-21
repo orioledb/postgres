@@ -161,6 +161,8 @@ treeb_indexam_handler(PG_FUNCTION_ARGS)
 	amroutine->ambegintscluster = tuplesort_begin_cluster_treeb;
 	amroutine->aminitparallelscan = treebinitparallelscan;
 	amroutine->amparallelrescan = treebparallelrescan;
+	amroutine->amtranslatestrategy = treebtranslatestrategy;
+	amroutine->amtranslaterctype = treebtranslaterctype;
 
 	PG_RETURN_POINTER(amroutine);
 }
@@ -2158,4 +2160,44 @@ tuplesort_begin_index_treeb(Relation heapRel,
 	MemoryContextSwitchTo(oldcontext);
 
 	return state;
+}
+
+RowCompareType
+treebtranslatestrategy(uint16 strategy)
+{
+	switch (strategy)
+	{
+		case TreebLessStrategyNumber:
+			return ROWCOMPARE_LT;
+		case TreebLessEqualStrategyNumber:
+			return ROWCOMPARE_LE;
+		case TreebEqualStrategyNumber:
+			return ROWCOMPARE_EQ;
+		case TreebGreaterEqualStrategyNumber:
+			return ROWCOMPARE_GE;
+		case TreebGreaterStrategyNumber:
+			return ROWCOMPARE_GT;
+		default:
+			return ROWCOMPARE_NONE;
+	}
+}
+
+uint16
+treebtranslaterctype(RowCompareType rctype)
+{
+	switch (rctype)
+	{
+		case ROWCOMPARE_LT:
+			return TreebLessStrategyNumber;
+		case ROWCOMPARE_LE:
+			return TreebLessEqualStrategyNumber;
+		case ROWCOMPARE_EQ:
+			return TreebEqualStrategyNumber;
+		case ROWCOMPARE_GE:
+			return TreebGreaterEqualStrategyNumber;
+		case ROWCOMPARE_GT:
+			return TreebGreaterStrategyNumber;
+		default:
+			return InvalidStrategy;
+	}
 }
