@@ -379,18 +379,21 @@ get_ordering_op_for_equality_op(Oid opno, bool use_lhs_type)
 	{
 		HeapTuple	tuple = &catlist->members[i]->tuple;
 		Form_pg_amop aform = (Form_pg_amop) GETSTRUCT(tuple);
+		RowCompareType rctype;
 
-		/* must be btree */
-		if (aform->amopmethod != BTREE_AM_OID)
+		if (!IndexAmCanOrder(aform->amopmethod))
 			continue;
 
-		if (aform->amopstrategy == BTEqualStrategyNumber)
+		rctype = strategy_get_rctype(aform->amopmethod,
+									 aform->amopstrategy,
+									 true);
+		if (rctype == ROWCOMPARE_EQ)
 		{
 			/* Found a suitable opfamily, get matching ordering operator */
 			Oid			typid;
 
 			typid = use_lhs_type ? aform->amoplefttype : aform->amoprighttype;
-			result = get_opmethod_member(InvalidOid,
+			result = get_opmethod_member(aform->amopmethod,
 										 aform->amopfamily,
 										 typid, typid,
 										 ROWCOMPARE_LT);
@@ -690,9 +693,8 @@ get_op_index_interpretation(Oid opno)
 			palloc(sizeof(OpIndexInterpretation));
 		thisresult->opmethod = op_form->amopmethod;
 		thisresult->opfamily_id = op_form->amopfamily;
-		thisresult->strategy = op_strategy;
 		thisresult->rctype = strategy_get_rctype(thisresult->opmethod,
-												 thisresult->strategy,
+												 op_strategy,
 												 false);
 		thisresult->oplefttype = op_form->amoplefttype;
 		thisresult->oprighttype = op_form->amoprighttype;
@@ -736,7 +738,7 @@ get_op_index_interpretation(Oid opno)
 				thisresult = (OpIndexInterpretation *)
 					palloc(sizeof(OpIndexInterpretation));
 				thisresult->opfamily_id = op_form->amopfamily;
-				thisresult->strategy = ROWCOMPARE_NE;
+				thisresult->rctype = ROWCOMPARE_NE;
 				thisresult->oplefttype = op_form->amoplefttype;
 				thisresult->oprighttype = op_form->amoprighttype;
 				result = lappend(result, thisresult);

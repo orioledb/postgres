@@ -26,7 +26,6 @@ typedef struct OpIndexInterpretation
 {
 	Oid			opmethod;		/* index access method of opfamily */
 	Oid			opfamily_id;	/* btree opfamily containing operator */
-	int			strategy;		/* its strategy number */
 	RowCompareType rctype;		/* its generic row comparison type */
 	Oid			oplefttype;		/* declared left input datatype */
 	Oid			oprighttype;	/* declared right input datatype */

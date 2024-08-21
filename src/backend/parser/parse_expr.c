@@ -2815,7 +2815,7 @@ make_row_comparison_op(ParseState *pstate, List *opname,
 	ListCell   *l,
 			   *r;
 	List	  **opinfo_lists;
-	Bitmapset  *strats;
+	Bitmapset  *rctypes;
 	int			nopers;
 	int			i;
 
@@ -2880,45 +2880,45 @@ make_row_comparison_op(ParseState *pstate, List *opname,
 
 	/*
 	 * Now we must determine which row comparison semantics (= <> < <= > >=)
-	 * apply to this set of operators.  We look for btree opfamilies
-	 * containing the operators, and see which interpretations (strategy
+	 * apply to this set of operators.  We look for opfamilies
+	 * containing the operators, and see which interpretations (rctypes
 	 * numbers) exist for each operator.
 	 */
 	opinfo_lists = (List **) palloc(nopers * sizeof(List *));
-	strats = NULL;
+	rctypes = NULL;
 	i = 0;
 	foreach(l, opexprs)
 	{
 		Oid			opno = ((OpExpr *) lfirst(l))->opno;
-		Bitmapset  *this_strats;
+		Bitmapset  *this_rctypes;
 		ListCell   *j;
 
 		opinfo_lists[i] = get_op_index_interpretation(opno);
 
 		/*
-		 * convert strategy numbers into a Bitmapset to make the intersection
+		 * convert row comparison types into a Bitmapset to make the intersection
 		 * calculation easy.
 		 */
-		this_strats = NULL;
+		this_rctypes = NULL;
 		foreach(j, opinfo_lists[i])
 		{
 			OpIndexInterpretation *opinfo = lfirst(j);
 
-			this_strats = bms_add_member(this_strats, opinfo->strategy);
+			this_rctypes = bms_add_member(this_rctypes, opinfo->rctype);
 		}
 		if (i == 0)
-			strats = this_strats;
+			rctypes = this_rctypes;
 		else
-			strats = bms_int_members(strats, this_strats);
+			rctypes = bms_int_members(rctypes, this_rctypes);
 		i++;
 	}
 
 	/*
 	 * If there are multiple common interpretations, we may use any one of
-	 * them ... this coding arbitrarily picks the lowest btree strategy
+	 * them ... this coding arbitrarily picks the lowest row comparison type
 	 * number.
 	 */
-	i = bms_next_member(strats, -1);
+	i = bms_next_member(rctypes, -1);
 	if (i < 0)
 	{
 		/* No common interpretation, so fail */
@@ -2954,7 +2954,7 @@ make_row_comparison_op(ParseState *pstate, List *opname,
 		{
 			OpIndexInterpretation *opinfo = lfirst(j);
 
-			if (opinfo->strategy == rctype)
+			if (opinfo->rctype == rctype)
 			{
 				opfamily = opinfo->opfamily_id;
 				break;
