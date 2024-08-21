@@ -910,6 +910,11 @@ AlterOpFamilyAdd(AlterOpFamilyStmt *stmt, Oid amoid, Oid opfamilyoid,
 							 errmsg("invalid operator number %d,"
 									" must be between 1 and %d",
 									item->number, maxOpNumber)));
+				if (strategy_get_rctype(amoid, item->number, true) == ROWCOMPARE_INVALID)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+							 errmsg("invalid operator number %d for access method \"%s\"",
+									item->number, stmt->amname)));
 				if (item->name->objargs != NIL)
 					operOid = LookupOperWithArgs(item->name, false);
 				else
@@ -921,7 +926,11 @@ AlterOpFamilyAdd(AlterOpFamilyStmt *stmt, Oid amoid, Oid opfamilyoid,
 				}
 
 				if (item->order_family)
-					sortfamilyOid = get_opfamily_oid(BTREE_AM_OID,
+					/*
+					 * As an historical artifact, Gist and SpGist piggyback on
+					 * Btree.  Other opmethods should be independent.
+					 */
+					sortfamilyOid = get_opfamily_oid(amoid == SPGIST_AM_OID || amoid == GIST_AM_OID ? BTREE_AM_OID : amoid,
 													 item->order_family,
 													 false);
 				else

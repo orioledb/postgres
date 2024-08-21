@@ -386,6 +386,9 @@ extern void hashadjustmembers(Oid opfamilyoid,
 							  List *operators,
 							  List *functions);
 
+extern RowCompareType hashtranslatestrategy(uint16 strategy);
+extern uint16 hashtranslaterctype(RowCompareType rctype);
+
 /* private routines */
 
 /* hashinsert.c */

@@ -191,6 +191,8 @@ typedef struct spgLeafConsistentOut
 
 /* spgutils.c */
 extern bytea *spgoptions(Datum reloptions, bool validate);
+extern RowCompareType spgtranslatestrategy(uint16 strategy);
+extern uint16 spgtranslaterctype(RowCompareType rctype);
 
 /* spginsert.c */
 extern IndexBuildResult *spgbuild(Relation heap, Relation index,

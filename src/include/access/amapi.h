@@ -13,6 +13,7 @@
 #define AMAPI_H
 
 #include "access/genam.h"
+#include "access/rctype.h"
 
 /*
  * We don't wish to include planner header files here, since most of an index
@@ -100,6 +101,12 @@ typedef struct OpFamilyMember
 /*
  * Callback function signatures --- see indexam.sgml for more info.
  */
+
+/* translate AM-specific strategies to general operator types */
+typedef RowCompareType (*amtranslate_strategy_function) (uint16 strategy);
+
+/* translate general operator types to AM-specific strategies */
+typedef uint16 (*amtranslate_rctype_function) (RowCompareType rctype);
 
 /* build new index */
 typedef IndexBuildResult *(*ambuild_function) (Relation heapRelation,
@@ -330,6 +337,10 @@ typedef struct IndexAmRoutine
 	amestimateparallelscan_function amestimateparallelscan; /* can be NULL */
 	aminitparallelscan_function aminitparallelscan; /* can be NULL */
 	amparallelrescan_function amparallelrescan; /* can be NULL */
+
+	/* interface functions to support planning */
+	amtranslate_strategy_function amtranslatestrategy;
+	amtranslate_rctype_function amtranslaterctype;
 } IndexAmRoutine;
 
 

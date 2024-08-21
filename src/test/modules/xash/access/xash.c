@@ -43,6 +43,8 @@ xash_indexam_handler(PG_FUNCTION_ARGS)
 	amroutine->amclusterable = false;
 	amroutine->ampredlocks = true;
 	amroutine->amcanparallel = false;
+	amroutine->amtranslatestrategy = hashtranslatestrategy;
+	amroutine->amtranslaterctype = hashtranslaterctype;
 	amroutine->amcanbuildparallel = false;
 	amroutine->amcaninclude = false;
 	amroutine->amusemaintenanceworkmem = false;

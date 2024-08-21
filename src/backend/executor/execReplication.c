@@ -111,7 +111,7 @@ build_replindex_scan_key(ScanKey skey, Relation rel, Relation idxrel,
 		 index_attoff++)
 	{
 		Oid			operator;
-		Oid			optype;
+		Oid			rctype;
 		Oid			opfamily;
 		RegProcedure regop;
 		int			table_attno = indkey->values[index_attoff];
@@ -130,17 +130,17 @@ build_replindex_scan_key(ScanKey skey, Relation rel, Relation idxrel,
 		 * Load the operator info.  We need this to get the equality operator
 		 * function for the scan key.
 		 */
-		optype = get_opclass_input_type(opclass->values[index_attoff]);
+		rctype = get_opclass_input_type(opclass->values[index_attoff]);
 		opfamily = get_opclass_family(opclass->values[index_attoff]);
 		eq_strategy = get_equal_strategy_number(opclass->values[index_attoff]);
 
-		operator = get_opfamily_member(opfamily, optype,
-									   optype,
+		operator = get_opfamily_member(opfamily, rctype,
+									   rctype,
 									   eq_strategy);
 
 		if (!OidIsValid(operator))
 			elog(ERROR, "missing operator %d(%u,%u) in opfamily %u",
-				 eq_strategy, optype, optype, opfamily);
+				 eq_strategy, rctype, rctype, opfamily);
 
 		regop = get_opcode(operator);
 

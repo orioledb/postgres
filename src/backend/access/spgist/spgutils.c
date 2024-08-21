@@ -93,6 +93,8 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amestimateparallelscan = NULL;
 	amroutine->aminitparallelscan = NULL;
 	amroutine->amparallelrescan = NULL;
+	amroutine->amtranslatestrategy = spgtranslatestrategy;
+	amroutine->amtranslaterctype = spgtranslaterctype;
 
 	PG_RETURN_POINTER(amroutine);
 }
@@ -1359,4 +1361,91 @@ spgproperty(Oid index_oid, int attno,
 	*isnull = false;
 
 	return true;
+}
+
+RowCompareType
+spgtranslatestrategy(uint16 strategy)
+{
+	switch (strategy)
+	{
+		/*
+		 * Assume these have the semantics of =, !=, <, <=, >, >= as their
+		 * names imply.
+		 *
+		 * TODO: Audit the behavior of these RTree strategies as used by spgist
+		 *		 to determine if this assumption is appropriate.
+		 */
+		case RTEqualStrategyNumber:
+			return ROWCOMPARE_EQ;
+		case RTNotEqualStrategyNumber:
+			return ROWCOMPARE_NE;
+		case RTLessStrategyNumber:
+			return ROWCOMPARE_LT;
+		case RTLessEqualStrategyNumber:
+			return ROWCOMPARE_LE;
+		case RTGreaterStrategyNumber:
+			return ROWCOMPARE_GT;
+		case RTGreaterEqualStrategyNumber:
+			return ROWCOMPARE_GE;
+
+		/*
+		 * There are numerous other RTree strategy numbers used by spgist and
+		 * shared by a few other index types, but until the planner and
+		 * executor care about those strategies, we don't bother assigning row
+		 * comparison types to them.
+		 */
+		case RTLeftStrategyNumber:
+		case RTOverLeftStrategyNumber:
+		case RTOverlapStrategyNumber:
+		case RTOverRightStrategyNumber:
+		case RTRightStrategyNumber:
+		case RTSameStrategyNumber:
+		case RTContainsStrategyNumber:
+		case RTContainedByStrategyNumber:
+		case RTOverBelowStrategyNumber:
+		case RTBelowStrategyNumber:
+		case RTAboveStrategyNumber:
+		case RTOverAboveStrategyNumber:
+		case RTOldContainsStrategyNumber:
+		case RTOldContainedByStrategyNumber:
+		case RTKNNSearchStrategyNumber:
+		case RTContainsElemStrategyNumber:
+		case RTAdjacentStrategyNumber:
+		case RTSubStrategyNumber:
+		case RTSubEqualStrategyNumber:
+		case RTSuperStrategyNumber:
+		case RTSuperEqualStrategyNumber:
+		case RTPrefixStrategyNumber:
+		case RTOldBelowStrategyNumber:
+		case RTOldAboveStrategyNumber:
+			return ROWCOMPARE_NONE;
+
+		case InvalidStrategy:
+		default:
+			return ROWCOMPARE_INVALID;
+	}
+}
+
+uint16
+spgtranslaterctype(RowCompareType rctype)
+{
+	switch (rctype)
+	{
+		case ROWCOMPARE_EQ:
+			return RTEqualStrategyNumber;
+		case ROWCOMPARE_NE:
+			return RTNotEqualStrategyNumber;
+		case ROWCOMPARE_LT:
+			return RTLessStrategyNumber;
+		case ROWCOMPARE_LE:
+			return RTLessEqualStrategyNumber;
+		case ROWCOMPARE_GT:
+			return RTGreaterStrategyNumber;
+		case ROWCOMPARE_GE:
+			return RTGreaterEqualStrategyNumber;
+		case ROWCOMPARE_NONE:
+		case ROWCOMPARE_INVALID:
+		default:
+			return InvalidStrategy;
+	}
 }

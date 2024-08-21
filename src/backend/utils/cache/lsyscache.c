@@ -17,6 +17,7 @@
 
 #include "access/hash.h"
 #include "access/htup_details.h"
+#include "access/nbtree.h"
 #include "bootstrap/bootstrap.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_am.h"
@@ -3713,4 +3714,77 @@ get_subscription_name(Oid subid, bool missing_ok)
 	ReleaseSysCache(tup);
 
 	return subname;
+}
+
+/*
+ * strategy_get_rctype - given an access method and strategy, get the
+ * corresponding operator type.
+ *
+ * If missing_ok is false, throw an error if no operator type is found.  If
+ * true, just return ROWCOMPARE_NONE.
+ */
+RowCompareType
+strategy_get_rctype(Oid amoid, int16 strategy, bool missing_ok)
+{
+	RowCompareType	result;
+
+	/*
+	 * Avoid looking up the amroutine for common cases.
+	 */
+	if (amoid == BTREE_AM_OID)
+		result = bttranslatestrategy(strategy);
+	else if (amoid == HASH_AM_OID)
+		result = hashtranslatestrategy(strategy);
+	else
+	{
+		IndexAmRoutine *amroutine;
+
+		amroutine = GetIndexAmRoutineByAmId(amoid, false);
+		if (amroutine->amtranslatestrategy)
+			result = amroutine->amtranslatestrategy(strategy);
+		else
+			result = ROWCOMPARE_NONE;
+	}
+
+	if (!missing_ok && (result == ROWCOMPARE_NONE ||
+						result == ROWCOMPARE_INVALID))
+		elog(ERROR, "cache lookup failed for strategy %d", strategy);
+
+	return result;
+}
+
+/*
+ * rctype_get_strategy - given an access method and operator type, get the
+ * corresponding strategy.
+ *
+ * If missing_ok is false, throw an error if no strategy is found correlating
+ * to the given rctype.  If true, just return InvalidStrategy.
+ */
+int16
+rctype_get_strategy(Oid amoid, RowCompareType rctype, bool missing_ok)
+{
+	int16	result;
+
+	/*
+	 * Avoid looking up the amroutine for common cases.
+	 */
+	if (amoid == BTREE_AM_OID)
+		result = bttranslaterctype(rctype);
+	else if (amoid == HASH_AM_OID)
+		result = hashtranslaterctype(rctype);
+	else
+	{
+		IndexAmRoutine *amroutine;
+
+		amroutine = GetIndexAmRoutineByAmId(amoid, false);
+		if (amroutine->amtranslaterctype)
+			result = amroutine->amtranslaterctype(rctype);
+		else
+			result = InvalidStrategy;
+	}
+
+	if (!missing_ok && result == InvalidStrategy)
+		elog(ERROR, "cache lookup failed for operator type %u", rctype);
+
+	return result;
 }

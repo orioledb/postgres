@@ -150,6 +150,8 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->amestimateparallelscan = btestimateparallelscan;
 	amroutine->aminitparallelscan = btinitparallelscan;
 	amroutine->amparallelrescan = btparallelrescan;
+	amroutine->amtranslatestrategy = bttranslatestrategy;
+	amroutine->amtranslaterctype = bttranslaterctype;
 
 	PG_RETURN_POINTER(amroutine);
 }
@@ -1447,4 +1449,44 @@ bool
 btcanreturn(Relation index, int attno)
 {
 	return true;
+}
+
+RowCompareType
+bttranslatestrategy(uint16 strategy)
+{
+	switch (strategy)
+	{
+		case BTLessStrategyNumber:
+			return ROWCOMPARE_LT;
+		case BTLessEqualStrategyNumber:
+			return ROWCOMPARE_LE;
+		case BTEqualStrategyNumber:
+			return ROWCOMPARE_EQ;
+		case BTGreaterEqualStrategyNumber:
+			return ROWCOMPARE_GE;
+		case BTGreaterStrategyNumber:
+			return ROWCOMPARE_GT;
+		default:
+			return ROWCOMPARE_INVALID;
+	}
+}
+
+uint16
+bttranslaterctype(RowCompareType rctype)
+{
+	switch (rctype)
+	{
+		case ROWCOMPARE_LT:
+			return BTLessStrategyNumber;
+		case ROWCOMPARE_LE:
+			return BTLessEqualStrategyNumber;
+		case ROWCOMPARE_EQ:
+			return BTEqualStrategyNumber;
+		case ROWCOMPARE_GE:
+			return BTGreaterEqualStrategyNumber;
+		case ROWCOMPARE_GT:
+			return BTGreaterStrategyNumber;
+		default:
+			return InvalidStrategy;
+	}
 }

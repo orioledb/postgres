@@ -43,6 +43,8 @@ xtree_indexam_handler(PG_FUNCTION_ARGS)
 	amroutine->amclusterable = true;
 	amroutine->ampredlocks = true;
 	amroutine->amcanparallel = true;
+	amroutine->amtranslatestrategy = bttranslatestrategy;
+	amroutine->amtranslaterctype = bttranslaterctype;
 	amroutine->amcanbuildparallel = true;
 	amroutine->amcaninclude = true;
 	amroutine->amusemaintenanceworkmem = false;

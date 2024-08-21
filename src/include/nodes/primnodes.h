@@ -18,6 +18,7 @@
 #define PRIMNODES_H
 
 #include "access/attnum.h"
+#include "access/rctype.h"
 #include "nodes/bitmapset.h"
 #include "nodes/pg_list.h"
 
@@ -1449,17 +1450,6 @@ typedef struct RowExpr
  * of the pairwise comparisons.  However, we include = and <> in the
  * RowCompareType enum for the convenience of parser logic.
  */
-typedef enum RowCompareType
-{
-	/* Values of this enum are chosen to match btree strategy numbers */
-	ROWCOMPARE_LT = 1,			/* BTLessStrategyNumber */
-	ROWCOMPARE_LE = 2,			/* BTLessEqualStrategyNumber */
-	ROWCOMPARE_EQ = 3,			/* BTEqualStrategyNumber */
-	ROWCOMPARE_GE = 4,			/* BTGreaterEqualStrategyNumber */
-	ROWCOMPARE_GT = 5,			/* BTGreaterStrategyNumber */
-	ROWCOMPARE_NE = 6,			/* no such btree strategy */
-} RowCompareType;
-
 typedef struct RowCompareExpr
 {
 	Expr		xpr;

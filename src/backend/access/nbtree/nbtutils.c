@@ -3121,7 +3121,7 @@ _bt_compare_scankey_args(IndexScanDesc scan, ScanKey op,
 	Relation	rel = scan->indexRelation;
 	Oid			lefttype,
 				righttype,
-				optype,
+				rctype,
 				opcintype,
 				cmp_op;
 	StrategyNumber strat;
@@ -3244,15 +3244,15 @@ _bt_compare_scankey_args(IndexScanDesc scan, ScanKey op,
 	righttype = rightarg->sk_subtype;
 	if (righttype == InvalidOid)
 		righttype = opcintype;
-	optype = op->sk_subtype;
-	if (optype == InvalidOid)
-		optype = opcintype;
+	rctype = op->sk_subtype;
+	if (rctype == InvalidOid)
+		rctype = opcintype;
 
 	/*
 	 * If leftarg and rightarg match the types expected for the "op" scankey,
 	 * we can use its already-looked-up comparison function.
 	 */
-	if (lefttype == opcintype && righttype == optype)
+	if (lefttype == opcintype && righttype == rctype)
 	{
 		*result = DatumGetBool(FunctionCall2Coll(&op->sk_func,
 												 op->sk_collation,

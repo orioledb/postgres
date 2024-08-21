@@ -73,6 +73,7 @@ my @all_input_files = qw(
   nodes/supportnodes.h
   nodes/value.h
   utils/rel.h
+  access/rctype.h
 );
 
 # Nodes from these input files are automatically treated as nodetag_only.
@@ -135,7 +136,7 @@ my @nodetag_only;
 # types that are copied by straight assignment
 my @scalar_types = qw(
   bits32 bool char double int int8 int16 int32 int64 long uint8 uint16 uint32 uint64
-  AclMode AttrNumber Cardinality Cost Index Oid RelFileNumber Selectivity Size StrategyNumber SubTransactionId TimeLineID XLogRecPtr
+  AclMode AttrNumber Cardinality Cost Index Oid RowCompareType RelFileNumber Selectivity Size StrategyNumber SubTransactionId TimeLineID XLogRecPtr
 );
 
 # collect enum types
@@ -1019,6 +1020,7 @@ _read${n}(void)
 			|| $t eq 'int16'
 			|| $t eq 'int32'
 			|| $t eq 'AttrNumber'
+			|| $t eq 'RowCompareType'
 			|| $t eq 'StrategyNumber')
 		{
 			print $off "\tWRITE_INT_FIELD($f);\n";

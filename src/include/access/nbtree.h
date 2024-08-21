@@ -1185,6 +1185,8 @@ extern IndexBulkDeleteResult *btbulkdelete(IndexVacuumInfo *info,
 extern IndexBulkDeleteResult *btvacuumcleanup(IndexVacuumInfo *info,
 											  IndexBulkDeleteResult *stats);
 extern bool btcanreturn(Relation index, int attno);
+extern RowCompareType bttranslatestrategy(uint16 strategy);
+extern uint16 bttranslaterctype(RowCompareType rctype);
 
 /*
  * prototypes for internal functions in nbtree.c

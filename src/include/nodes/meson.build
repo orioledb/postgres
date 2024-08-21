@@ -23,6 +23,7 @@ node_support_input_i = [
   'nodes/supportnodes.h',
   'nodes/value.h',
   'utils/rel.h',
+  'access/rctype.h',
 ]
 
 node_support_input = []
