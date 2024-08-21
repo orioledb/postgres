@@ -58,6 +58,7 @@ xash_indexam_handler(PG_FUNCTION_ARGS)
 	amroutine->ambulkdelete = hashbulkdelete;
 	amroutine->amvacuumcleanup = hashvacuumcleanup;
 	amroutine->amcanreturn = NULL;
+	amroutine->ambegintscluster = NULL;
 	amroutine->amcostestimate = hashcostestimate;
 	amroutine->amgetrootheight = NULL;
 	amroutine->amoptions = hashoptions;

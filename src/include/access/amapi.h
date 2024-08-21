@@ -25,6 +25,12 @@ struct IndexPath;
 /* Likewise, this file shouldn't depend on execnodes.h. */
 struct IndexInfo;
 
+/*
+ * Tuplesortstate and SortCoordinate are opaque types whose details are not
+ * known outside tuplesort.c.
+ */
+typedef struct Tuplesortstate Tuplesortstate;
+typedef struct SortCoordinateData *SortCoordinate;
 
 /*
  * Properties for amproperty API.  This list covers properties known to the
@@ -225,6 +231,13 @@ typedef void (*aminitparallelscan_function) (void *target);
 /* (re)start parallel index scan */
 typedef void (*amparallelrescan_function) (IndexScanDesc scan);
 
+/* begin tuplesort cluster operation */
+typedef Tuplesortstate *(*ambegintscluster_function) (TupleDesc tupDesc,
+													  Relation indexRel,
+													  int workMem,
+													  SortCoordinate coordinate,
+													  int sortopt);
+
 /*
  * API struct for an index AM.  Note this must be stored in a single palloc'd
  * chunk of memory.
@@ -311,6 +324,7 @@ typedef struct IndexAmRoutine
 	amendscan_function amendscan;
 	ammarkpos_function ammarkpos;	/* can be NULL */
 	amrestrpos_function amrestrpos; /* can be NULL */
+	ambegintscluster_function ambegintscluster;	/* can be NULL */
 
 	/* interface functions to support parallel index scans */
 	amestimateparallelscan_function amestimateparallelscan; /* can be NULL */

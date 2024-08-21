@@ -31,11 +31,24 @@
 
 
 /*
- * Tuplesortstate and Sharedsort are opaque types whose details are not
- * known outside tuplesort.c.
+ * Avoid including the headers for these structs.
  */
 typedef struct Tuplesortstate Tuplesortstate;
 typedef struct Sharedsort Sharedsort;
+typedef struct IndexInfo IndexInfo;
+typedef struct EState EState;
+
+/*
+ * Data structure pointed by "TuplesortPublic.arg" for the CLUSTER case.  Set by
+ * the tuplesort_begin_cluster_xxx.
+ */
+typedef struct
+{
+	TupleDesc	tupDesc;
+
+	IndexInfo  *indexInfo;		/* info about index being used for reference */
+	EState	   *estate;			/* for evaluating index expressions */
+} TuplesortClusterArg;
 
 /*
  * Tuplesort parallel coordination state, allocated by each participant in
@@ -420,10 +433,10 @@ extern Tuplesortstate *tuplesort_begin_heap(TupleDesc tupDesc,
 											bool *nullsFirstFlags,
 											int workMem, SortCoordinate coordinate,
 											int sortopt);
-extern Tuplesortstate *tuplesort_begin_cluster(TupleDesc tupDesc,
-											   Relation indexRel, int workMem,
-											   SortCoordinate coordinate,
-											   int sortopt);
+extern Tuplesortstate *tuplesort_begin_cluster_btree(TupleDesc tupDesc,
+													 Relation indexRel, int workMem,
+													 SortCoordinate coordinate,
+													 int sortopt);
 extern Tuplesortstate *tuplesort_begin_index_btree(Relation heapRel,
 												   Relation indexRel,
 												   bool enforceUnique,
@@ -448,6 +461,18 @@ extern Tuplesortstate *tuplesort_begin_datum(Oid datumType,
 											 bool nullsFirstFlag,
 											 int workMem, SortCoordinate coordinate,
 											 int sortopt);
+
+extern void removeabbrev_cluster(Tuplesortstate *state, SortTuple *stups,
+								 int count);
+extern int	comparetup_cluster(const SortTuple *a, const SortTuple *b,
+							   Tuplesortstate *state);
+extern int	comparetup_cluster_tiebreak(const SortTuple *a, const SortTuple *b,
+										Tuplesortstate *state);
+extern void writetup_cluster(Tuplesortstate *state, LogicalTape *tape,
+							 SortTuple *stup);
+extern void readtup_cluster(Tuplesortstate *state, SortTuple *stup,
+							LogicalTape *tape, unsigned int tuplen);
+extern void freestate_cluster(Tuplesortstate *state);
 
 extern void tuplesort_puttupleslot(Tuplesortstate *state,
 								   TupleTableSlot *slot);

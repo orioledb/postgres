@@ -1078,9 +1078,13 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 
 	/* Set up sorting if wanted */
 	if (use_sort)
-		tuplesort = tuplesort_begin_cluster(oldTupDesc, OldIndex,
-											maintenance_work_mem,
-											NULL, TUPLESORT_NONE);
+	{
+		/* Caller should already have checked */
+		Assert(OldIndex->rd_indam->ambegintscluster != NULL);
+		tuplesort = OldIndex->rd_indam->ambegintscluster(oldTupDesc, OldIndex,
+														 maintenance_work_mem,
+														 NULL, TUPLESORT_NONE);
+	}
 	else
 		tuplesort = NULL;
 

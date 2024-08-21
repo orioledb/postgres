@@ -89,6 +89,7 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amendscan = spgendscan;
 	amroutine->ammarkpos = NULL;
 	amroutine->amrestrpos = NULL;
+	amroutine->ambegintscluster = NULL;
 	amroutine->amestimateparallelscan = NULL;
 	amroutine->aminitparallelscan = NULL;
 	amroutine->amparallelrescan = NULL;

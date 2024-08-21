@@ -40,8 +40,6 @@
 
 static void removeabbrev_heap(Tuplesortstate *state, SortTuple *stups,
 							  int count);
-static void removeabbrev_cluster(Tuplesortstate *state, SortTuple *stups,
-								 int count);
 static void removeabbrev_index(Tuplesortstate *state, SortTuple *stups,
 							   int count);
 static void removeabbrev_index_brin(Tuplesortstate *state, SortTuple *stups,
@@ -56,14 +54,6 @@ static void writetup_heap(Tuplesortstate *state, LogicalTape *tape,
 						  SortTuple *stup);
 static void readtup_heap(Tuplesortstate *state, SortTuple *stup,
 						 LogicalTape *tape, unsigned int len);
-static int	comparetup_cluster(const SortTuple *a, const SortTuple *b,
-							   Tuplesortstate *state);
-static int	comparetup_cluster_tiebreak(const SortTuple *a, const SortTuple *b,
-										Tuplesortstate *state);
-static void writetup_cluster(Tuplesortstate *state, LogicalTape *tape,
-							 SortTuple *stup);
-static void readtup_cluster(Tuplesortstate *state, SortTuple *stup,
-							LogicalTape *tape, unsigned int tuplen);
 static int	comparetup_index_btree(const SortTuple *a, const SortTuple *b,
 								   Tuplesortstate *state);
 static int	comparetup_index_btree_tiebreak(const SortTuple *a, const SortTuple *b,
@@ -90,19 +80,6 @@ static void writetup_datum(Tuplesortstate *state, LogicalTape *tape,
 						   SortTuple *stup);
 static void readtup_datum(Tuplesortstate *state, SortTuple *stup,
 						  LogicalTape *tape, unsigned int len);
-static void freestate_cluster(Tuplesortstate *state);
-
-/*
- * Data structure pointed by "TuplesortPublic.arg" for the CLUSTER case.  Set by
- * the tuplesort_begin_cluster.
- */
-typedef struct
-{
-	TupleDesc	tupDesc;
-
-	IndexInfo  *indexInfo;		/* info about index being used for reference */
-	EState	   *estate;			/* for evaluating index expressions */
-} TuplesortClusterArg;
 
 /*
  * Data structure pointed by "TuplesortPublic.arg" for the IndexTuple case.
@@ -240,10 +217,10 @@ tuplesort_begin_heap(TupleDesc tupDesc,
 }
 
 Tuplesortstate *
-tuplesort_begin_cluster(TupleDesc tupDesc,
-						Relation indexRel,
-						int workMem,
-						SortCoordinate coordinate, int sortopt)
+tuplesort_begin_cluster_btree(TupleDesc tupDesc,
+							  Relation indexRel,
+							  int workMem,
+							  SortCoordinate coordinate, int sortopt)
 {
 	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
 												   sortopt);
@@ -1202,7 +1179,7 @@ readtup_heap(Tuplesortstate *state, SortTuple *stup,
  * comparisons per a btree index definition)
  */
 
-static void
+void
 removeabbrev_cluster(Tuplesortstate *state, SortTuple *stups, int count)
 {
 	int			i;
@@ -1221,7 +1198,7 @@ removeabbrev_cluster(Tuplesortstate *state, SortTuple *stups, int count)
 	}
 }
 
-static int
+int
 comparetup_cluster(const SortTuple *a, const SortTuple *b,
 				   Tuplesortstate *state)
 {
@@ -1242,7 +1219,7 @@ comparetup_cluster(const SortTuple *a, const SortTuple *b,
 	return comparetup_cluster_tiebreak(a, b, state);
 }
 
-static int
+int
 comparetup_cluster_tiebreak(const SortTuple *a, const SortTuple *b,
 							Tuplesortstate *state)
 {
@@ -1349,7 +1326,7 @@ comparetup_cluster_tiebreak(const SortTuple *a, const SortTuple *b,
 	return 0;
 }
 
-static void
+void
 writetup_cluster(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
 {
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
@@ -1364,7 +1341,7 @@ writetup_cluster(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
 		LogicalTapeWrite(tape, &tuplen, sizeof(tuplen));
 }
 
-static void
+void
 readtup_cluster(Tuplesortstate *state, SortTuple *stup,
 				LogicalTape *tape, unsigned int tuplen)
 {
@@ -1393,7 +1370,7 @@ readtup_cluster(Tuplesortstate *state, SortTuple *stup,
 									&stup->isnull1);
 }
 
-static void
+void
 freestate_cluster(Tuplesortstate *state)
 {
 	TuplesortPublic *base = TuplesortstateGetPublic(state);

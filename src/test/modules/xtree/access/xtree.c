@@ -16,6 +16,7 @@
 #include "access/nbtree.h"
 #include "commands/vacuum.h"
 #include "utils/index_selfuncs.h"
+#include "utils/tuplesort.h"
 
 /*
  * Xtree handler function: return IndexAmRoutine with access method parameters
@@ -57,6 +58,7 @@ xtree_indexam_handler(PG_FUNCTION_ARGS)
 	amroutine->ambulkdelete = btbulkdelete;
 	amroutine->amvacuumcleanup = btvacuumcleanup;
 	amroutine->amcanreturn = btcanreturn;
+	amroutine->ambegintscluster = tuplesort_begin_cluster_btree;
 	amroutine->amcostestimate = btcostestimate;
 	amroutine->amgetrootheight = btgetrootheight;
 	amroutine->amoptions = btoptions;
