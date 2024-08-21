@@ -164,13 +164,14 @@ PrepareSortSupportFromIndexRel(Relation indexRel, int16 strategy,
 {
 	Oid			opfamily = indexRel->rd_opfamily[ssup->ssup_attno - 1];
 	Oid			opcintype = indexRel->rd_opcintype[ssup->ssup_attno - 1];
+	RowCompareType rctype = strategy_get_rctype(indexRel->rd_rel->relam,
+												strategy, true);
 
 	Assert(ssup->comparator == NULL);
 
-	if (strategy != BTGreaterStrategyNumber &&
-		strategy != BTLessStrategyNumber)
+	if (rctype != ROWCOMPARE_GT && rctype != ROWCOMPARE_LT)
 		elog(ERROR, "unexpected sort support strategy: %d", strategy);
-	ssup->ssup_reverse = (strategy == BTGreaterStrategyNumber);
+	ssup->ssup_reverse = (rctype == ROWCOMPARE_GT);
 
 	FinishSortSupportFunction(opfamily, opcintype, ssup);
 }

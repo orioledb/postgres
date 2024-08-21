@@ -2157,8 +2157,14 @@ CommuteOpExpr(OpExpr *clause)
 	opoid = get_commutator(clause->opno);
 
 	if (!OidIsValid(opoid))
+	{
+		char *opname = get_opname(clause->opno);
+		if (opname)
+			elog(ERROR, "could not find commutator for operator %s",
+				 opname);
 		elog(ERROR, "could not find commutator for operator %u",
 			 clause->opno);
+	}
 
 	/*
 	 * modify the clause in-place!

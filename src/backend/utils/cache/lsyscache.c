@@ -445,9 +445,11 @@ get_mergejoin_opfamilies(Oid opno)
 		HeapTuple	tuple = &catlist->members[i]->tuple;
 		Form_pg_amop aform = (Form_pg_amop) GETSTRUCT(tuple);
 
-		/* must be btree equality */
-		if (aform->amopmethod == BTREE_AM_OID &&
-			aform->amopstrategy == BTEqualStrategyNumber)
+		/* must be equality from an ordering index */
+		if (IndexAmCanOrder(aform->amopmethod) &&
+			strategy_get_rctype(aform->amopmethod,
+								aform->amopstrategy,
+								true) == ROWCOMPARE_EQ)
 			result = lappend_oid(result, aform->amopfamily);
 	}
 
