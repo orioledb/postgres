@@ -679,11 +679,11 @@ TreebTupleGetMaxHeapTID(IndexTuple itup)
 	return &itup->t_tid;
 }
 
-#define TreebLessStrategyNumber 1
-#define TreebLessEqualStrategyNumber 2
-#define TreebEqualStrategyNumber 3
-#define TreebGreaterEqualStrategyNumber 4
-#define TreebGreaterStrategyNumber 5
+#define TreebLessStrategyNumber 5
+#define TreebLessEqualStrategyNumber 1
+#define TreebEqualStrategyNumber 2
+#define TreebGreaterEqualStrategyNumber 3
+#define TreebGreaterStrategyNumber 4
 #define TreebMaxStrategyNumber 5
 
 static inline StrategyNumber
