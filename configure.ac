@@ -1823,7 +1823,6 @@ AC_CHECK_FUNCS(m4_normalize([
 	posix_fallocate
 	ppoll
 	pstat
-	pthread_is_threaded_np
 	readlink
 	readv
 	setproctitle
