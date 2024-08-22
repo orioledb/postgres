@@ -85,10 +85,6 @@
 #include <systemd/sd-daemon.h>
 #endif
 
-#ifdef HAVE_PTHREAD_IS_THREADED_NP
-#include <pthread.h>
-#endif
-
 #include "access/transam.h"
 #include "access/xlog.h"
 #include "access/xlogrecovery.h"
