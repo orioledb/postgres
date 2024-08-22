@@ -47,7 +47,7 @@ detoast_external_attr(struct varlena *attr)
 {
 	struct varlena *result;
 
-	if (VARATT_IS_EXTERNAL_ONDISK(attr))
+	if (VARATT_IS_EXTERNAL_ONDISK(attr) || VARATT_IS_EXTERNAL_ORIOLEDB(attr))
 	{
 		/*
 		 * This is an external stored plain value
@@ -116,7 +116,7 @@ detoast_external_attr(struct varlena *attr)
 struct varlena *
 detoast_attr(struct varlena *attr)
 {
-	if (VARATT_IS_EXTERNAL_ONDISK(attr))
+	if (VARATT_IS_EXTERNAL_ONDISK(attr) || VARATT_IS_EXTERNAL_ORIOLEDB(attr))
 	{
 		/*
 		 * This is an externally stored datum --- fetch it back from there
@@ -367,9 +367,6 @@ toast_fetch_datum(struct varlena *attr)
 	struct varatt_external toast_pointer;
 	int32		attrsize;
 
-	if (!VARATT_IS_EXTERNAL_ONDISK(attr))
-		elog(ERROR, "toast_fetch_datum shouldn't be called for non-ondisk datums");
-
 	if (VARATT_IS_EXTERNAL_ORIOLEDB(attr))
 	{
 		if (o_detoast_func != NULL)
@@ -380,6 +377,9 @@ toast_fetch_datum(struct varlena *attr)
 			return result;
 		}
 	}
+
+	if (!VARATT_IS_EXTERNAL_ONDISK(attr))
+		elog(ERROR, "toast_fetch_datum shouldn't be called for non-ondisk datums");
 
 	/* Must copy to access aligned fields */
 	VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
@@ -578,15 +578,15 @@ toast_raw_datum_size(Datum value)
 	struct varlena *attr = (struct varlena *) DatumGetPointer(value);
 	Size		result;
 
-	if (VARATT_IS_EXTERNAL_ONDISK(attr))
+	if (VARATT_IS_EXTERNAL_ORIOLEDB(attr))
+	{
+		OToastExternal *toasted = (OToastExternal*) VARDATA_EXTERNAL(attr);
+		result = toasted->raw_size + VARHDRSZ;
+	}
+	else if (VARATT_IS_EXTERNAL_ONDISK(attr))
 	{
 		struct varatt_external toast_pointer;
 
-		if (VARATT_IS_EXTERNAL_ORIOLEDB(attr))
-		{
-			OToastExternal *toasted = (OToastExternal*) VARDATA_EXTERNAL(attr);
-			return toasted->raw_size + VARHDRSZ;
-		}
 		/* va_rawsize is the size of the original datum -- including header */
 
 		VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
