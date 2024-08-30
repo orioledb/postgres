@@ -210,6 +210,28 @@ IndexAmCanCrossCompare(Oid amoid)
 }
 
 bool
+IndexAmCanUnique(Oid amoid)
+{
+	IndexAmRoutine *amroutine;
+
+	switch (amoid)
+	{
+		case BTREE_AM_OID:
+			return true;
+		case HASH_AM_OID:
+		case BRIN_AM_OID:
+		case GIN_AM_OID:
+		case GIST_AM_OID:
+		case SPGIST_AM_OID:
+			return false;
+	}
+
+	amroutine = GetIndexAmRoutineByAmId(amoid, false);
+
+	return amroutine->amcanunique;
+}
+
+bool
 IndexAmCanOrderAndCrossCompare(Oid amoid)
 {
 	IndexAmRoutine *amroutine;
