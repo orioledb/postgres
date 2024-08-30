@@ -283,6 +283,7 @@ dihandler(PG_FUNCTION_ARGS)
 	amroutine->amstrategies = 0;
 	amroutine->amsupport = 1;
 	amroutine->amcanorder = false;
+	amroutine->amcanhash = false;
 	amroutine->amcanorderbyop = false;
 	amroutine->amcanbackward = false;
 	amroutine->amcanunique = false;

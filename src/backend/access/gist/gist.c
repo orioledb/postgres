@@ -64,6 +64,8 @@ gisthandler(PG_FUNCTION_ARGS)
 	amroutine->amsupport = GISTNProcs;
 	amroutine->amoptsprocnum = GIST_OPTIONS_PROC;
 	amroutine->amcanorder = false;
+	amroutine->amcanhash = false;
+	amroutine->amcancrosscompare = false;
 	amroutine->amcanorderbyop = true;
 	amroutine->amcanbackward = false;
 	amroutine->amcanunique = false;

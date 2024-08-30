@@ -787,8 +787,7 @@ equality_ops_are_compatible(Oid opno1, Oid opno2)
 		Form_pg_amop op_form = (Form_pg_amop) GETSTRUCT(op_tuple);
 
 		/* must be btree or hash */
-		if (op_form->amopmethod == BTREE_AM_OID ||
-			op_form->amopmethod == HASH_AM_OID)
+		if (IndexAmCanCrossCompare(op_form->amopmethod))
 		{
 			if (op_in_opfamily(opno2, op_form->amopfamily))
 			{
@@ -837,7 +836,7 @@ comparison_ops_are_compatible(Oid opno1, Oid opno2)
 		HeapTuple	op_tuple = &catlist->members[i]->tuple;
 		Form_pg_amop op_form = (Form_pg_amop) GETSTRUCT(op_tuple);
 
-		if (op_form->amopmethod == BTREE_AM_OID)
+		if (IndexAmCanOrderAndCrossCompare(op_form->amopmethod))
 		{
 			if (op_in_opfamily(opno2, op_form->amopfamily))
 			{

@@ -2693,7 +2693,7 @@ match_rowcompare_to_indexcol(PlannerInfo *root,
 	Oid			expr_coll;
 
 	/* Forget it if we're not dealing with a btree index */
-	if (index->relam != BTREE_AM_OID)
+	if (!IndexAmCanOrder(index->relam))
 		return NULL;
 
 	index_relid = index->rel->relid;

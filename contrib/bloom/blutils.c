@@ -111,6 +111,8 @@ blhandler(PG_FUNCTION_ARGS)
 	amroutine->amsupport = BLOOM_NPROC;
 	amroutine->amoptsprocnum = BLOOM_OPTIONS_PROC;
 	amroutine->amcanorder = false;
+	amroutine->amcanhash = false;
+	amroutine->amcancrosscompare = false;
 	amroutine->amcanorderbyop = false;
 	amroutine->amcanbackward = false;
 	amroutine->amcanunique = false;

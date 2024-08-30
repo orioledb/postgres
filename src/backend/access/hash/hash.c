@@ -62,6 +62,8 @@ hashhandler(PG_FUNCTION_ARGS)
 	amroutine->amsupport = HASHNProcs;
 	amroutine->amoptsprocnum = HASHOPTIONS_PROC;
 	amroutine->amcanorder = false;
+	amroutine->amcanhash = true;
+	amroutine->amcancrosscompare = false;
 	amroutine->amcanorderbyop = false;
 	amroutine->amcanbackward = true;
 	amroutine->amcanunique = false;

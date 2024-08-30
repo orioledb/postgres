@@ -49,6 +49,8 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amsupport = SPGISTNProc;
 	amroutine->amoptsprocnum = SPGIST_OPTIONS_PROC;
 	amroutine->amcanorder = false;
+	amroutine->amcanhash = false;
+	amroutine->amcancrosscompare = false;
 	amroutine->amcanorderbyop = true;
 	amroutine->amcanbackward = false;
 	amroutine->amcanunique = false;

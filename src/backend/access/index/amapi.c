@@ -149,6 +149,88 @@ GetIndexAmRoutineByAmId(Oid indoid, Oid amoid, bool noerror)
 	return GetIndexAmRoutine(indoid, amhandler);
 }
 
+bool
+IndexAmCanOrder(Oid amoid)
+{
+	switch (amoid)
+	{
+		case BTREE_AM_OID:
+			return true;
+		case HASH_AM_OID:
+		case BRIN_AM_OID:
+		case GIN_AM_OID:
+		case GIST_AM_OID:
+		case SPGIST_AM_OID:
+			return false;
+	}
+
+	return GetIndexAmRoutineByAmId(amoid, false)->amcanorder;
+}
+
+bool
+IndexAmCanHash(Oid amoid)
+{
+	switch (amoid)
+	{
+		case HASH_AM_OID:
+			return true;
+		case BRIN_AM_OID:
+		case BTREE_AM_OID:
+		case GIN_AM_OID:
+		case GIST_AM_OID:
+		case SPGIST_AM_OID:
+			return false;
+		default:
+			break;
+	}
+
+	return GetIndexAmRoutineByAmId(amoid, false)->amcanhash;
+}
+
+bool
+IndexAmCanCrossCompare(Oid amoid)
+{
+	IndexAmRoutine *amroutine;
+
+	switch (amoid)
+	{
+		case BTREE_AM_OID:
+		case HASH_AM_OID:
+			return true;
+		case BRIN_AM_OID:
+		case GIN_AM_OID:
+		case GIST_AM_OID:
+		case SPGIST_AM_OID:
+			return false;
+	}
+
+	amroutine = GetIndexAmRoutineByAmId(amoid, false);
+
+	return amroutine->amcancrosscompare;
+}
+
+bool
+IndexAmCanOrderAndCrossCompare(Oid amoid)
+{
+	IndexAmRoutine *amroutine;
+
+	switch (amoid)
+	{
+		case BTREE_AM_OID:
+			return true;
+		case HASH_AM_OID:
+		case BRIN_AM_OID:
+		case GIN_AM_OID:
+		case GIST_AM_OID:
+		case SPGIST_AM_OID:
+			return false;
+	}
+
+	amroutine = GetIndexAmRoutineByAmId(amoid, false);
+
+	return amroutine->amcanorder && amroutine->amcancrosscompare;
+}
+
 
 /*
  * Ask appropriate access method to validate the specified opclass.

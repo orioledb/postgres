@@ -252,6 +252,8 @@ brinhandler(PG_FUNCTION_ARGS)
 	amroutine->amsupport = BRIN_LAST_OPTIONAL_PROCNUM;
 	amroutine->amoptsprocnum = BRIN_PROCNUM_OPTIONS;
 	amroutine->amcanorder = false;
+	amroutine->amcanhash = false;
+	amroutine->amcancrosscompare = false;
 	amroutine->amcanorderbyop = false;
 	amroutine->amcanbackward = false;
 	amroutine->amcanunique = false;
