@@ -3836,7 +3836,7 @@ strategy_get_rctype(Oid amoid, int16 strategy, bool missing_ok)
 	{
 		IndexAmRoutine *amroutine;
 
-		amroutine = GetIndexAmRoutineByAmId(amoid, false);
+		amroutine = GetIndexAmRoutineByAmId(InvalidOid, amoid, false);
 		if (amroutine->amtranslatestrategy)
 			result = amroutine->amtranslatestrategy(strategy);
 		else
@@ -3873,7 +3873,7 @@ rctype_get_strategy(Oid amoid, RowCompareType rctype, bool missing_ok)
 	{
 		IndexAmRoutine *amroutine;
 
-		amroutine = GetIndexAmRoutineByAmId(amoid, false);
+		amroutine = GetIndexAmRoutineByAmId(InvalidOid, amoid, false);
 		if (amroutine->amtranslaterctype)
 			result = amroutine->amtranslaterctype(rctype);
 		else

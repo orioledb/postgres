@@ -164,7 +164,7 @@ IndexAmCanOrder(Oid amoid)
 			return false;
 	}
 
-	return GetIndexAmRoutineByAmId(amoid, false)->amcanorder;
+	return GetIndexAmRoutineByAmId(InvalidOid, amoid, false)->amcanorder;
 }
 
 bool
@@ -184,7 +184,7 @@ IndexAmCanHash(Oid amoid)
 			break;
 	}
 
-	return GetIndexAmRoutineByAmId(amoid, false)->amcanhash;
+	return GetIndexAmRoutineByAmId(InvalidOid, amoid, false)->amcanhash;
 }
 
 bool
@@ -204,7 +204,7 @@ IndexAmCanCrossCompare(Oid amoid)
 			return false;
 	}
 
-	amroutine = GetIndexAmRoutineByAmId(amoid, false);
+	amroutine = GetIndexAmRoutineByAmId(InvalidOid, amoid, false);
 
 	return amroutine->amcancrosscompare;
 }
@@ -226,7 +226,7 @@ IndexAmCanUnique(Oid amoid)
 			return false;
 	}
 
-	amroutine = GetIndexAmRoutineByAmId(amoid, false);
+	amroutine = GetIndexAmRoutineByAmId(InvalidOid, amoid, false);
 
 	return amroutine->amcanunique;
 }
@@ -248,7 +248,7 @@ IndexAmCanOrderAndCrossCompare(Oid amoid)
 			return false;
 	}
 
-	amroutine = GetIndexAmRoutineByAmId(amoid, false);
+	amroutine = GetIndexAmRoutineByAmId(InvalidOid, amoid, false);
 
 	return amroutine->amcanorder && amroutine->amcancrosscompare;
 }
