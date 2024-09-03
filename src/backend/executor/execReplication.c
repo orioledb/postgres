@@ -513,7 +513,7 @@ retry:
 
 	PushActiveSnapshot(GetLatestSnapshot());
 
-	res = table_tuple_lock(rel, &conflictTid, GetLatestSnapshot(),
+	res = table_tuple_lock(rel, PointerGetDatum(&conflictTid), GetLatestSnapshot(),
 						   *conflictslot,
 						   GetCurrentCommandId(false),
 						   LockTupleShare,

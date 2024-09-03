@@ -965,7 +965,6 @@ ExecInsert(ModifyTableContext *context,
 					   *inserted;
 			LockTupleMode lockmode = LockTupleExclusive;
 
-			ItemPointerSetInvalid(&invalidItemPtr);
 			arbiterIndexes = resultRelInfo->ri_onConflictArbiterIndexes;
 			returningSlot = ExecGetReturningSlot(estate, resultRelInfo);
 			if (onconflict == ONCONFLICT_UPDATE)
