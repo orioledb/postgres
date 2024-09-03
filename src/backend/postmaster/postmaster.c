@@ -3883,6 +3883,11 @@ do_start_bgworker(RegisteredBgWorker *rw)
 	}
 	bn->rw = rw;
 
+	if (rw->rw_worker.bgw_flags & BGWORKER_CLASS_SYSTEM)
+		bn->bkend_type = BACKEND_TYPE_SYSTEM_BGWORKER;
+	else
+		bn->bkend_type = BACKEND_TYPE_BGWORKER;
+
 	ereport(DEBUG1,
 			(errmsg_internal("starting background worker process \"%s\"",
 							 rw->rw_worker.bgw_name)));
@@ -3987,10 +3992,6 @@ assign_backendlist_entry(void)
 	}
 
 	bn->child_slot = MyPMChildSlot = AssignPostmasterChildSlot();
-	if (rw->rw_worker.bgw_flags & BGWORKER_CLASS_SYSTEM)
-		bn->bkend_type = BACKEND_TYPE_SYSTEM_BGWORKER;
-	else
-		bn->bkend_type = BACKEND_TYPE_BGWORKER;
 	bn->dead_end = false;
 	bn->bgworker_notify = false;
 
