@@ -213,7 +213,7 @@ static int64 latency_limit = 0;
 /*
  * tableam selection
  */
-char	   *tableam = NULL;
+static char	   *tableam = NULL;
 
 /*
  * tablespace selection
