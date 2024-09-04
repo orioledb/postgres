@@ -1211,9 +1211,19 @@ ExecGetChildToRootMap(ResultRelInfo *resultRelInfo)
 		ResultRelInfo *rootRelInfo = resultRelInfo->ri_RootResultRelInfo;
 
 		if (rootRelInfo)
-			resultRelInfo->ri_ChildToRootMap =
-				convert_tuples_by_name(RelationGetDescr(resultRelInfo->ri_RelationDesc),
-									   RelationGetDescr(rootRelInfo->ri_RelationDesc));
+		{
+			TupleDesc	indesc = RelationGetDescr(resultRelInfo->ri_RelationDesc);
+			TupleDesc	outdesc = RelationGetDescr(rootRelInfo->ri_RelationDesc);
+			AttrMap    *attrMap;
+
+			if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) != ROW_REF_ROWID)
+				attrMap = build_attrmap_by_name_if_req(indesc, outdesc, false);
+			else
+				attrMap = build_attrmap_by_name(indesc, outdesc, false);
+			if (attrMap)
+				resultRelInfo->ri_ChildToRootMap =
+					convert_tuples_by_name_attrmap(indesc, outdesc, attrMap);
+		}
 		else					/* this isn't a child result rel */
 			resultRelInfo->ri_ChildToRootMap = NULL;
 
@@ -1250,8 +1260,10 @@ ExecGetRootToChildMap(ResultRelInfo *resultRelInfo, EState *estate)
 		 * to ignore by passing true for missing_ok.
 		 */
 		oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
-		attrMap = build_attrmap_by_name_if_req(indesc, outdesc,
-											   !childrel->rd_rel->relispartition);
+		if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) != ROW_REF_ROWID)
+			attrMap = build_attrmap_by_name_if_req(indesc, outdesc, !childrel->rd_rel->relispartition);
+		else
+			attrMap = build_attrmap_by_name(indesc, outdesc, !childrel->rd_rel->relispartition);
 		if (attrMap)
 			resultRelInfo->ri_RootToChildMap =
 				convert_tuples_by_name_attrmap(indesc, outdesc, attrMap);
