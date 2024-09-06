@@ -6225,6 +6225,8 @@ get_actual_variable_endpoint(Relation heapRel,
 
 	while (true)
 	{
+		BlockNumber block;
+
 		/* Fetch first/next tuple in specified direction */
 		if (index_scan->xs_want_rowid)
 		{
@@ -6242,9 +6244,8 @@ get_actual_variable_endpoint(Relation heapRel,
 				break;
 
 			Assert(ItemPointerEquals(tid, &index_scan->xs_heaptid));
+			block = ItemPointerGetBlockNumber(tid);
 		}
-
-		BlockNumber block = ItemPointerGetBlockNumber(tid);
 
 		if (!index_scan->xs_want_rowid &&
 			!VM_ALL_VISIBLE(heapRel,
