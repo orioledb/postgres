@@ -196,8 +196,10 @@ typedef struct SerializedSnapshotData
 	TimestampTz whenTaken;
 	XLogRecPtr	lsn;
 	CommitSeqNo	snapshotcsn;
-	uint64		undoLocation;
-	uint64		undoXmin;
+	uint64		undoRegularLocation;
+	uint64		undoRegularXmin;
+	uint64		undoSystemLocation;
+	uint64		undoSystemXmin;
 } SerializedSnapshotData;
 
 Size
@@ -2191,8 +2193,10 @@ SerializeSnapshot(Snapshot snapshot, char *start_address)
 	serialized_snapshot.whenTaken = snapshot->whenTaken;
 	serialized_snapshot.lsn = snapshot->lsn;
 	serialized_snapshot.snapshotcsn = snapshot->snapshotcsn;
-	serialized_snapshot.undoXmin = snapshot->undoLocationPhNode.xmin;
-	serialized_snapshot.undoLocation = snapshot->undoLocationPhNode.undoLocation;
+	serialized_snapshot.undoRegularXmin = snapshot->undoRegularLocationPhNode.xmin;
+	serialized_snapshot.undoRegularLocation = snapshot->undoRegularLocationPhNode.undoLocation;
+	serialized_snapshot.undoSystemXmin = snapshot->undoSystemLocationPhNode.xmin;
+	serialized_snapshot.undoSystemLocation = snapshot->undoSystemLocationPhNode.undoLocation;
 
 	/*
 	 * Ignore the SubXID array if it has overflowed, unless the snapshot was
@@ -2269,8 +2273,10 @@ RestoreSnapshot(char *start_address)
 	snapshot->lsn = serialized_snapshot.lsn;
 	snapshot->snapXactCompletionCount = 0;
 	snapshot->snapshotcsn = serialized_snapshot.snapshotcsn;
-	snapshot->undoLocationPhNode.xmin = serialized_snapshot.undoXmin;
-	snapshot->undoLocationPhNode.undoLocation = serialized_snapshot.undoLocation;
+	snapshot->undoRegularLocationPhNode.xmin = serialized_snapshot.undoRegularXmin;
+	snapshot->undoRegularLocationPhNode.undoLocation = serialized_snapshot.undoRegularLocation;
+	snapshot->undoSystemLocationPhNode.xmin = serialized_snapshot.undoSystemXmin;
+	snapshot->undoSystemLocationPhNode.undoLocation = serialized_snapshot.undoSystemLocation;
 
 	/* Copy XIDs, if present. */
 	if (serialized_snapshot.xcnt > 0)
