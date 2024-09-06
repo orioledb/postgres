@@ -222,7 +222,8 @@ typedef struct SnapshotData
 	 */
 	uint64		snapXactCompletionCount;
 
-	RetainUndoLocationPHNode undoLocationPhNode;
+	RetainUndoLocationPHNode undoRegularLocationPhNode;
+	RetainUndoLocationPHNode undoSystemLocationPhNode;
 	CommitSeqNo	snapshotcsn;
 } SnapshotData;
 
