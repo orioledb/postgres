@@ -66,7 +66,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 	ScanDirection direction;
 	IndexScanDesc scandesc;
 	TupleTableSlot *slot;
-	ItemPointer tid;
+	ItemPointer tid = NULL;
 
 	/*
 	 * extract necessary information from index scan node
