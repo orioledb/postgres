@@ -6225,7 +6225,7 @@ get_actual_variable_endpoint(Relation heapRel,
 
 	while (true)
 	{
-		BlockNumber block;
+		BlockNumber block = InvalidBlockNumber;
 
 		/* Fetch first/next tuple in specified direction */
 		if (index_scan->xs_want_rowid)
