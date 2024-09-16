@@ -297,7 +297,7 @@ simple_table_tuple_insert(Relation rel, TupleTableSlot *slot)
  * via ereport().
  */
 void
-simple_table_tuple_delete(Relation rel, ItemPointer tid, Snapshot snapshot,
+simple_table_tuple_delete(Relation rel, Datum tupleid, Snapshot snapshot,
 						  TupleTableSlot *oldSlot)
 {
 	TM_Result	result;
@@ -308,7 +308,7 @@ simple_table_tuple_delete(Relation rel, ItemPointer tid, Snapshot snapshot,
 	if (oldSlot)
 		options |= TABLE_MODIFY_FETCH_OLD_TUPLE;
 
-	result = table_tuple_delete(rel, PointerGetDatum(tid),
+	result = table_tuple_delete(rel, tupleid,
 								GetCurrentCommandId(true),
 								snapshot, InvalidSnapshot,
 								options,
@@ -349,7 +349,7 @@ simple_table_tuple_delete(Relation rel, ItemPointer tid, Snapshot snapshot,
  * via ereport().
  */
 void
-simple_table_tuple_update(Relation rel, ItemPointer otid,
+simple_table_tuple_update(Relation rel, Datum tupleid,
 						  TupleTableSlot *slot,
 						  Snapshot snapshot,
 						  TU_UpdateIndexes *update_indexes,
@@ -364,7 +364,7 @@ simple_table_tuple_update(Relation rel, ItemPointer otid,
 	if (oldSlot)
 		options |= TABLE_MODIFY_FETCH_OLD_TUPLE;
 
-	result = table_tuple_update(rel, PointerGetDatum(otid), slot,
+	result = table_tuple_update(rel, tupleid, slot,
 								GetCurrentCommandId(true),
 								snapshot, InvalidSnapshot,
 								options,
