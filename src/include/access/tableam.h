@@ -2097,10 +2097,10 @@ table_tuple_is_current(Relation rel, TupleTableSlot *slot)
  */
 
 extern void simple_table_tuple_insert(Relation rel, TupleTableSlot *slot);
-extern void simple_table_tuple_delete(Relation rel, ItemPointer tid,
+extern void simple_table_tuple_delete(Relation rel, Datum tupleid,
 									  Snapshot snapshot,
 									  TupleTableSlot *oldSlot);
-extern void simple_table_tuple_update(Relation rel, ItemPointer otid,
+extern void simple_table_tuple_update(Relation rel, Datum tupleid,
 									  TupleTableSlot *slot, Snapshot snapshot,
 									  TU_UpdateIndexes *update_indexes,
 									  TupleTableSlot *oldSlot);
