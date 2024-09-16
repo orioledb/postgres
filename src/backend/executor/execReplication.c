@@ -127,6 +127,25 @@ build_replindex_scan_key(ScanKey skey, Relation rel, Relation idxrel,
 	return skey_attoff;
 }
 
+static Datum
+slot_get_tupleid(Relation rel, TupleTableSlot *slot)
+{
+	Datum	tupleid;
+
+	if (table_get_row_ref_type(rel) == ROW_REF_ROWID)
+	{
+		bool	isnull;
+		tupleid = slot_getsysattr(slot, RowIdAttributeNumber, &isnull);
+		Assert(!isnull);
+	}
+	else
+	{
+		tupleid = PointerGetDatum(&slot->tts_tid);
+	}
+
+	return tupleid;
+}
+
 
 /*
  * Helper function to check if it is necessary to re-fetch and lock the tuple
@@ -265,7 +284,7 @@ retry:
 
 		PushActiveSnapshot(GetLatestSnapshot());
 
-		res = table_tuple_lock(rel, PointerGetDatum(&(outslot->tts_tid)),
+		res = table_tuple_lock(rel, slot_get_tupleid(rel, outslot),
 							   GetActiveSnapshot(),
 							   outslot,
 							   GetCurrentCommandId(false),
@@ -488,7 +507,7 @@ retry:
 
 		PushActiveSnapshot(GetLatestSnapshot());
 
-		res = table_tuple_lock(rel, PointerGetDatum(&(outslot->tts_tid)),
+		res = table_tuple_lock(rel, slot_get_tupleid(rel, outslot),
 							   GetActiveSnapshot(),
 							   outslot,
 							   GetCurrentCommandId(false),
@@ -733,7 +752,7 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 {
 	bool		skip_tuple = false;
 	Relation	rel = resultRelInfo->ri_RelationDesc;
-	ItemPointer tid = &(searchslot->tts_tid);
+	Datum		tupleid = slot_get_tupleid(rel, searchslot);
 
 	/*
 	 * Relations that must not be a logical replication target are rejected
@@ -749,7 +768,7 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 		resultRelInfo->ri_TrigDesc->trig_update_before_row)
 	{
 		if (!ExecBRUpdateTriggers(estate, epqstate, resultRelInfo,
-								  PointerGetDatum(tid), NULL, slot, NULL, NULL,
+								  tupleid, NULL, slot, NULL, NULL,
 								  false))
 			skip_tuple = true;	/* "do nothing" */
 	}
@@ -774,18 +793,18 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 		if (rel->rd_rel->relispartition)
 			ExecPartitionCheck(resultRelInfo, slot, estate, true);
 
-		if (resultRelInfo->ri_TrigDesc &&
-			resultRelInfo->ri_TrigDesc->trig_update_after_row)
-			oldSlot = ExecGetTriggerOldSlot(estate, resultRelInfo);
+		oldSlot = ExecGetTriggerOldSlot(estate, resultRelInfo);
 
-		simple_table_tuple_update(rel, tid, slot, estate->es_snapshot,
+		simple_table_tuple_update(rel, tupleid, slot, estate->es_snapshot,
 								  &update_indexes, oldSlot);
 
 		conflictindexes = resultRelInfo->ri_onConflictArbiterIndexes;
 
 		if (resultRelInfo->ri_NumIndices > 0 && (update_indexes != TU_None))
-			recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
-												   slot, estate, true,
+			recheckIndexes = ExecUpdateIndexTuples(resultRelInfo,
+												   slot,
+												   oldSlot,
+												   estate,
 												   conflictindexes ? true : false,
 												   &conflict, conflictindexes,
 												   (update_indexes == TU_Summarizing));
@@ -822,7 +841,7 @@ ExecSimpleRelationDelete(ResultRelInfo *resultRelInfo,
 {
 	bool		skip_tuple = false;
 	Relation	rel = resultRelInfo->ri_RelationDesc;
-	ItemPointer tid = &searchslot->tts_tid;
+	Datum		tupleid = slot_get_tupleid(rel, searchslot);
 
 	CheckCmdReplicaIdentity(rel, CMD_DELETE);
 
@@ -831,7 +850,7 @@ ExecSimpleRelationDelete(ResultRelInfo *resultRelInfo,
 		resultRelInfo->ri_TrigDesc->trig_delete_before_row)
 	{
 		skip_tuple = !ExecBRDeleteTriggers(estate, epqstate, resultRelInfo,
-										   PointerGetDatum(tid), NULL, NULL,
+										   tupleid, NULL, NULL,
 										   NULL, NULL, false);
 	}
 
@@ -839,12 +858,14 @@ ExecSimpleRelationDelete(ResultRelInfo *resultRelInfo,
 	{
 		TupleTableSlot *oldSlot = NULL;
 
-		if (resultRelInfo->ri_TrigDesc &&
-			resultRelInfo->ri_TrigDesc->trig_delete_after_row)
-			oldSlot = ExecGetTriggerOldSlot(estate, resultRelInfo);
+		oldSlot = ExecGetTriggerOldSlot(estate, resultRelInfo);
 
 		/* OK, delete the tuple */
-		simple_table_tuple_delete(rel, tid, estate->es_snapshot, oldSlot);
+		simple_table_tuple_delete(rel, tupleid, estate->es_snapshot, oldSlot);
+
+		/* delete index entries if necessary */
+		if (resultRelInfo->ri_NumIndices > 0)
+			ExecDeleteIndexTuples(resultRelInfo, oldSlot, estate);
 
 		/* AFTER ROW DELETE Triggers */
 		ExecARDeleteTriggers(estate, resultRelInfo,
