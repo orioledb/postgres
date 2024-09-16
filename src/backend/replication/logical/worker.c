@@ -2436,9 +2436,8 @@ apply_handle_insert(StringInfo s)
 	/* Initialize the executor state. */
 	edata = create_edata_for_relation(rel);
 	estate = edata->estate;
-	remoteslot = ExecInitExtraTupleSlot(estate,
-										RelationGetDescr(rel->localrel),
-										&TTSOpsVirtual);
+	remoteslot = table_slot_create(rel->localrel,
+								   &estate->es_tupleTable);
 
 	/* Process and store remote tuple in the slot */
 	oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
@@ -2593,9 +2592,8 @@ apply_handle_update(StringInfo s)
 	/* Initialize the executor state. */
 	edata = create_edata_for_relation(rel);
 	estate = edata->estate;
-	remoteslot = ExecInitExtraTupleSlot(estate,
-										RelationGetDescr(rel->localrel),
-										&TTSOpsVirtual);
+	remoteslot = table_slot_create(rel->localrel,
+								   &estate->es_tupleTable);
 
 	/*
 	 * Populate updatedCols so that per-column triggers can fire, and so
@@ -2780,9 +2778,8 @@ apply_handle_delete(StringInfo s)
 	/* Initialize the executor state. */
 	edata = create_edata_for_relation(rel);
 	estate = edata->estate;
-	remoteslot = ExecInitExtraTupleSlot(estate,
-										RelationGetDescr(rel->localrel),
-										&TTSOpsVirtual);
+	remoteslot = table_slot_create(rel->localrel,
+								   &estate->es_tupleTable);
 
 	/* Build the search tuple. */
 	oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
