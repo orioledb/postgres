@@ -2429,6 +2429,7 @@ typedef struct PLAssignStmt
 typedef enum ObjectType
 {
 	OBJECT_ACCESS_METHOD,
+	OBJECT_ACCESS_METHOD_IMPLEMENTATION,
 	OBJECT_AGGREGATE,
 	OBJECT_AMOP,
 	OBJECT_AMPROC,
@@ -3197,6 +3198,20 @@ typedef struct AlterPolicyStmt
 } AlterPolicyStmt;
 
 /*----------------------
+ *		Create ACCESS METHOD IMPLEMENTATION Statement
+ *----------------------
+ */
+typedef struct CreateAmImplStmt
+{
+	NodeTag		type;
+	char	   *amname;			/* access method name */
+	char	   *implname;		/* table AM implementation name */
+	char	   *opcam_name;		/* AM whose opclasses are used; NULL means
+								 * same as amname */
+	List	   *handler_name;	/* handler function name */
+} CreateAmImplStmt;
+
+/*----------------------
  *		Create ACCESS METHOD Statement
  *----------------------
  */
@@ -3594,6 +3609,7 @@ typedef struct IndexStmt
 	char	   *idxname;		/* name of new index, or NULL for default */
 	RangeVar   *relation;		/* relation to build index on */
 	char	   *accessMethod;	/* name of access method (eg. btree) */
+	char	   *idxImpl;		/* name of AM implementation, or NULL */
 	char	   *tableSpace;		/* tablespace, or NULL for default */
 	List	   *indexParams;	/* columns to index: a list of IndexElem */
 	List	   *indexIncludingParams;	/* additional columns to index: a list

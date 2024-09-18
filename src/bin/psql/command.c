@@ -1078,6 +1078,9 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 						case 'f':
 							success = listOperatorFamilies(pattern, pattern2, show_verbose);
 							break;
+						case 'i':
+							success = describeAccessMethodImplementations(pattern, show_verbose);
+							break;
 						case 'o':
 							success = listOpFamilyOperators(pattern, pattern2, show_verbose);
 							break;

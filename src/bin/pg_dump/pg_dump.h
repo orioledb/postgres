@@ -46,6 +46,7 @@ typedef enum
 	DO_AGG,
 	DO_OPERATOR,
 	DO_ACCESS_METHOD,
+	DO_ACCESS_METHOD_IMPLEMENTATION,
 	DO_OPCLASS,
 	DO_OPFAMILY,
 	DO_COLLATION,
@@ -270,6 +271,17 @@ typedef struct _accessMethodInfo
 	DumpableObject dobj;
 	char		amtype;
 	char	   *amhandler;
+	/*
+	 * Used only when dobj.objType == DO_ACCESS_METHOD_IMPLEMENTATION.
+	 * The unqualified AM name the impl is registered for.
+	 */
+	char	   *amimpl_amname;
+	/*
+	 * Used only when dobj.objType == DO_ACCESS_METHOD_IMPLEMENTATION.
+	 * The unqualified AM name whose opclasses the impl uses.  NULL when it
+	 * matches amimpl_amname (the common case).
+	 */
+	char	   *amimpl_opcamname;
 } AccessMethodInfo;
 
 typedef struct _opclassInfo
@@ -773,6 +785,7 @@ extern TypeInfo *findTypeByOid(Oid oid);
 extern FuncInfo *findFuncByOid(Oid oid);
 extern OprInfo *findOprByOid(Oid oid);
 extern AccessMethodInfo *findAccessMethodByOid(Oid oid);
+extern AccessMethodInfo *findAccessMethodImplementationByOid(Oid oid);
 extern CollInfo *findCollationByOid(Oid oid);
 extern NamespaceInfo *findNamespaceByOid(Oid oid);
 extern ExtensionInfo *findExtensionByOid(Oid oid);
@@ -798,6 +811,7 @@ extern void getFuncs(Archive *fout);
 extern void getAggregates(Archive *fout);
 extern void getOperators(Archive *fout);
 extern void getAccessMethods(Archive *fout);
+extern void getAccessMethodImplementations(Archive *fout);
 extern void getOpclasses(Archive *fout);
 extern void getOpfamilies(Archive *fout);
 extern void getCollations(Archive *fout);

@@ -18,6 +18,7 @@
 #include <ctype.h>
 
 #include "catalog/pg_am_d.h"
+#include "catalog/pg_amimpl_d.h"
 #include "catalog/pg_class_d.h"
 #include "catalog/pg_collation_d.h"
 #include "catalog/pg_extension_d.h"
@@ -148,6 +149,9 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 
 	pg_log_info("reading user-defined access methods");
 	getAccessMethods(fout);
+
+	pg_log_info("reading user-defined access method implementations");
+	getAccessMethodImplementations(fout);
 
 	pg_log_info("reading user-defined operator classes");
 	getOpclasses(fout);
@@ -963,6 +967,25 @@ findAccessMethodByOid(Oid oid)
 	Assert(dobj == NULL || dobj->objType == DO_ACCESS_METHOD);
 	return (AccessMethodInfo *) dobj;
 }
+
+/*
+ * findAccessMethodImplementationByOid
+ *	  finds the DumpableObject for the access method implementation with the given oid
+ *	  returns NULL if not found
+ */
+AccessMethodInfo *
+findAccessMethodImplementationByOid(Oid oid)
+{
+	CatalogId	catId;
+	DumpableObject *dobj;
+
+	catId.tableoid = AccessMethodImplementationId;
+	catId.oid = oid;
+	dobj = findObjectByCatalogId(catId);
+	Assert(dobj == NULL || dobj->objType == DO_ACCESS_METHOD_IMPLEMENTATION);
+	return (AccessMethodInfo *) dobj;
+}
+
 
 /*
  * findCollationByOid

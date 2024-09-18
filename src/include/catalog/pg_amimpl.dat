@@ -1,0 +1,18 @@
+#----------------------------------------------------------------------
+#
+# pg_amimpl.dat
+#    Initial contents of the pg_amimpl system catalog.
+#
+# Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
+# Portions Copyright (c) 1994, Regents of the University of California
+#
+# src/include/catalog/pg_amimpl.dat
+#
+# pg_amimpl ships empty: an index with pg_index.indimpl = 0 falls
+# through to pg_am.amhandler, so existing indexes are unaffected.
+#
+#----------------------------------------------------------------------
+
+[
+
+]

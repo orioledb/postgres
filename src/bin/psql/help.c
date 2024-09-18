@@ -225,6 +225,7 @@ slashUsage(unsigned short int pager)
 	HELP0("  \\dA[x+]  [PATTERN]     list access methods\n");
 	HELP0("  \\dAc[x+] [AMPTRN [TYPEPTRN]]  list operator classes\n");
 	HELP0("  \\dAf[x+] [AMPTRN [TYPEPTRN]]  list operator families\n");
+	HELP0("  \\dAi[x+] [PATTERN]     list access method implementations\n");
 	HELP0("  \\dAo[x+] [AMPTRN [OPFPTRN]]   list operators of operator families\n");
 	HELP0("  \\dAp[x+] [AMPTRN [OPFPTRN]]   list support functions of operator families\n");
 	HELP0("  \\db[x+]  [PATTERN]     list tablespaces\n");

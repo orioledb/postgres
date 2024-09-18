@@ -45,6 +45,7 @@
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_amimpl.h"
 #include "catalog/pg_amproc.h"
 #include "catalog/pg_attrdef.h"
 #include "catalog/pg_auth_members.h"
@@ -259,12 +260,23 @@ do { \
  *
  * Note: only default support procs get cached, ie, those with
  * lefttype = righttype = opcintype.
+ *
+ * The same opclass OID may be loaded with different numSupport values
+ * when an index AM implementation (pg_amimpl) supplies a handler with
+ * a different amsupport than the AM's stock handler.  Including
+ * numSupport in the lookup key keeps each variant independent so the
+ * supportProcs array stays consistent with its size.
  */
+typedef struct opclasscachekey
+{
+	Oid			opclassoid;		/* OID of opclass */
+	uint32		numSupport;		/* max # of support procs (from pg_am) */
+} OpClassCacheKey;
+
 typedef struct opclasscacheent
 {
-	Oid			opclassoid;		/* lookup key: OID of opclass */
+	OpClassCacheKey key;		/* hash key, must be first */
 	bool		valid;			/* set true after successful fill-in */
-	StrategyNumber numSupport;	/* max # of support procs (from pg_am) */
 	Oid			opcfamily;		/* OID of opclass's family */
 	Oid			opcintype;		/* OID of opclass's declared input type */
 	RegProcedure *supportProcs; /* OIDs of support procedures */
@@ -1476,7 +1488,36 @@ RelationInitIndexAccessInfo(Relation relation)
 			 relation->rd_rel->relam);
 	aform = (Form_pg_am) GETSTRUCT(tuple);
 	relation->rd_amhandler = aform->amhandler;
+	relation->rd_effective_amoid = relation->rd_rel->relam;
 	ReleaseSysCache(tuple);
+
+	/*
+	 * If pg_index.indimpl is set, override rd_amhandler with the
+	 * implementation's handler.  pg_amimpl.amoid must match relam, otherwise
+	 * the impl was registered for a different AM and we refuse to load.
+	 * The effective AM is taken from pg_amimpl.implam, the AM that owns the
+	 * code the handler runs (which may differ from the catalog AM relam).
+	 */
+	if (OidIsValid(relation->rd_index->indimpl))
+	{
+		HeapTuple	impltup;
+		Form_pg_amimpl impform;
+
+		impltup = SearchSysCache1(AMIMPLOID,
+								  ObjectIdGetDatum(relation->rd_index->indimpl));
+		if (!HeapTupleIsValid(impltup))
+			elog(ERROR, "cache lookup failed for access method implementation %u",
+				 relation->rd_index->indimpl);
+		impform = (Form_pg_amimpl) GETSTRUCT(impltup);
+		if (impform->amoid != relation->rd_rel->relam)
+			elog(ERROR,
+				 "implementation %u is for access method %u, not %u",
+				 relation->rd_index->indimpl, impform->amoid,
+				 relation->rd_rel->relam);
+		relation->rd_amhandler = impform->implhandler;
+		relation->rd_effective_amoid = impform->implam;
+		ReleaseSysCache(impltup);
+	}
 
 	indnatts = RelationGetNumberOfAttributes(relation);
 	if (indnatts != IndexRelationGetNumberOfAttributes(relation))
@@ -1658,6 +1699,7 @@ static OpClassCacheEnt *
 LookupOpclassInfo(Oid operatorClassOid,
 				  StrategyNumber numSupport)
 {
+	OpClassCacheKey key;
 	OpClassCacheEnt *opcentry;
 	bool		found;
 	Relation	rel;
@@ -1675,26 +1717,26 @@ LookupOpclassInfo(Oid operatorClassOid,
 		if (!CacheMemoryContext)
 			CreateCacheMemoryContext();
 
-		ctl.keysize = sizeof(Oid);
+		ctl.keysize = sizeof(OpClassCacheKey);
 		ctl.entrysize = sizeof(OpClassCacheEnt);
 		OpClassCache = hash_create("Operator class cache", 64,
 								   &ctl, HASH_ELEM | HASH_BLOBS);
 	}
 
+	/* Zero the key so any padding bytes do not affect hashing/equality. */
+	memset(&key, 0, sizeof(key));
+	key.opclassoid = operatorClassOid;
+	key.numSupport = numSupport;
+
 	opcentry = (OpClassCacheEnt *) hash_search(OpClassCache,
-											   &operatorClassOid,
+											   &key,
 											   HASH_ENTER, &found);
 
 	if (!found)
 	{
 		/* Initialize new entry */
 		opcentry->valid = false;	/* until known OK */
-		opcentry->numSupport = numSupport;
 		opcentry->supportProcs = NULL;	/* filled below */
-	}
-	else
-	{
-		Assert(numSupport == opcentry->numSupport);
 	}
 
 	/*

@@ -61,6 +61,11 @@
      </row>
 
      <row>
+      <entry><link linkend="catalog-pg-amimpl"><structname>pg_amimpl</structname></link></entry>
+      <entry>access method implementations</entry>
+     </row>
+
+     <row>
       <entry><link linkend="catalog-pg-amop"><structname>pg_amop</structname></link></entry>
       <entry>access method operators</entry>
      </row>
@@ -770,6 +775,86 @@
     method properties; see <xref linkend="functions-info-catalog-table"/>.
    </para>
   </note>
+
+ </sect1>
+
+
+ <sect1 id="catalog-pg-amimpl">
+  <title><structname>pg_amimpl</structname></title>
+
+  <indexterm zone="catalog-pg-amimpl">
+   <primary>pg_amimpl</primary>
+  </indexterm>
+
+  <para>
+   The catalog <structname>pg_amimpl</structname> stores alternative
+   handlers for index access methods.  An extension can register an
+   implementation here so that indexes which name it (via the
+   <literal>IMPLEMENTATION</literal> clause on
+   <command>CREATE INDEX</command>) use the extension-supplied handler
+   while existing indexes continue to use the default handler from
+   <link linkend="catalog-pg-am"><structname>pg_am</structname></link>.
+   The catalog is empty in a fresh cluster.
+  </para>
+
+  <table>
+   <title><structname>pg_amimpl</structname> Columns</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>oid</structfield> <type>oid</type>
+      </para>
+      <para>
+       Row identifier
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>implname</structfield> <type>name</type>
+      </para>
+      <para>
+       Name of the implementation, globally unique
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>amoid</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-am"><structname>pg_am</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       OID of the index access method this implementation is for.
+       Must be an entry whose <structfield>amtype</structfield> is
+       <literal>i</literal>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>implhandler</structfield> <type>regproc</type>
+       (references <link linkend="catalog-pg-proc"><structname>pg_proc</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       OID of the handler function.  Must return type
+       <type>index_am_handler</type>.
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
 
  </sect1>
 
@@ -4436,6 +4521,19 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
       </para>
       <para>
        The OID of the <link linkend="catalog-pg-class"><structname>pg_class</structname></link> entry for the table this index is for
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>indimpl</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-amimpl"><structname>pg_amimpl</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       The OID of the access method implementation chosen for this
+       index, or <literal>0</literal> to fall through to
+       <link linkend="catalog-pg-am"><structname>pg_am</structname></link>.<structfield>amhandler</structfield>.
+       See <xref linkend="sql-create-implementation"/>.
       </para></entry>
      </row>
 

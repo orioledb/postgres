@@ -184,6 +184,16 @@ typedef struct RelationData
 	Oid			rd_amhandler;	/* OID of index AM's handler function */
 
 	/*
+	 * Effective AM oid for an index.  Equals rd_rel->relam in the common
+	 * case; differs when pg_index.indimpl points to a pg_amimpl row whose
+	 * handler reuses another AM's IndexAmRoutine.  Code that special-cases
+	 * a particular AM (e.g. "this is gist") should consult this rather than
+	 * rd_rel->relam, so that an indeximpl-cloned index is recognised as
+	 * the runtime AM it actually executes as.
+	 */
+	Oid			rd_effective_amoid;
+
+	/*
 	 * Table access method.
 	 */
 	const struct TableAmRoutine *rd_tableam;

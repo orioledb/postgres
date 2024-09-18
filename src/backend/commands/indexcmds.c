@@ -29,6 +29,7 @@
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_amimpl.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
@@ -88,6 +89,8 @@ static void ComputeIndexAttrs(ParseState *pstate,
 							  Oid relId,
 							  const char *accessMethodName,
 							  Oid accessMethodId,
+							  const char *opcMethodName,
+							  Oid opcMethodId,
 							  bool amcanorder,
 							  bool isconstraint,
 							  bool iswithoutoverlaps,
@@ -254,6 +257,7 @@ CheckIndexCompatible(Oid oldId,
 					  typeIds, collationIds, opclassIds, opclassOptions,
 					  coloptions, attributeList,
 					  exclusionOpNames, relationId,
+					  accessMethodName, accessMethodId,
 					  accessMethodName, accessMethodId,
 					  amcanorder, isconstraint, isWithoutOverlaps, InvalidOid,
 					  0, NULL);
@@ -563,6 +567,9 @@ DefineIndex(ParseState *pstate,
 	Oid		   *opclassIds;
 	Datum	   *opclassOptions;
 	Oid			accessMethodId;
+	Oid			amimplOid;
+	Oid			opcMethodId;
+	const char *opcMethodName;
 	Oid			namespaceId;
 	Oid			tablespaceId;
 	Oid			createdConstraintId = InvalidOid;
@@ -865,7 +872,52 @@ DefineIndex(ParseState *pstate,
 	}
 	accessMethodForm = (Form_pg_am) GETSTRUCT(tuple);
 	accessMethodId = accessMethodForm->oid;
-	amRoutine = GetIndexAmRoutine(accessMethodForm->amhandler);
+
+	/*
+	 * If the user named an AM implementation, validate it matches this AM
+	 * and use its handler in place of pg_am.amhandler.
+	 */
+	if (stmt->idxImpl != NULL)
+	{
+		HeapTuple	impltup;
+		Form_pg_amimpl impform;
+
+		impltup = SearchSysCache1(AMIMPLNAME,
+								  CStringGetDatum(stmt->idxImpl));
+		if (!HeapTupleIsValid(impltup))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("access method implementation \"%s\" does not exist",
+							stmt->idxImpl)));
+		impform = (Form_pg_amimpl) GETSTRUCT(impltup);
+		if (impform->amoid != accessMethodId)
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("implementation \"%s\" is not for access method \"%s\"",
+							stmt->idxImpl, accessMethodName)));
+		amimplOid = impform->oid;
+		opcMethodId = impform->implam;
+		amRoutine = GetIndexAmRoutine(impform->implhandler);
+		ReleaseSysCache(impltup);
+	}
+	else
+	{
+		amimplOid = InvalidOid;
+		opcMethodId = accessMethodId;
+		amRoutine = GetIndexAmRoutine(accessMethodForm->amhandler);
+	}
+
+	/*
+	 * Opclasses are looked up against the AM whose code actually runs the
+	 * index; for plain CREATE INDEX that is the index AM, but an
+	 * IMPLEMENTATION whose handler reuses another AM's IndexAmRoutine
+	 * (e.g. a btree implementation backed by gisthandler) declares that
+	 * AM via USING ... OPCLASSES and stores it in pg_amimpl.implam.
+	 */
+	if (opcMethodId != accessMethodId)
+		opcMethodName = get_am_name(opcMethodId);
+	else
+		opcMethodName = accessMethodName;
 
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_ACCESS_METHOD_OID,
 								 accessMethodId);
@@ -932,6 +984,7 @@ DefineIndex(ParseState *pstate,
 							  concurrent,
 							  amissummarizing,
 							  stmt->iswithoutoverlaps);
+	indexInfo->ii_AmImpl = amimplOid;
 
 	typeIds = palloc_array(Oid, numberOfAttributes);
 	collationIds = palloc_array(Oid, numberOfAttributes);
@@ -944,6 +997,7 @@ DefineIndex(ParseState *pstate,
 					  coloptions, allIndexParams,
 					  stmt->excludeOpNames, tableId,
 					  accessMethodName, accessMethodId,
+					  opcMethodName, opcMethodId,
 					  amcanorder, stmt->isconstraint, stmt->iswithoutoverlaps,
 					  root_save_userid, root_save_sec_context,
 					  &root_save_nestlevel);
@@ -1890,6 +1944,8 @@ ComputeIndexAttrs(ParseState *pstate,
 				  Oid relId,
 				  const char *accessMethodName,
 				  Oid accessMethodId,
+				  const char *opcMethodName,
+				  Oid opcMethodId,
 				  bool amcanorder,
 				  bool isconstraint,
 				  bool iswithoutoverlaps,
@@ -2135,8 +2191,8 @@ ComputeIndexAttrs(ParseState *pstate,
 		}
 		opclassOids[attn] = ResolveOpClass(attribute->opclass,
 										   atttype,
-										   accessMethodName,
-										   accessMethodId);
+										   opcMethodName,
+										   opcMethodId);
 		if (OidIsValid(ddl_userid))
 		{
 			SetUserIdAndSecContext(save_userid, save_sec_context);

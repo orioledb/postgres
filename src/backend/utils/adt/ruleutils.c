@@ -1522,6 +1522,19 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 	{
 		appendStringInfoChar(&buf, ')');
 
+		/* Emit IMPLEMENTATION foo if pg_index.indimpl is set */
+		if (OidIsValid(idxrec->indimpl))
+		{
+			char	   *implname = get_amimpl_implname(idxrec->indimpl);
+
+			if (implname != NULL)
+			{
+				appendStringInfo(&buf, " IMPLEMENTATION %s",
+								 quote_identifier(implname));
+				pfree(implname);
+			}
+		}
+
 		if (idxrec->indnullsnotdistinct)
 			appendStringInfoString(&buf, " NULLS NOT DISTINCT");
 

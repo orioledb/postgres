@@ -302,6 +302,7 @@ static void dumpCast(Archive *fout, const CastInfo *cast);
 static void dumpTransform(Archive *fout, const TransformInfo *transform);
 static void dumpOpr(Archive *fout, const OprInfo *oprinfo);
 static void dumpAccessMethod(Archive *fout, const AccessMethodInfo *aminfo);
+static void dumpAccessMethodImplementation(Archive *fout, const AccessMethodInfo *aminfo);
 static void dumpOpclass(Archive *fout, const OpclassInfo *opcinfo);
 static void dumpOpfamily(Archive *fout, const OpfamilyInfo *opfinfo);
 static void dumpCollation(Archive *fout, const CollInfo *collinfo);
@@ -6727,6 +6728,75 @@ getAccessMethods(Archive *fout)
 	destroyPQExpBuffer(query);
 }
 
+/*
+ * getAccessMethodImplementations:
+ *	  get information about every pg_amimpl row.
+ */
+void
+getAccessMethodImplementations(Archive *fout)
+{
+	PGresult   *res;
+	int			ntups;
+	int			i;
+	PQExpBuffer query;
+	AccessMethodInfo *iminfo;
+	int			i_tableoid;
+	int			i_oid;
+	int			i_implname;
+	int			i_amname;
+	int			i_opcamname;
+	int			i_implhandler;
+
+	/* pg_amimpl was introduced in v19. */
+	if (fout->remoteVersion < 190000)
+		return;
+
+	query = createPQExpBuffer();
+
+	appendPQExpBufferStr(query,
+						 "SELECT i.tableoid, i.oid, i.implname, "
+						 "a.amname, "
+						 "CASE WHEN i.implam <> i.amoid "
+						 "     THEN oa.amname ELSE NULL END AS opcamname, "
+						 "i.implhandler::pg_catalog.regproc AS implhandler "
+						 "FROM pg_catalog.pg_amimpl i "
+						 "JOIN pg_catalog.pg_am a ON a.oid = i.amoid "
+						 "JOIN pg_catalog.pg_am oa ON oa.oid = i.implam");
+
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+	iminfo = (AccessMethodInfo *) pg_malloc(ntups * sizeof(AccessMethodInfo));
+
+	i_tableoid = PQfnumber(res, "tableoid");
+	i_oid = PQfnumber(res, "oid");
+	i_implname = PQfnumber(res, "implname");
+	i_amname = PQfnumber(res, "amname");
+	i_opcamname = PQfnumber(res, "opcamname");
+	i_implhandler = PQfnumber(res, "implhandler");
+
+	for (i = 0; i < ntups; i++)
+	{
+		iminfo[i].dobj.objType = DO_ACCESS_METHOD_IMPLEMENTATION;
+		iminfo[i].dobj.catId.tableoid = atooid(PQgetvalue(res, i, i_tableoid));
+		iminfo[i].dobj.catId.oid = atooid(PQgetvalue(res, i, i_oid));
+		AssignDumpId(&iminfo[i].dobj);
+		iminfo[i].dobj.name = pg_strdup(PQgetvalue(res, i, i_implname));
+		iminfo[i].dobj.namespace = NULL;
+		iminfo[i].amimpl_amname = pg_strdup(PQgetvalue(res, i, i_amname));
+		iminfo[i].amimpl_opcamname = PQgetisnull(res, i, i_opcamname) ?
+			NULL : pg_strdup(PQgetvalue(res, i, i_opcamname));
+		iminfo[i].amhandler = pg_strdup(PQgetvalue(res, i, i_implhandler));
+		iminfo[i].amtype = AMTYPE_INDEX;	/* impls are index-only */
+
+		/* Reuse the AM dumpable-decision rule. */
+		selectDumpableAccessMethod(&(iminfo[i]), fout);
+	}
+
+	PQclear(res);
+	destroyPQExpBuffer(query);
+}
+
 
 /*
  * getOpclasses:
@@ -11855,6 +11925,9 @@ dumpDumpableObject(Archive *fout, DumpableObject *dobj)
 		case DO_ACCESS_METHOD:
 			dumpAccessMethod(fout, (const AccessMethodInfo *) dobj);
 			break;
+		case DO_ACCESS_METHOD_IMPLEMENTATION:
+			dumpAccessMethodImplementation(fout, (const AccessMethodInfo *) dobj);
+			break;
 		case DO_OPCLASS:
 			dumpOpclass(fout, (const OpclassInfo *) dobj);
 			break;
@@ -14566,6 +14639,57 @@ convertTSFunction(Archive *fout, Oid funcOid)
 	PQclear(res);
 
 	return result;
+}
+
+/*
+ * dumpAccessMethodImplementation
+ *	  write out a single CREATE IMPLEMENTATION statement
+ */
+static void
+dumpAccessMethodImplementation(Archive *fout, const AccessMethodInfo *iminfo)
+{
+	DumpOptions *dopt = fout->dopt;
+	PQExpBuffer q;
+	PQExpBuffer delq;
+	char	   *qimplname;
+
+	if (!dopt->dumpSchema)
+		return;
+
+	q = createPQExpBuffer();
+	delq = createPQExpBuffer();
+
+	qimplname = pg_strdup(fmtId(iminfo->dobj.name));
+
+	appendPQExpBuffer(q,
+					  "CREATE IMPLEMENTATION %s FOR ACCESS METHOD %s",
+					  qimplname,
+					  fmtId(iminfo->amimpl_amname));
+	appendPQExpBuffer(q, " HANDLER %s", iminfo->amhandler);
+	if (iminfo->amimpl_opcamname != NULL)
+		appendPQExpBuffer(q,
+						  " USING %s OPCLASSES",
+						  fmtId(iminfo->amimpl_opcamname));
+	appendPQExpBufferStr(q, ";\n");
+
+	appendPQExpBuffer(delq, "DROP IMPLEMENTATION %s;\n", qimplname);
+
+	if (iminfo->dobj.dump & DUMP_COMPONENT_DEFINITION)
+		ArchiveEntry(fout, iminfo->dobj.catId, iminfo->dobj.dumpId,
+					 ARCHIVE_OPTS(.tag = iminfo->dobj.name,
+								  .description = "ACCESS METHOD IMPLEMENTATION",
+								  .section = SECTION_PRE_DATA,
+								  .createStmt = q->data,
+								  .dropStmt = delq->data));
+
+	if (iminfo->dobj.dump & DUMP_COMPONENT_COMMENT)
+		dumpComment(fout, "IMPLEMENTATION", qimplname,
+					NULL, "",
+					iminfo->dobj.catId, 0, iminfo->dobj.dumpId);
+
+	destroyPQExpBuffer(q);
+	destroyPQExpBuffer(delq);
+	free(qimplname);
 }
 
 /*
@@ -20679,6 +20803,7 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 			case DO_AGG:
 			case DO_OPERATOR:
 			case DO_ACCESS_METHOD:
+			case DO_ACCESS_METHOD_IMPLEMENTATION:
 			case DO_OPCLASS:
 			case DO_OPFAMILY:
 			case DO_COLLATION:

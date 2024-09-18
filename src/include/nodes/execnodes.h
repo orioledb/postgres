@@ -233,6 +233,8 @@ typedef struct IndexInfo
 
 	/* Oid of index AM */
 	Oid			ii_Am;
+	/* Oid of pg_amimpl row, or InvalidOid for default */
+	Oid			ii_AmImpl;
 	/* private cache area for index AM */
 	void	   *ii_AmCache;
 

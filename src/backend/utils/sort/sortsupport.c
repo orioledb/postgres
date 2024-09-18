@@ -190,8 +190,8 @@ PrepareSortSupportFromGistIndexRel(Relation indexRel, SortSupport ssup)
 
 	Assert(ssup->comparator == NULL);
 
-	if (indexRel->rd_rel->relam != GIST_AM_OID)
-		elog(ERROR, "unexpected non-gist AM: %u", indexRel->rd_rel->relam);
+	if (indexRel->rd_effective_amoid != GIST_AM_OID)
+		elog(ERROR, "unexpected non-gist AM: %u", indexRel->rd_effective_amoid);
 	ssup->ssup_reverse = false;
 
 	/*

@@ -411,6 +411,7 @@ ExecRenameStmt(RenameStmt *stmt)
 		case OBJECT_TYPE:
 			return RenameType(stmt);
 
+		case OBJECT_ACCESS_METHOD_IMPLEMENTATION:
 		case OBJECT_AGGREGATE:
 		case OBJECT_COLLATION:
 		case OBJECT_CONVERSION:

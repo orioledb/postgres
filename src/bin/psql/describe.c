@@ -218,6 +218,70 @@ describeAccessMethods(const char *pattern, bool verbose)
 }
 
 /*
+ * \dAi
+ * List access method implementations.
+ */
+bool
+describeAccessMethodImplementations(const char *pattern, bool verbose)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+
+	if (pset.sversion < 190000)
+	{
+		char		sverbuf[32];
+
+		pg_log_error("The server (version %s) does not support access method implementations.",
+					 formatPGVersionNumber(pset.sversion, false,
+										   sverbuf, sizeof(sverbuf)));
+		return true;
+	}
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT i.implname AS \"%s\",\n"
+					  "  a.amname AS \"%s\"",
+					  gettext_noop("Name"),
+					  gettext_noop("Access method"));
+
+	if (verbose)
+		appendPQExpBuffer(&buf,
+						  ",\n  i.implhandler AS \"%s\",\n"
+						  "  pg_catalog.obj_description(i.oid, 'pg_amimpl') AS \"%s\"",
+						  gettext_noop("Handler"),
+						  gettext_noop("Description"));
+
+	appendPQExpBufferStr(&buf,
+						 "\nFROM pg_catalog.pg_amimpl i\n"
+						 "  JOIN pg_catalog.pg_am a ON a.oid = i.amoid\n");
+
+	if (!validateSQLNamePattern(&buf, pattern, false, false,
+								NULL, "i.implname", NULL,
+								NULL, NULL, 1))
+	{
+		termPQExpBuffer(&buf);
+		return false;
+	}
+
+	appendPQExpBufferStr(&buf, "ORDER BY 1;");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.title = _("List of access method implementations");
+	myopt.translate_header = true;
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}
+
+/*
  * \db
  * Takes an optional regexp to select particular tablespaces
  */
@@ -2472,7 +2536,16 @@ describeOneTableDetails(const char *schemaname,
 			appendPQExpBufferStr(&buf, "false AS indnullsnotdistinct,\n");
 
 		appendPQExpBuffer(&buf, "  a.amname, c2.relname, "
-						  "pg_catalog.pg_get_expr(i.indpred, i.indrelid, true)\n"
+						  "pg_catalog.pg_get_expr(i.indpred, i.indrelid, true), ");
+
+		if (pset.sversion >= 190000)
+			appendPQExpBufferStr(&buf,
+								 "  (SELECT implname FROM pg_catalog.pg_amimpl ai "
+								 "WHERE ai.oid = i.indimpl) AS implname\n");
+		else
+			appendPQExpBufferStr(&buf, "NULL AS implname\n");
+
+		appendPQExpBuffer(&buf,
 						  "FROM pg_catalog.pg_index i, pg_catalog.pg_class c, pg_catalog.pg_class c2, pg_catalog.pg_am a\n"
 						  "WHERE i.indexrelid = c.oid AND c.oid = '%s' AND c.relam = a.oid\n"
 						  "AND i.indrelid = c2.oid;",
@@ -2499,6 +2572,7 @@ describeOneTableDetails(const char *schemaname,
 			char	   *indamname = PQgetvalue(result, 0, 8);
 			char	   *indtable = PQgetvalue(result, 0, 9);
 			char	   *indpred = PQgetvalue(result, 0, 10);
+			char	   *indimplname = PQgetvalue(result, 0, 11);
 
 			if (strcmp(indisprimary, "t") == 0)
 				printfPQExpBuffer(&tmpbuf, _("primary key, "));
@@ -2512,6 +2586,8 @@ describeOneTableDetails(const char *schemaname,
 			else
 				resetPQExpBuffer(&tmpbuf);
 			appendPQExpBuffer(&tmpbuf, "%s, ", indamname);
+			if (*indimplname)
+				appendPQExpBuffer(&tmpbuf, _("implementation %s, "), indimplname);
 
 			/* we assume here that index and table are in same schema */
 			appendPQExpBuffer(&tmpbuf, _("for table \"%s.%s\""),

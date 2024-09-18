@@ -2790,6 +2790,7 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 						break;
 						/* these currently aren't used */
 					case OBJECT_ACCESS_METHOD:
+					case OBJECT_ACCESS_METHOD_IMPLEMENTATION:
 					case OBJECT_AMOP:
 					case OBJECT_AMPROC:
 					case OBJECT_ATTRIBUTE:
@@ -2933,6 +2934,7 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 						break;
 						/* these currently aren't used */
 					case OBJECT_ACCESS_METHOD:
+					case OBJECT_ACCESS_METHOD_IMPLEMENTATION:
 					case OBJECT_AMOP:
 					case OBJECT_AMPROC:
 					case OBJECT_ATTRIBUTE:

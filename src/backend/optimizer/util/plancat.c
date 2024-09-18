@@ -295,7 +295,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 				info->indexcollations[i] = indexRelation->rd_indcollation[i];
 			}
 
-			info->relam = indexRelation->rd_rel->relam;
+			info->relam = indexRelation->rd_effective_amoid;
 
 			/*
 			 * We don't have an AM for partitioned indexes, so we'll just

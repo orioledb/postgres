@@ -1,0 +1,43 @@
+<!--
+doc/src/sgml/ref/alter_implementation.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-alter-implementation">
+ <indexterm zone="sql-alter-implementation">
+  <primary>ALTER IMPLEMENTATION</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>ALTER IMPLEMENTATION</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>ALTER IMPLEMENTATION</refname>
+  <refpurpose>change the definition of an access method implementation</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+ALTER IMPLEMENTATION <replaceable class="parameter">name</replaceable> RENAME TO <replaceable class="parameter">new_name</replaceable>
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+  <para>
+   <command>ALTER IMPLEMENTATION</command> currently supports renaming
+   an implementation.  Only superusers can alter an implementation.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+  <simplelist type="inline">
+   <member><xref linkend="sql-create-implementation"/></member>
+   <member><xref linkend="sql-drop-implementation"/></member>
+  </simplelist>
+ </refsect1>
+</refentry>

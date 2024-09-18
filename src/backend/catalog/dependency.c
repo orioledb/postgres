@@ -25,6 +25,7 @@
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_amimpl.h"
 #include "catalog/pg_amop.h"
 #include "catalog/pg_amproc.h"
 #include "catalog/pg_attrdef.h"
@@ -147,7 +148,6 @@ typedef struct
 	ObjectAddresses *addrs;		/* addresses being accumulated */
 	List	   *rtables;		/* list of rangetables to resolve Vars */
 } find_expr_references_context;
-
 
 static void findDependentObjects(const ObjectAddress *object,
 								 int objflags,
@@ -1517,6 +1517,7 @@ doDeletion(const ObjectAddress *object, int flags)
 		case OperatorClassRelationId:
 		case OperatorFamilyRelationId:
 		case AccessMethodRelationId:
+		case AccessMethodImplementationId:
 		case AccessMethodOperatorRelationId:
 		case AccessMethodProcedureRelationId:
 		case PropgraphElementRelationId:

@@ -19,8 +19,10 @@
 #include <math.h>
 #include <signal.h>
 
+#include "access/amapi.h"
 #include "access/detoast.h"
 #include "access/htup_details.h"
+#include "access/relation.h"
 #include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_operator.h"
@@ -736,6 +738,174 @@ Datum
 test_fdw_connection(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_TEXT_P(cstring_to_text("dbname=regress_doesnotexist user=doesnotexist password=secret"));
+}
+
+/*
+ * Demonstrate that an AM implementation handler may return a struct
+ * that *embeds* IndexAmRoutine and appends extra fields after it.
+ * Core only reads the prefix (and verifies NodeTag via IsA) and never
+ * copies or frees the struct, so an extension can ship a private
+ * superset of IndexAmRoutine without core knowing about the trailing
+ * fields.  bthandler_dummy delegates to bthandler for the core fields
+ * and tacks on amcandummy / amrundummy at the end.
+ */
+typedef void (*btrundummy_function) (Relation rel);
+
+typedef struct BtDummyAmRoutine
+{
+	IndexAmRoutine core;		/* must be first member */
+	bool		amcandummy;
+	btrundummy_function amrundummy;
+} BtDummyAmRoutine;
+
+static void
+btrundummy(Relation rel)
+{
+	elog(NOTICE, "btrundummy: index \"%s\"", RelationGetRelationName(rel));
+}
+
+PG_FUNCTION_INFO_V1(bthandler_dummy);
+Datum
+bthandler_dummy(PG_FUNCTION_ARGS)
+{
+	static BtDummyAmRoutine dummy_routine;
+	static bool initialized = false;
+
+	if (!initialized)
+	{
+		const IndexAmRoutine *core;
+
+		core = (const IndexAmRoutine *) DatumGetPointer(bthandler(fcinfo));
+		memcpy(&dummy_routine.core, core, sizeof(IndexAmRoutine));
+		dummy_routine.amcandummy = true;
+		dummy_routine.amrundummy = btrundummy;
+		initialized = true;
+	}
+
+	PG_RETURN_POINTER(&dummy_routine.core);
+}
+
+/*
+ * Open the named index and, treating its rd_indam as the extended
+ * BtDummyAmRoutine, verify amcandummy is set and invoke amrundummy.
+ * Errors out if the index was not built with the dummy implementation.
+ */
+PG_FUNCTION_INFO_V1(test_run_amrundummy);
+Datum
+test_run_amrundummy(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	Relation	rel = relation_open(relid, AccessShareLock);
+	const BtDummyAmRoutine *dr;
+
+	if (rel->rd_indam == NULL)
+		elog(ERROR, "relation \"%s\" is not an index",
+			 RelationGetRelationName(rel));
+
+	dr = (const BtDummyAmRoutine *) rel->rd_indam;
+	if (!dr->amcandummy)
+		elog(ERROR, "index \"%s\" was not built with the dummy implementation",
+			 RelationGetRelationName(rel));
+	if (dr->amrundummy == NULL)
+		elog(ERROR, "amrundummy is NULL");
+
+	dr->amrundummy(rel);
+
+	relation_close(rel, AccessShareLock);
+	PG_RETURN_BOOL(true);
+}
+
+/*
+ * Dump every property and method of the index's IndexAmRoutine.
+ * Used to confirm which handler the relcache resolved through,
+ * e.g. gist vs bthandler, by inspecting the full set of fields
+ * rather than a single flag.
+ */
+PG_FUNCTION_INFO_V1(test_print_index_am_handler);
+Datum
+test_print_index_am_handler(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	Relation	rel = relation_open(relid, AccessShareLock);
+	const IndexAmRoutine *am;
+	StringInfoData buf;
+
+	if (rel->rd_indam == NULL)
+		elog(ERROR, "relation \"%s\" is not an index",
+			 RelationGetRelationName(rel));
+
+	am = rel->rd_indam;
+	initStringInfo(&buf);
+
+#define APPEND_UINT(field) \
+	appendStringInfo(&buf, #field " = %u\n", (unsigned) am->field)
+#define APPEND_BOOL(field) \
+	appendStringInfo(&buf, #field " = %s\n", am->field ? "t" : "f")
+#define APPEND_FUNC(field) \
+	appendStringInfo(&buf, #field " = %s\n", am->field ? "set" : "NULL")
+
+	APPEND_UINT(amstrategies);
+	APPEND_UINT(amsupport);
+	APPEND_UINT(amoptsprocnum);
+	APPEND_BOOL(amcanorder);
+	APPEND_BOOL(amcanorderbyop);
+	APPEND_BOOL(amcanhash);
+	APPEND_BOOL(amconsistentequality);
+	APPEND_BOOL(amconsistentordering);
+	APPEND_BOOL(amcanbackward);
+	APPEND_BOOL(amcanunique);
+	APPEND_BOOL(amcanmulticol);
+	APPEND_BOOL(amoptionalkey);
+	APPEND_BOOL(amsearcharray);
+	APPEND_BOOL(amsearchnulls);
+	APPEND_BOOL(amstorage);
+	APPEND_BOOL(amclusterable);
+	APPEND_BOOL(ampredlocks);
+	APPEND_BOOL(amcanparallel);
+	APPEND_BOOL(amcanbuildparallel);
+	APPEND_BOOL(amcaninclude);
+	APPEND_BOOL(amusemaintenanceworkmem);
+	APPEND_BOOL(amsummarizing);
+	APPEND_UINT(amparallelvacuumoptions);
+	APPEND_UINT(amkeytype);
+
+	APPEND_FUNC(ambuild);
+	APPEND_FUNC(ambuildempty);
+	APPEND_FUNC(aminsert);
+	APPEND_FUNC(aminsertcleanup);
+	APPEND_FUNC(ambulkdelete);
+	APPEND_FUNC(amvacuumcleanup);
+	APPEND_FUNC(amcanreturn);
+	APPEND_FUNC(amcostestimate);
+	APPEND_FUNC(amgettreeheight);
+	APPEND_FUNC(amoptions);
+	APPEND_FUNC(amproperty);
+	APPEND_FUNC(ambuildphasename);
+	APPEND_FUNC(amvalidate);
+	APPEND_FUNC(amadjustmembers);
+	APPEND_FUNC(ambeginscan);
+	APPEND_FUNC(amrescan);
+	APPEND_FUNC(amgettuple);
+	APPEND_FUNC(amgetbitmap);
+	APPEND_FUNC(amendscan);
+	APPEND_FUNC(ammarkpos);
+	APPEND_FUNC(amrestrpos);
+	APPEND_FUNC(amestimateparallelscan);
+	APPEND_FUNC(aminitparallelscan);
+	APPEND_FUNC(amparallelrescan);
+	APPEND_FUNC(amtranslatestrategy);
+	APPEND_FUNC(amtranslatecmptype);
+
+#undef APPEND_UINT
+#undef APPEND_BOOL
+#undef APPEND_FUNC
+
+	/* drop trailing newline */
+	if (buf.len > 0 && buf.data[buf.len - 1] == '\n')
+		buf.data[--buf.len] = '\0';
+
+	relation_close(rel, AccessShareLock);
+	PG_RETURN_TEXT_P(cstring_to_text_with_len(buf.data, buf.len));
 }
 
 PG_FUNCTION_INFO_V1(is_catalog_text_unique_index_oid);

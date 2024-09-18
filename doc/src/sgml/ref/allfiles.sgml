@@ -18,6 +18,7 @@ Complete list of usable sgml source files in this directory.
 <!ENTITY alterForeignTable  SYSTEM "alter_foreign_table.sgml">
 <!ENTITY alterFunction      SYSTEM "alter_function.sgml">
 <!ENTITY alterGroup         SYSTEM "alter_group.sgml">
+<!ENTITY alterImplementation SYSTEM "alter_implementation.sgml">
 <!ENTITY alterIndex         SYSTEM "alter_index.sgml">
 <!ENTITY alterLanguage      SYSTEM "alter_language.sgml">
 <!ENTITY alterLargeObject   SYSTEM "alter_large_object.sgml">
@@ -72,6 +73,7 @@ Complete list of usable sgml source files in this directory.
 <!ENTITY createForeignTable SYSTEM "create_foreign_table.sgml">
 <!ENTITY createFunction     SYSTEM "create_function.sgml">
 <!ENTITY createGroup        SYSTEM "create_group.sgml">
+<!ENTITY createImplementation SYSTEM "create_implementation.sgml">
 <!ENTITY createIndex        SYSTEM "create_index.sgml">
 <!ENTITY createLanguage     SYSTEM "create_language.sgml">
 <!ENTITY createMaterializedView SYSTEM "create_materialized_view.sgml">
@@ -120,6 +122,7 @@ Complete list of usable sgml source files in this directory.
 <!ENTITY dropForeignTable   SYSTEM "drop_foreign_table.sgml">
 <!ENTITY dropFunction       SYSTEM "drop_function.sgml">
 <!ENTITY dropGroup          SYSTEM "drop_group.sgml">
+<!ENTITY dropImplementation SYSTEM "drop_implementation.sgml">
 <!ENTITY dropIndex          SYSTEM "drop_index.sgml">
 <!ENTITY dropLanguage       SYSTEM "drop_language.sgml">
 <!ENTITY dropMaterializedView SYSTEM "drop_materialized_view.sgml">

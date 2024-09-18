@@ -1,0 +1,466 @@
+--
+--  Create access method implementations tests
+--
+-- directory paths and dlsuffix are passed to us in environment variables
+\getenv libdir PG_LIBDIR
+\getenv dlsuffix PG_DLSUFFIX
+\set regresslib :libdir '/regress' :dlsuffix
+-- CREATE / DROP / ALTER IMPLEMENTATION basic checks.
+SELECT count(*) FROM pg_amimpl;
+ count 
+-------
+     0
+(1 row)
+
+CREATE IMPLEMENTATION btree_alias FOR ACCESS METHOD btree HANDLER bthandler;
+-- Fail - names are globally unique.
+CREATE IMPLEMENTATION btree_alias FOR ACCESS METHOD btree HANDLER bthandler;
+ERROR:  access method implementation "btree_alias" already exists
+-- Fail - wrong rettype: int4in is not an index_am_handler.
+CREATE IMPLEMENTATION bogus FOR ACCESS METHOD btree HANDLER int4in;
+ERROR:  function int4in(internal) does not exist
+-- Fail - implementations may not target table AMs.
+CREATE IMPLEMENTATION bogus FOR ACCESS METHOD heap HANDLER bthandler;
+ERROR:  access method "heap" is not of type INDEX
+-- Fail - AM must exist.
+CREATE IMPLEMENTATION bogus FOR ACCESS METHOD nosuch HANDLER bthandler;
+ERROR:  access method "nosuch" does not exist
+-- Fail - opclass AM must exist and be an index AM.
+CREATE IMPLEMENTATION bogus FOR ACCESS METHOD btree
+    HANDLER bthandler USING nosuch OPCLASSES;
+ERROR:  access method "nosuch" does not exist
+CREATE IMPLEMENTATION bogus FOR ACCESS METHOD btree
+    HANDLER bthandler USING heap OPCLASSES;
+ERROR:  access method "heap" is not of type INDEX
+SELECT i.implname, a.amname
+FROM pg_amimpl i JOIN pg_am a ON a.oid = i.amoid
+ORDER BY 1;
+  implname   | amname 
+-------------+--------
+ btree_alias | btree
+(1 row)
+
+ALTER IMPLEMENTATION btree_alias RENAME TO btree_alias_renamed;
+COMMENT ON IMPLEMENTATION btree_alias_renamed IS 'a btree alias';
+SELECT pg_catalog.obj_description(oid, 'pg_amimpl')
+FROM pg_amimpl WHERE implname = 'btree_alias_renamed';
+ obj_description 
+-----------------
+ a btree alias
+(1 row)
+
+DROP IMPLEMENTATION btree_alias_renamed;
+SELECT count(*) FROM pg_amimpl;
+ count 
+-------
+     0
+(1 row)
+
+-- bthandler_dummy wraps bthandler's IndexAmRoutine, appending custom
+-- amcandummy/amrundummy: an extension shipping a private superset of
+-- IndexAmRoutine in its handler.
+CREATE FUNCTION bthandler_dummy(internal)
+    RETURNS index_am_handler
+    AS :'regresslib', 'bthandler_dummy'
+    LANGUAGE C;
+CREATE FUNCTION test_run_amrundummy(regclass)
+    RETURNS bool
+    AS :'regresslib', 'test_run_amrundummy'
+    LANGUAGE C STRICT;
+CREATE IMPLEMENTATION btree_dummy FOR ACCESS METHOD btree
+    HANDLER bthandler_dummy;
+CREATE TABLE amimpl_dummy_tbl (i int);
+INSERT INTO amimpl_dummy_tbl SELECT g FROM generate_series(1, 100) g;
+CREATE INDEX amimpl_dummy_idx ON amimpl_dummy_tbl USING btree (i)
+    IMPLEMENTATION btree_dummy;
+SELECT test_run_amrundummy('amimpl_dummy_idx');
+NOTICE:  btrundummy: index "amimpl_dummy_idx"
+ test_run_amrundummy 
+---------------------
+ t
+(1 row)
+
+SET enable_seqscan = off;
+SELECT count(*) FROM amimpl_dummy_tbl WHERE i BETWEEN 10 AND 20;
+ count 
+-------
+    11
+(1 row)
+
+RESET enable_seqscan;
+DROP TABLE amimpl_dummy_tbl;
+DROP IMPLEMENTATION btree_dummy;
+-- Index has DEPENDENCY_NORMAL on its implementation: plain DROP fails,
+-- CASCADE removes the index.
+CREATE IMPLEMENTATION btree_drop_test FOR ACCESS METHOD btree
+    HANDLER bthandler_dummy;
+CREATE TABLE amimpl_drop_tbl (i int);
+INSERT INTO amimpl_drop_tbl SELECT g FROM generate_series(1, 10) g;
+CREATE INDEX amimpl_drop_idx ON amimpl_drop_tbl USING btree (i)
+    IMPLEMENTATION btree_drop_test;
+-- Fail - the index depends on the implementation.
+DROP IMPLEMENTATION btree_drop_test;
+ERROR:  cannot drop access method implementation btree_drop_test for access method btree because other objects depend on it
+DETAIL:  index amimpl_drop_idx depends on access method implementation btree_drop_test for access method btree
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+SELECT c.relname,
+       (SELECT implname FROM pg_amimpl WHERE oid = i.indimpl) AS implname
+FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+WHERE c.relname = 'amimpl_drop_idx';
+     relname     |    implname     
+-----------------+-----------------
+ amimpl_drop_idx | btree_drop_test
+(1 row)
+
+DROP IMPLEMENTATION btree_drop_test CASCADE;
+NOTICE:  drop cascades to index amimpl_drop_idx
+-- The index is gone; the table is untouched.
+SELECT count(*) FROM pg_class WHERE relname = 'amimpl_drop_idx';
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM amimpl_drop_tbl;
+ count 
+-------
+    10
+(1 row)
+
+DROP TABLE amimpl_drop_tbl;
+-- RENAME preserves OID, so existing indexes keep working.
+CREATE IMPLEMENTATION btree_alter_test FOR ACCESS METHOD btree
+    HANDLER bthandler_dummy;
+CREATE TABLE amimpl_alter_tbl (i int);
+INSERT INTO amimpl_alter_tbl SELECT g FROM generate_series(1, 100) g;
+CREATE INDEX amimpl_alter_idx ON amimpl_alter_tbl USING btree (i)
+    IMPLEMENTATION btree_alter_test;
+-- Capture the implementation OID stored in pg_index before the rename.
+SELECT indimpl AS impl_oid_before
+FROM pg_index WHERE indexrelid = 'amimpl_alter_idx'::regclass \gset
+ALTER IMPLEMENTATION btree_alter_test RENAME TO btree_alter_renamed;
+-- The OID in pg_index is unchanged; the new name is reachable through it.
+SELECT indimpl = :impl_oid_before AS oid_unchanged,
+       (SELECT implname FROM pg_amimpl WHERE oid = i.indimpl) AS implname
+FROM pg_index i WHERE i.indexrelid = 'amimpl_alter_idx'::regclass;
+ oid_unchanged |      implname       
+---------------+---------------------
+ t             | btree_alter_renamed
+(1 row)
+
+-- The index is still bound to the dummy implementation and still works.
+SELECT test_run_amrundummy('amimpl_alter_idx');
+NOTICE:  btrundummy: index "amimpl_alter_idx"
+ test_run_amrundummy 
+---------------------
+ t
+(1 row)
+
+SET enable_seqscan = off;
+SELECT count(*) FROM amimpl_alter_tbl WHERE i BETWEEN 30 AND 50;
+ count 
+-------
+    21
+(1 row)
+
+RESET enable_seqscan;
+DROP TABLE amimpl_alter_tbl;
+DROP IMPLEMENTATION btree_alter_renamed;
+--
+-- gist_as_btree: gisthandler as a btree implementation
+--
+-- Default opclass-resolution AM (btree): gist's initGISTstate runs
+-- against btree procs and errors cleanly on missing gist support.
+CREATE IMPLEMENTATION gist_as_btree FOR ACCESS METHOD btree
+    HANDLER gisthandler;
+SELECT i.implname, a.amname AS am, p.proname AS handler
+FROM pg_amimpl i
+JOIN pg_am a ON a.oid = i.amoid
+JOIN pg_proc p ON p.oid = i.implhandler
+WHERE i.implname = 'gist_as_btree';
+   implname    |  am   |   handler   
+---------------+-------+-------------
+ gist_as_btree | btree | gisthandler
+(1 row)
+
+CREATE TABLE amimpl_gist_tbl (i int);
+CREATE INDEX amimpl_gist_idx ON amimpl_gist_tbl USING btree (i)
+    IMPLEMENTATION gist_as_btree;
+ERROR:  missing support function 5 for attribute 1 of index "amimpl_gist_idx"
+DROP TABLE amimpl_gist_tbl;
+DROP IMPLEMENTATION gist_as_btree;
+SELECT count(*) FROM pg_amimpl;
+ count 
+-------
+     0
+(1 row)
+
+-- USING gist OPCLASSES resolves column opclasses against gist.
+-- Catalog AM (pg_class.relam) stays btree; runtime AM is gist.
+CREATE FUNCTION test_print_index_am_handler(regclass)
+    RETURNS text
+    AS :'regresslib', 'test_print_index_am_handler'
+    LANGUAGE C STRICT;
+CREATE IMPLEMENTATION gist_as_btree FOR ACCESS METHOD btree
+    HANDLER gisthandler
+    USING gist OPCLASSES;
+SELECT i.implname, a.amname AS am, oa.amname AS opcam, p.proname AS handler
+FROM pg_amimpl i
+JOIN pg_am a ON a.oid = i.amoid
+JOIN pg_am oa ON oa.oid = i.implam
+JOIN pg_proc p ON p.oid = i.implhandler
+WHERE i.implname = 'gist_as_btree';
+   implname    |  am   | opcam |   handler   
+---------------+-------+-------+-------------
+ gist_as_btree | btree | gist  | gisthandler
+(1 row)
+
+CREATE TABLE amimpl_gist_tbl (r int4range);
+INSERT INTO amimpl_gist_tbl
+SELECT int4range(g, g + 10) FROM generate_series(1, 100, 5) g;
+CREATE INDEX amimpl_gist_idx ON amimpl_gist_tbl USING btree (r)
+    IMPLEMENTATION gist_as_btree;
+-- Dump resolved IndexAmRoutine. amimpl_gist_idx uses gist_as_btree,
+-- so we see gist properties (amcanorderbyop=t). A stock btree index
+-- below shows bthandler values (amcanorderbyop=f) for comparison.
+SELECT regexp_split_to_table(test_print_index_am_handler('amimpl_gist_idx'),
+                             E'\n') AS gist_as_btree;
+         gist_as_btree         
+-------------------------------
+ amstrategies = 0
+ amsupport = 12
+ amoptsprocnum = 10
+ amcanorder = f
+ amcanorderbyop = t
+ amcanhash = f
+ amconsistentequality = f
+ amconsistentordering = f
+ amcanbackward = f
+ amcanunique = f
+ amcanmulticol = t
+ amoptionalkey = t
+ amsearcharray = f
+ amsearchnulls = t
+ amstorage = t
+ amclusterable = t
+ ampredlocks = t
+ amcanparallel = f
+ amcanbuildparallel = f
+ amcaninclude = t
+ amusemaintenanceworkmem = f
+ amsummarizing = f
+ amparallelvacuumoptions = 3
+ amkeytype = 0
+ ambuild = set
+ ambuildempty = set
+ aminsert = set
+ aminsertcleanup = NULL
+ ambulkdelete = set
+ amvacuumcleanup = set
+ amcanreturn = set
+ amcostestimate = set
+ amgettreeheight = NULL
+ amoptions = set
+ amproperty = set
+ ambuildphasename = NULL
+ amvalidate = set
+ amadjustmembers = set
+ ambeginscan = set
+ amrescan = set
+ amgettuple = set
+ amgetbitmap = set
+ amendscan = set
+ ammarkpos = NULL
+ amrestrpos = NULL
+ amestimateparallelscan = NULL
+ aminitparallelscan = NULL
+ amparallelrescan = NULL
+ amtranslatestrategy = NULL
+ amtranslatecmptype = set
+(50 rows)
+
+CREATE TABLE btree_tbl (i int);
+CREATE INDEX btree_idx ON btree_tbl (i);
+SELECT regexp_split_to_table(test_print_index_am_handler('btree_idx'),
+                             E'\n') AS stock_btree;
+         stock_btree          
+------------------------------
+ amstrategies = 5
+ amsupport = 6
+ amoptsprocnum = 5
+ amcanorder = t
+ amcanorderbyop = f
+ amcanhash = f
+ amconsistentequality = t
+ amconsistentordering = t
+ amcanbackward = t
+ amcanunique = t
+ amcanmulticol = t
+ amoptionalkey = t
+ amsearcharray = t
+ amsearchnulls = t
+ amstorage = f
+ amclusterable = t
+ ampredlocks = t
+ amcanparallel = t
+ amcanbuildparallel = t
+ amcaninclude = t
+ amusemaintenanceworkmem = f
+ amsummarizing = f
+ amparallelvacuumoptions = 3
+ amkeytype = 0
+ ambuild = set
+ ambuildempty = set
+ aminsert = set
+ aminsertcleanup = NULL
+ ambulkdelete = set
+ amvacuumcleanup = set
+ amcanreturn = set
+ amcostestimate = set
+ amgettreeheight = set
+ amoptions = set
+ amproperty = set
+ ambuildphasename = set
+ amvalidate = set
+ amadjustmembers = set
+ ambeginscan = set
+ amrescan = set
+ amgettuple = set
+ amgetbitmap = set
+ amendscan = set
+ ammarkpos = set
+ amrestrpos = set
+ amestimateparallelscan = set
+ aminitparallelscan = set
+ amparallelrescan = set
+ amtranslatestrategy = set
+ amtranslatecmptype = set
+(50 rows)
+
+DROP TABLE btree_tbl;
+-- Index scans through the gist-cloned routine.
+SET enable_seqscan = off;
+SELECT count(*) FROM amimpl_gist_tbl WHERE r && int4range(20, 40);
+ count 
+-------
+     6
+(1 row)
+
+SELECT r FROM amimpl_gist_tbl WHERE r @> 42 ORDER BY r;
+    r    
+---------
+ [36,46)
+ [41,51)
+(2 rows)
+
+-- Insert
+INSERT INTO amimpl_gist_tbl VALUES (int4range(200, 210)), (int4range(220, 230));
+SELECT count(*) FROM amimpl_gist_tbl WHERE r && int4range(195, 225);
+ count 
+-------
+     2
+(1 row)
+
+-- Update (drives aminsert for the new index entry of the moved row)
+UPDATE amimpl_gist_tbl SET r = int4range(500, 510) WHERE r = int4range(46, 56);
+SELECT r FROM amimpl_gist_tbl WHERE r @> 505;
+     r     
+-----------
+ [500,510)
+(1 row)
+
+RESET enable_seqscan;
+DROP TABLE amimpl_gist_tbl;
+DROP IMPLEMENTATION gist_as_btree;
+DROP FUNCTION test_print_index_am_handler(regclass);
+--
+-- Round-trip: pg_get_indexdef emits IMPLEMENTATION; REINDEX preserves it.
+--
+CREATE IMPLEMENTATION btree_def_test FOR ACCESS METHOD btree
+    HANDLER bthandler_dummy;
+CREATE TABLE amimpl_def_tbl (i int);
+INSERT INTO amimpl_def_tbl SELECT g FROM generate_series(1, 50) g;
+CREATE INDEX amimpl_def_idx ON amimpl_def_tbl (i)
+    IMPLEMENTATION btree_def_test;
+SELECT pg_get_indexdef('amimpl_def_idx'::regclass);
+                                          pg_get_indexdef                                           
+----------------------------------------------------------------------------------------------------
+ CREATE INDEX amimpl_def_idx ON public.amimpl_def_tbl USING btree (i) IMPLEMENTATION btree_def_test
+(1 row)
+
+REINDEX INDEX amimpl_def_idx;
+SELECT test_run_amrundummy('amimpl_def_idx');
+NOTICE:  btrundummy: index "amimpl_def_idx"
+ test_run_amrundummy 
+---------------------
+ t
+(1 row)
+
+DROP TABLE amimpl_def_tbl;
+DROP IMPLEMENTATION btree_def_test;
+-- CREATE INDEX rejects an impl registered for a different AM.
+CREATE IMPLEMENTATION btree_only_test FOR ACCESS METHOD btree
+    HANDLER bthandler_dummy;
+CREATE TABLE amimpl_cross_tbl (p point);
+CREATE INDEX ON amimpl_cross_tbl USING gist (p) IMPLEMENTATION btree_only_test;
+ERROR:  implementation "btree_only_test" is not for access method "gist"
+DROP TABLE amimpl_cross_tbl;
+DROP IMPLEMENTATION btree_only_test;
+-- UNIQUE enforcement runs through the impl's aminsert.
+CREATE IMPLEMENTATION btree_uniq_test FOR ACCESS METHOD btree
+    HANDLER bthandler_dummy;
+CREATE TABLE amimpl_uniq_tbl (i int);
+CREATE UNIQUE INDEX amimpl_uniq_idx ON amimpl_uniq_tbl (i)
+    IMPLEMENTATION btree_uniq_test;
+INSERT INTO amimpl_uniq_tbl VALUES (1), (2);
+INSERT INTO amimpl_uniq_tbl VALUES (1);
+ERROR:  duplicate key value violates unique constraint "amimpl_uniq_idx"
+DETAIL:  Key (i)=(1) already exists.
+DROP TABLE amimpl_uniq_tbl;
+DROP IMPLEMENTATION btree_uniq_test;
+-- Partitioned index: only the parent currently carries indimpl;
+-- generateClonedIndexStmt does not propagate idxImpl to children.
+CREATE IMPLEMENTATION btree_part_test FOR ACCESS METHOD btree
+    HANDLER bthandler_dummy;
+CREATE TABLE amimpl_part_tbl (i int) PARTITION BY RANGE (i);
+CREATE TABLE amimpl_part_p1 PARTITION OF amimpl_part_tbl
+    FOR VALUES FROM (0) TO (100);
+CREATE TABLE amimpl_part_p2 PARTITION OF amimpl_part_tbl
+    FOR VALUES FROM (100) TO (200);
+CREATE INDEX amimpl_part_idx ON amimpl_part_tbl (i)
+    IMPLEMENTATION btree_part_test;
+SELECT c.relname,
+       (SELECT implname FROM pg_amimpl WHERE oid = i.indimpl) AS impl
+FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+WHERE c.relname LIKE 'amimpl_part%'
+ORDER BY c.relname;
+       relname        |      impl       
+----------------------+-----------------
+ amimpl_part_idx      | btree_part_test
+ amimpl_part_p1_i_idx | 
+ amimpl_part_p2_i_idx | 
+(3 rows)
+
+DROP TABLE amimpl_part_tbl;
+DROP IMPLEMENTATION btree_part_test;
+-- Impl depends on handler proc: DROP FUNCTION fails, CASCADE removes impl.
+CREATE FUNCTION bthandler_dummy2(internal)
+    RETURNS index_am_handler
+    AS :'regresslib', 'bthandler_dummy'
+    LANGUAGE C;
+CREATE IMPLEMENTATION btree_handler_dep FOR ACCESS METHOD btree
+    HANDLER bthandler_dummy2;
+DROP FUNCTION bthandler_dummy2(internal);
+ERROR:  cannot drop function bthandler_dummy2(internal) because other objects depend on it
+DETAIL:  access method implementation btree_handler_dep for access method btree depends on function bthandler_dummy2(internal)
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+DROP FUNCTION bthandler_dummy2(internal) CASCADE;
+NOTICE:  drop cascades to access method implementation btree_handler_dep for access method btree
+SELECT count(*) FROM pg_amimpl WHERE implname = 'btree_handler_dep';
+ count 
+-------
+     0
+(1 row)
+
+DROP FUNCTION test_run_amrundummy(regclass);
+DROP FUNCTION bthandler_dummy(internal);

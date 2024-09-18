@@ -167,6 +167,7 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 		case T_CommentStmt:
 		case T_CompositeTypeStmt:
 		case T_CreateAmStmt:
+		case T_CreateAmImplStmt:
 		case T_CreateCastStmt:
 		case T_CreateConversionStmt:
 		case T_CreateDomainStmt:
@@ -1854,6 +1855,10 @@ ProcessUtilitySlow(ParseState *pstate,
 				address = CreateAccessMethod((CreateAmStmt *) parsetree);
 				break;
 
+			case T_CreateAmImplStmt:
+				address = CreateAccessMethodImplementation((CreateAmImplStmt *) parsetree);
+				break;
+
 			case T_CreatePublicationStmt:
 				address = CreatePublication(pstate, (CreatePublicationStmt *) parsetree);
 				break;
@@ -2364,6 +2369,9 @@ AlterObjectTypeCommandTag(ObjectType objtype)
 		case OBJECT_STATISTIC_EXT:
 			tag = CMDTAG_ALTER_STATISTICS;
 			break;
+		case OBJECT_ACCESS_METHOD_IMPLEMENTATION:
+			tag = CMDTAG_ALTER_ACCESS_METHOD_IMPLEMENTATION;
+			break;
 		default:
 			tag = CMDTAG_UNKNOWN;
 			break;
@@ -2668,6 +2676,9 @@ CreateCommandTag(Node *parsetree)
 					break;
 				case OBJECT_ACCESS_METHOD:
 					tag = CMDTAG_DROP_ACCESS_METHOD;
+					break;
+				case OBJECT_ACCESS_METHOD_IMPLEMENTATION:
+					tag = CMDTAG_DROP_ACCESS_METHOD_IMPLEMENTATION;
 					break;
 				case OBJECT_PUBLICATION:
 					tag = CMDTAG_DROP_PUBLICATION;
@@ -3083,6 +3094,10 @@ CreateCommandTag(Node *parsetree)
 
 		case T_CreateAmStmt:
 			tag = CMDTAG_CREATE_ACCESS_METHOD;
+			break;
+
+		case T_CreateAmImplStmt:
+			tag = CMDTAG_CREATE_ACCESS_METHOD_IMPLEMENTATION;
 			break;
 
 		case T_CreatePublicationStmt:
@@ -3711,6 +3726,10 @@ GetCommandLogLevel(Node *parsetree)
 			break;
 
 		case T_CreateAmStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
+		case T_CreateAmImplStmt:
 			lev = LOGSTMT_DDL;
 			break;
 

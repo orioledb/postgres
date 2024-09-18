@@ -33,6 +33,9 @@ CATALOG(pg_index,2610,IndexRelationId) BKI_SCHEMA_MACRO
 	Oid			indexrelid BKI_LOOKUP(pg_class);	/* OID of the index */
 	Oid			indrelid BKI_LOOKUP(pg_class);	/* OID of the relation it
 												 * indexes */
+	Oid			indimpl BKI_DEFAULT(0) BKI_LOOKUP_OPT(pg_amimpl); /* AM
+												 * implementation, or 0 to use
+												 * pg_am.amhandler */
 	int16		indnatts;		/* total number of columns in index */
 	int16		indnkeyatts;	/* number of key columns in index */
 	bool		indisunique;	/* is this a unique index? */

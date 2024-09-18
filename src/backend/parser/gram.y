@@ -315,7 +315,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		DeallocateStmt PrepareStmt ExecuteStmt
 		DropOwnedStmt ReassignOwnedStmt
 		AlterTSConfigurationStmt AlterTSDictionaryStmt
-		CreateMatViewStmt RefreshMatViewStmt CreateAmStmt
+		CreateMatViewStmt RefreshMatViewStmt CreateAmStmt CreateAmImplStmt
 		CreatePublicationStmt AlterPublicationStmt
 		CreateSubscriptionStmt AlterSubscriptionStmt DropSubscriptionStmt
 
@@ -392,6 +392,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				access_method_clause attr_name
 				table_access_method_clause name cursor_name file_name
 				cluster_index_specification
+				OptIndexImplementation
 
 %type <list>	func_name handler_name qual_Op qual_all_Op subquery_Op
 				opt_inline_handler opt_validator validator_clause
@@ -775,7 +776,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	HANDLER HAVING HEADER_P HOLD HOUR_P
 
-	IDENTITY_P IF_P IGNORE_P ILIKE IMMEDIATE IMMUTABLE IMPLICIT_P IMPORT_P IN_P INCLUDE
+	IDENTITY_P IF_P IGNORE_P ILIKE IMMEDIATE IMMUTABLE IMPLEMENTATION IMPLICIT_P IMPORT_P IN_P INCLUDE
 	INCLUDING INCREMENT INDENT INDEX INDEXES INHERIT INHERITS INITIALLY INLINE_P
 	INNER_P INOUT INPUT_P INSENSITIVE INSERT INSTEAD INT_P INTEGER
 	INTERSECT INTERVAL INTO INVOKER IS ISNULL ISOLATION
@@ -797,7 +798,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	NOT NOTHING NOTIFY NOTNULL NOWAIT NULL_P NULLIF
 	NULLS_P NUMERIC
 
-	OBJECT_P OBJECTS_P OF OFF OFFSET OIDS OLD OMIT ON ONLY OPERATOR OPTION OPTIONS OR
+	OBJECT_P OBJECTS_P OF OFF OFFSET OIDS OLD OMIT ON ONLY OPCLASSES OPERATOR OPTION OPTIONS OR
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
@@ -1079,6 +1080,7 @@ stmt:
 			| ConstraintsSetStmt
 			| CopyStmt
 			| CreateAmStmt
+			| CreateAmImplStmt
 			| CreateAsStmt
 			| CreateAssertionStmt
 			| CreateCastStmt
@@ -6182,6 +6184,39 @@ am_type:
 
 /*****************************************************************************
  *
+ *		QUERY:
+ *				CREATE IMPLEMENTATION implname FOR ACCESS METHOD am_name
+ *					HANDLER handler_name
+ *					[ USING opc_am_name OPCLASSES ]
+ *
+ *****************************************************************************/
+
+CreateAmImplStmt:
+			CREATE IMPLEMENTATION name FOR ACCESS METHOD name HANDLER handler_name
+				{
+					CreateAmImplStmt *n = makeNode(CreateAmImplStmt);
+
+					n->implname = $3;
+					n->amname = $7;
+					n->opcam_name = NULL;
+					n->handler_name = $9;
+					$$ = (Node *) n;
+				}
+			| CREATE IMPLEMENTATION name FOR ACCESS METHOD name
+				HANDLER handler_name USING name OPCLASSES
+				{
+					CreateAmImplStmt *n = makeNode(CreateAmImplStmt);
+
+					n->implname = $3;
+					n->amname = $7;
+					n->opcam_name = $11;
+					n->handler_name = $9;
+					$$ = (Node *) n;
+				}
+		;
+
+/*****************************************************************************
+ *
  *		QUERIES :
  *				CREATE TRIGGER ...
  *
@@ -7280,6 +7315,7 @@ drop_type_name:
 			| EVENT TRIGGER							{ $$ = OBJECT_EVENT_TRIGGER; }
 			| EXTENSION								{ $$ = OBJECT_EXTENSION; }
 			| FOREIGN DATA_P WRAPPER				{ $$ = OBJECT_FDW; }
+			| IMPLEMENTATION						{ $$ = OBJECT_ACCESS_METHOD_IMPLEMENTATION; }
 			| opt_procedural LANGUAGE				{ $$ = OBJECT_LANGUAGE; }
 			| PUBLICATION							{ $$ = OBJECT_PUBLICATION; }
 			| SCHEMA								{ $$ = OBJECT_SCHEMA; }
@@ -8432,7 +8468,7 @@ defacl_privilege_target:
 
 IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 			ON relation_expr access_method_clause '(' index_params ')'
-			opt_include opt_unique_null_treatment opt_reloptions OptTableSpace where_clause
+			opt_include OptIndexImplementation opt_unique_null_treatment opt_reloptions OptTableSpace where_clause
 				{
 					IndexStmt *n = makeNode(IndexStmt);
 
@@ -8443,10 +8479,11 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 					n->accessMethod = $8;
 					n->indexParams = $10;
 					n->indexIncludingParams = $12;
-					n->nulls_not_distinct = !$13;
-					n->options = $14;
-					n->tableSpace = $15;
-					n->whereClause = $16;
+					n->idxImpl = $13;
+					n->nulls_not_distinct = !$14;
+					n->options = $15;
+					n->tableSpace = $16;
+					n->whereClause = $17;
 					n->excludeOpNames = NIL;
 					n->idxcomment = NULL;
 					n->indexOid = InvalidOid;
@@ -8464,7 +8501,7 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 				}
 			| CREATE opt_unique INDEX opt_concurrently IF_P NOT EXISTS name
 			ON relation_expr access_method_clause '(' index_params ')'
-			opt_include opt_unique_null_treatment opt_reloptions OptTableSpace where_clause
+			opt_include OptIndexImplementation opt_unique_null_treatment opt_reloptions OptTableSpace where_clause
 				{
 					IndexStmt *n = makeNode(IndexStmt);
 
@@ -8475,10 +8512,11 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 					n->accessMethod = $11;
 					n->indexParams = $13;
 					n->indexIncludingParams = $15;
-					n->nulls_not_distinct = !$16;
-					n->options = $17;
-					n->tableSpace = $18;
-					n->whereClause = $19;
+					n->idxImpl = $16;
+					n->nulls_not_distinct = !$17;
+					n->options = $18;
+					n->tableSpace = $19;
+					n->whereClause = $20;
 					n->excludeOpNames = NIL;
 					n->idxcomment = NULL;
 					n->indexOid = InvalidOid;
@@ -8494,6 +8532,11 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 					n->reset_default_tblspc = false;
 					$$ = (Node *) n;
 				}
+		;
+
+OptIndexImplementation:
+			IMPLEMENTATION name						{ $$ = $2; }
+			| /*EMPTY*/								{ $$ = NULL; }
 		;
 
 opt_unique:
@@ -10053,6 +10096,16 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_FDW;
 					n->object = (Node *) makeString($5);
 					n->newname = $8;
+					n->missing_ok = false;
+					$$ = (Node *) n;
+				}
+			| ALTER IMPLEMENTATION name RENAME TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+
+					n->renameType = OBJECT_ACCESS_METHOD_IMPLEMENTATION;
+					n->object = (Node *) makeString($3);
+					n->newname = $6;
 					n->missing_ok = false;
 					$$ = (Node *) n;
 				}
@@ -18943,6 +18996,7 @@ unreserved_keyword:
 			| IGNORE_P
 			| IMMEDIATE
 			| IMMUTABLE
+			| IMPLEMENTATION
 			| IMPLICIT_P
 			| IMPORT_P
 			| INCLUDE
@@ -19012,6 +19066,7 @@ unreserved_keyword:
 			| OIDS
 			| OLD
 			| OMIT
+			| OPCLASSES
 			| OPERATOR
 			| OPTION
 			| OPTIONS
@@ -19548,6 +19603,7 @@ bare_label_keyword:
 			| ILIKE
 			| IMMEDIATE
 			| IMMUTABLE
+			| IMPLEMENTATION
 			| IMPLICIT_P
 			| IMPORT_P
 			| IN_P
@@ -19653,6 +19709,7 @@ bare_label_keyword:
 			| OLD
 			| OMIT
 			| ONLY
+			| OPCLASSES
 			| OPERATOR
 			| OPTION
 			| OPTIONS

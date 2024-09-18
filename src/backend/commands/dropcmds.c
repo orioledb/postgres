@@ -252,6 +252,10 @@ does_not_exist_skipping(ObjectType objtype, Node *object)
 			msg = gettext_noop("access method \"%s\" does not exist, skipping");
 			name = strVal(object);
 			break;
+		case OBJECT_ACCESS_METHOD_IMPLEMENTATION:
+			msg = gettext_noop("access method implementation \"%s\" does not exist, skipping");
+			name = strVal(object);
+			break;
 		case OBJECT_TYPE:
 		case OBJECT_DOMAIN:
 			{

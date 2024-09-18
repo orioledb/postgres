@@ -1138,6 +1138,11 @@ Keywords_for_list_of_owner_roles, "PUBLIC"
 "  WHERE amname LIKE '%s' AND "\
 "   amtype=" CppAsString2(AMTYPE_TABLE)
 
+#define Query_for_list_of_am_implementations \
+" SELECT implname "\
+"   FROM pg_catalog.pg_amimpl "\
+"  WHERE implname LIKE '%s'"
+
 #define Query_for_list_of_extensions \
 " SELECT extname "\
 "   FROM pg_catalog.pg_extension "\
@@ -3510,6 +3515,14 @@ match_previous_words(int pattern_id,
 	else if (Matches("CREATE", "ACCESS", "METHOD", MatchAny, "TYPE", MatchAny))
 		COMPLETE_WITH("HANDLER");
 
+	/* CREATE IMPLEMENTATION */
+	else if (Matches("CREATE", "IMPLEMENTATION", MatchAny))
+		COMPLETE_WITH("FOR ACCESS METHOD");
+	else if (Matches("CREATE", "IMPLEMENTATION", MatchAny, "FOR", "ACCESS", "METHOD"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_index_access_methods);
+	else if (Matches("CREATE", "IMPLEMENTATION", MatchAny, "FOR", "ACCESS", "METHOD", MatchAny))
+		COMPLETE_WITH("HANDLER");
+
 	/* CREATE COLLATION */
 	else if (Matches("CREATE", "COLLATION", MatchAny))
 		COMPLETE_WITH("(", "FROM");
@@ -4449,6 +4462,13 @@ match_previous_words(int pattern_id,
 		COMPLETE_WITH("METHOD");
 	else if (Matches("DROP", "ACCESS", "METHOD"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_access_methods);
+
+	/* DROP IMPLEMENTATION / ALTER IMPLEMENTATION */
+	else if (Matches("DROP", "IMPLEMENTATION") ||
+			 Matches("ALTER", "IMPLEMENTATION"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_am_implementations);
+	else if (Matches("ALTER", "IMPLEMENTATION", MatchAny))
+		COMPLETE_WITH("RENAME TO");
 
 	/* DROP EVENT TRIGGER */
 	else if (Matches("DROP", "EVENT"))

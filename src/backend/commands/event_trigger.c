@@ -2288,6 +2288,7 @@ stringify_grant_objtype(ObjectType objtype)
 			return "TYPE";
 			/* these currently aren't used */
 		case OBJECT_ACCESS_METHOD:
+		case OBJECT_ACCESS_METHOD_IMPLEMENTATION:
 		case OBJECT_AGGREGATE:
 		case OBJECT_AMOP:
 		case OBJECT_AMPROC:
@@ -2372,6 +2373,7 @@ stringify_adefprivs_objtype(ObjectType objtype)
 			return "TYPES";
 			/* these currently aren't used */
 		case OBJECT_ACCESS_METHOD:
+		case OBJECT_ACCESS_METHOD_IMPLEMENTATION:
 		case OBJECT_AGGREGATE:
 		case OBJECT_AMOP:
 		case OBJECT_AMPROC:

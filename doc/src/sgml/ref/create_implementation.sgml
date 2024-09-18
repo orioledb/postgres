@@ -1,0 +1,137 @@
+<!--
+doc/src/sgml/ref/create_implementation.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-create-implementation">
+ <indexterm zone="sql-create-implementation">
+  <primary>CREATE IMPLEMENTATION</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>CREATE IMPLEMENTATION</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>CREATE IMPLEMENTATION</refname>
+  <refpurpose>register an alternative handler for an existing index access method</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+CREATE IMPLEMENTATION <replaceable class="parameter">name</replaceable>
+    FOR ACCESS METHOD <replaceable class="parameter">am_name</replaceable>
+    HANDLER <replaceable class="parameter">handler_function</replaceable>
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>CREATE IMPLEMENTATION</command> registers a
+   handler for an existing index access method.  It is intended for
+   extensions that want to supply their own handler extending or replacing
+   existing one from existing access method without changing the access
+   method's name and functionality for all other callers.
+  </para>
+
+  <para>
+   An index created without an <literal>IMPLEMENTATION</literal> clause
+   continues to use the handler from <link
+   linkend="catalog-pg-am"><structname>pg_am</structname></link>.  A
+   newly created index that names an implementation uses the handler
+   recorded in <link
+   linkend="catalog-pg-amimpl"><structname>pg_amimpl</structname></link>
+   instead.
+  </para>
+
+  <para>
+   Implementations apply only to <emphasis>index</emphasis> access
+   methods.  The handler function must return type
+   <type>index_am_handler</type>.
+  </para>
+
+  <para>
+   You must be a superuser to create an implementation.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><replaceable class="parameter">name</replaceable></term>
+    <listitem>
+     <para>
+      The name of the implementation to be created.  Implementation
+      names are unique across the database.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">am_name</replaceable></term>
+    <listitem>
+     <para>
+      The name of an existing index access method.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">handler_function</replaceable></term>
+    <listitem>
+     <para>
+      The name (optionally schema-qualified) of a previously registered
+      function that implements the index access method.  The function
+      must take a single argument of type <type>internal</type> and
+      return type <type>index_am_handler</type>.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   Register an alternative btree handler supplied by an extension:
+<programlisting>
+CREATE IMPLEMENTATION btree_oriole FOR ACCESS METHOD btree
+    HANDLER orioledb_btree_handler;
+</programlisting>
+  </para>
+
+  <para>
+   Use the implementation when creating an index:
+<programlisting>
+CREATE INDEX ON t USING btree (col) IMPLEMENTATION btree_oriole;
+</programlisting>
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   <command>CREATE IMPLEMENTATION</command> is a
+   <productname>PostgreSQL</productname> extension.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-alter-implementation"/></member>
+   <member><xref linkend="sql-drop-implementation"/></member>
+   <member><xref linkend="sql-createindex"/></member>
+   <member><xref linkend="sql-create-access-method"/></member>
+  </simplelist>
+ </refsect1>
+</refentry>

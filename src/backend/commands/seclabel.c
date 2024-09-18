@@ -62,6 +62,7 @@ SecLabelSupportsObjectType(ObjectType objtype)
 			return true;
 
 		case OBJECT_ACCESS_METHOD:
+		case OBJECT_ACCESS_METHOD_IMPLEMENTATION:
 		case OBJECT_AMOP:
 		case OBJECT_AMPROC:
 		case OBJECT_ATTRIBUTE:

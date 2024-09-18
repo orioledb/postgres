@@ -2732,3 +2732,8 @@ heap_tableam_handler(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_POINTER(&heapam_methods);
 }
+
+/* ------------------------------------------------------------------------
+ * Definition of the btree index access method.
+ * ------------------------------------------------------------------------
+ */

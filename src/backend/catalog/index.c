@@ -42,6 +42,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/partition.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_amimpl.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_description.h"
@@ -637,6 +638,7 @@ UpdateIndexRelation(Oid indexoid,
 	 */
 	values[Anum_pg_index_indexrelid - 1] = ObjectIdGetDatum(indexoid);
 	values[Anum_pg_index_indrelid - 1] = ObjectIdGetDatum(heapoid);
+	values[Anum_pg_index_indimpl - 1] = ObjectIdGetDatum(indexInfo->ii_AmImpl);
 	values[Anum_pg_index_indnatts - 1] = Int16GetDatum(indexInfo->ii_NumIndexAttrs);
 	values[Anum_pg_index_indnkeyatts - 1] = Int16GetDatum(indexInfo->ii_NumIndexKeyAttrs);
 	values[Anum_pg_index_indisunique - 1] = BoolGetDatum(indexInfo->ii_Unique);
@@ -1190,6 +1192,17 @@ index_create(Relation heapRelation,
 		for (i = 0; i < indexInfo->ii_NumIndexKeyAttrs; i++)
 		{
 			ObjectAddressSet(referenced, OperatorClassRelationId, opclassIds[i]);
+			add_exact_object_address(&referenced, addrs);
+		}
+
+		/*
+		 * Store dependency on the AM implementation, if any.  The pg_am
+		 * dependency is recorded automatically via pg_class.relam.
+		 */
+		if (OidIsValid(indexInfo->ii_AmImpl))
+		{
+			ObjectAddressSet(referenced, AccessMethodImplementationId,
+							 indexInfo->ii_AmImpl);
 			add_exact_object_address(&referenced, addrs);
 		}
 
@@ -2471,6 +2484,7 @@ BuildIndexInfo(Relation index)
 					   false,
 					   index->rd_indam->amsummarizing,
 					   indexStruct->indisexclusion && indexStruct->indisunique);
+	ii->ii_AmImpl = indexStruct->indimpl;
 
 	/* fill in attribute numbers */
 	for (i = 0; i < numAtts; i++)
@@ -2531,6 +2545,7 @@ BuildDummyIndexInfo(Relation index)
 					   false,
 					   index->rd_indam->amsummarizing,
 					   indexStruct->indisexclusion && indexStruct->indisunique);
+	ii->ii_AmImpl = indexStruct->indimpl;
 
 	/* fill in attribute numbers */
 	for (i = 0; i < numAtts; i++)

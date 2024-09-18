@@ -46,6 +46,7 @@
    &alterForeignTable;
    &alterFunction;
    &alterGroup;
+   &alterImplementation;
    &alterIndex;
    &alterLanguage;
    &alterLargeObject;
@@ -100,6 +101,7 @@
    &createForeignTable;
    &createFunction;
    &createGroup;
+   &createImplementation;
    &createIndex;
    &createLanguage;
    &createMaterializedView;
@@ -148,6 +150,7 @@
    &dropForeignTable;
    &dropFunction;
    &dropGroup;
+   &dropImplementation;
    &dropIndex;
    &dropLanguage;
    &dropMaterializedView;
