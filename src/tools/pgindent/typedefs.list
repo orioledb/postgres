@@ -550,6 +550,7 @@ Counters
 CoverExt
 CoverPos
 CreateAmStmt
+CreateAmImplStmt
 CreateCastStmt
 CreateConversionStmt
 CreateDBRelInfo
@@ -871,6 +872,7 @@ ForeignTruncateInfo
 ForkNumber
 FormData_pg_aggregate
 FormData_pg_am
+FormData_pg_amimpl
 FormData_pg_amop
 FormData_pg_amproc
 FormData_pg_attrdef
@@ -930,6 +932,7 @@ FormData_pg_user_mapping
 FormExtraData_pg_attribute
 Form_pg_aggregate
 Form_pg_am
+Form_pg_amimpl
 Form_pg_amop
 Form_pg_amproc
 Form_pg_attrdef

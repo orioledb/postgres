@@ -143,7 +143,6 @@ typedef struct
 	List	   *rtables;		/* list of rangetables to resolve Vars */
 } find_expr_references_context;
 
-
 static void findDependentObjects(const ObjectAddress *object,
 								 int objflags,
 								 int flags,
@@ -1501,6 +1500,7 @@ doDeletion(const ObjectAddress *object, int flags)
 		case OperatorClassRelationId:
 		case OperatorFamilyRelationId:
 		case AccessMethodRelationId:
+		case AccessMethodImplementationId:
 		case AccessMethodOperatorRelationId:
 		case AccessMethodProcedureRelationId:
 		case NamespaceRelationId:

@@ -34,6 +34,97 @@
 static Oid	lookup_am_handler_func(List *handler_name, char amtype);
 static const char *get_am_type_string(char amtype);
 
+/*
+ * CreateAccessMethodImplementation
+ *		Registers a new access method.
+ */
+ObjectAddress
+CreateAccessMethodImplementation(CreateAmImplStmt *stmt)
+{
+	Relation	rel;
+	ObjectAddress myself;
+	ObjectAddress referenced;
+	Oid 		amoid;
+	Oid			imploid;
+	Oid			implhandler;
+	bool		nulls[Natts_pg_amimpl];
+	Datum		values[Natts_pg_amimpl];
+	HeapTuple	tup;
+
+	rel = table_open(AccessMethodImplementationId, RowExclusiveLock);
+
+	/* Must be superuser */
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("permission denied to create access method \"%s\"",
+						stmt->implname),
+				 errhint("Must be superuser to create an access method.")));
+
+	/* Check if name is used */
+	imploid = GetSysCacheOid1(AMIMPLNAME, Anum_pg_amimpl_oid,
+							CStringGetDatum(stmt->implname));
+	if (OidIsValid(imploid))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_DUPLICATE_OBJECT),
+				 errmsg("access method implementation \"%s\" already exists",
+						stmt->implname)));
+	}
+
+	/* Check if access method exists */
+	amoid = GetSysCacheOid1(AMNAME, Anum_pg_am_oid,
+							CStringGetDatum(stmt->amname));
+	if (!OidIsValid(amoid))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_DUPLICATE_OBJECT),
+				 errmsg("access method \"%s\" doesn't exist",
+						stmt->amname)));
+	}
+
+	/*
+	 * Get the handler function oid, verifying the AM type while at it.
+	 */
+	implhandler = lookup_impl_handler_func(stmt->handler_name);
+
+	/*
+	 * Insert tuple into pg_am.
+	 */
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+
+	imploid = GetNewOidWithIndex(rel, AmimplOidIndexId, Anum_pg_amimpl_oid);
+	values[Anum_pg_amimpl_oid - 1] = ObjectIdGetDatum(imploid);
+	values[Anum_pg_amimpl_implname - 1] =
+		DirectFunctionCall1(namein, CStringGetDatum(stmt->implname));
+	values[Anum_pg_amimpl_amoid - 1] = ObjectIdGetDatum(amoid);
+	values[Anum_pg_amimpl_handler - 1] = ObjectIdGetDatum(implhandler);
+
+	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
+
+	CatalogTupleInsert(rel, tup);
+	heap_freetuple(tup);
+
+	myself.classId = AccessMethodImplementationId;
+	myself.objectId = amimpl_oid;
+	myself.objectSubId = 0;
+
+	/* Record dependency on handler function */
+	referenced.classId = ProcedureImplementationId;
+	referenced.objectId = implhandler;
+	referenced.objectSubId = 0;
+
+	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+
+	recordDependencyOnCurrentExtension(&myself, false);
+
+	InvokeObjectPostCreateHook(AccessMethodImplementationId, imploid, 0);
+
+	table_close(rel, RowExclusiveLock);
+
+	return myself;
+}
 
 /*
  * CreateAccessMethod
@@ -116,6 +207,56 @@ CreateAccessMethod(CreateAmStmt *stmt)
 }
 
 /*
+ * get_amimpl_oid - given an access method implementation name, look up its OID.
+ */
+Oid
+get_amimpl_oid(const char *implname, bool missing_ok)
+{
+	HeapTuple   tup;
+	Oid         oid = InvalidOid;
+
+	tup = SearchSysCache1(AMNAME, CStringGetDatum(implname));
+	if (HeapTupleIsValid(tup))
+	{
+		Form_pg_amimpl  amimplform = (Form_pg_amimpl) GETSTRUCT(tup);
+
+		oid = amimplform->loid;
+		ReleaseSysCache(tup);
+	}
+
+	if (!OidIsValid(oid) && !missing_ok)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("access method implementation \"%s\" does not exist", implname)));
+	return oid;
+}
+
+/*
+ * get_amimpl_amoid - given an access method implementation name, look up its access method OID.
+ */
+Oid
+get_amimpl_amoid(const char *implname, bool missing_ok)
+{
+	HeapTuple   tup;
+	Oid         oid = InvalidOid;
+
+	tup = SearchSysCache1(AMNAME, CStringGetDatum(implname));
+	if (HeapTupleIsValid(tup))
+	{
+		Form_pg_amimpl  amimplform = (Form_pg_amimpl) GETSTRUCT(tup);
+
+		oid = amimplform->amoid;
+		ReleaseSysCache(tup);
+	}
+
+	if (!OidIsValid(oid) && !missing_ok)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("access method for implementation \"%s\" does not exist", implname)));
+	return oid;
+}
+
+/*
  * get_am_type_oid
  *		Worker for various get_am_*_oid variants
  *
@@ -189,6 +330,26 @@ get_am_oid(const char *amname, bool missing_ok)
  * get_am_name - given an access method OID, look up its name.
  */
 char *
+get_amimpl_implname(Oid imploid)
+{
+	HeapTuple	tup;
+	char	   *result = NULL;
+
+	tup = SearchSysCache1(AMIMPLOID, ObjectIdGetDatum(imploid));
+	if (HeapTupleIsValid(tup))
+	{
+		Form_pg_amimpl	amimplform = (Form_pg_amimpl) GETSTRUCT(tup);
+
+		result = pstrdup(NameStr(amimplform->implname));
+		ReleaseSysCache(tup);
+	}
+	return result;
+}
+
+/*
+ * get_am_name - given an access method OID, look up its name.
+ */
+char *
 get_am_name(Oid amOid)
 {
 	HeapTuple	tup;
@@ -222,6 +383,29 @@ get_am_type_string(char amtype)
 			elog(ERROR, "invalid access method type '%c'", amtype);
 			return NULL;		/* keep compiler quiet */
 	}
+}
+
+/*
+ * Convert a handler function name to an Oid.  If the return type of the
+ * function doesn't match the given AM type, an error is raised.
+ *
+ * This function either return valid function Oid or throw an error.
+ */
+static Oid
+lookup_amimpl_handler_func(List *handler_name)
+{
+	Oid			handlerOid;
+	Oid			funcargtypes[1] = {INTERNALOID};
+
+	if (handler_name == NIL)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_FUNCTION),
+				 errmsg("handler function is not specified")));
+
+	/* handlers have one argument of type internal */
+	handlerOid = LookupFuncName(handler_name, 1, funcargtypes, false);
+
+	return handlerOid;
 }
 
 /*

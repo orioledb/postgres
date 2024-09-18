@@ -17,6 +17,7 @@ catalog_headers = [
   'pg_opfamily.h',
   'pg_opclass.h',
   'pg_am.h',
+  'pg_amimpl.h',
   'pg_amop.h',
   'pg_amproc.h',
   'pg_language.h',
@@ -75,6 +76,7 @@ catalog_headers = [
 bki_data = [
   'pg_aggregate.dat',
   'pg_am.dat',
+  'pg_amimpl.dat',
   'pg_amop.dat',
   'pg_amproc.dat',
   'pg_authid.dat',

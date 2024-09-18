@@ -132,6 +132,20 @@ static const ObjectPropertyType ObjectProperty[] =
 		true
 	},
 	{
+		"access method implementation",
+		AccessMethodImplementationId,
+		AmImplOidIndexId,
+		AMIMPLOID,
+		AMIMPLNAME,
+		Anum_pg_amimpl_oid,
+		Anum_pg_amimpl_implname,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		-1,
+		true
+	},
+	{
 		"access method operator",
 		AccessMethodOperatorRelationId,
 		AccessMethodOperatorOidIndexId,
@@ -751,6 +765,9 @@ static const struct object_type_map
 		"access method", OBJECT_ACCESS_METHOD
 	},
 	{
+		"access method implementation", OBJECT_ACCESS_METHOD_IMPLEMENTATION
+	},
+	{
 		"operator of access method", OBJECT_AMOP
 	},
 	{
@@ -1002,6 +1019,7 @@ get_object_address(ObjectType objtype, Node *object,
 			case OBJECT_EVENT_TRIGGER:
 			case OBJECT_PARAMETER_ACL:
 			case OBJECT_ACCESS_METHOD:
+			case OBJECT_ACCESS_METHOD_IMPLEMENTATION:
 			case OBJECT_PUBLICATION:
 			case OBJECT_SUBSCRIPTION:
 				address = get_object_address_unqualified(objtype,
@@ -1040,6 +1058,7 @@ get_object_address(ObjectType objtype, Node *object,
 				break;
 			case OBJECT_AMOP:
 			case OBJECT_AMPROC:
+			case OBJECT_AMIMPL:
 				address = get_object_address_opf_member(objtype, castNode(List, object), missing_ok);
 				break;
 			case OBJECT_LARGEOBJECT:
@@ -1257,6 +1276,11 @@ get_object_address_unqualified(ObjectType objtype,
 		case OBJECT_ACCESS_METHOD:
 			address.classId = AccessMethodRelationId;
 			address.objectId = get_am_oid(name, missing_ok);
+			address.objectSubId = 0;
+			break;
+		case OBJECT_ACCESS_METHOD_IMPLEMENTATION:
+			address.classId = AccessMethodImplementationId;
+			address.objectId = get_amimpl_oid(name, missing_ok);
 			address.objectSubId = 0;
 			break;
 		case OBJECT_DATABASE:
@@ -1585,7 +1609,7 @@ get_object_address_attrdef(ObjectType objtype, List *object,
 					 errmsg("default value for column \"%s\" of relation \"%s\" does not exist",
 							attname, NameListToString(relname))));
 
-		address.classId = AttrDefaultRelationId;
+		/address.classId = AttrDefaultRelationId;
 		address.objectId = InvalidOid;
 		address.objectSubId = InvalidAttrNumber;
 		relation_close(relation, lockmode);
@@ -2298,6 +2322,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 			objnode = (Node *) name;
 			break;
 		case OBJECT_ACCESS_METHOD:
+		case OBJECT_ACCESS_METHOD_IMPLEMENTATION:
 		case OBJECT_DATABASE:
 		case OBJECT_EVENT_TRIGGER:
 		case OBJECT_EXTENSION:
@@ -2542,6 +2567,7 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 		case OBJECT_TSPARSER:
 		case OBJECT_TSTEMPLATE:
 		case OBJECT_ACCESS_METHOD:
+		case OBJECT_ACCESS_METHOD_IMPLEMENTATION:
 		case OBJECT_PARAMETER_ACL:
 			/* We treat these object types as being owned by superusers */
 			if (!superuser_arg(roleid))
@@ -3224,7 +3250,41 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				ReleaseSysCache(tup);
 				break;
 			}
+		case AccessMethodImpementationId:
+			{
+				HeapTuple	impltup;
+				HeapTuple   amtup;
+				Oid			amoid;
 
+				impltup = SearchSysCache1(AMIMPLOID,
+									  ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+				{
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for access method implementation %u",
+							 object->objectId);
+					break;
+				}
+
+				amoid = GETSTRUCT(impltup)->amoid;
+				amtup = SearchSysCache1(AMOID,
+									  ObjectIdGetDatum(amoid));
+				if (!HeapTupleIsValid(amtup))
+				{
+					ReleaseSysCache(impltup);
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for access method %u",
+							 amoid);
+					break;
+				}
+
+				appendStringInfo(&buffer, _("access method implementation %s for access method %u"),
+								 NameStr(((Form_pg_amimpl) GETSTRUCT(impltup))->implname),
+								 NameStr(((Form_pg_am) GETSTRUCT(amtup))->amname));
+				ReleaseSysCache(impltup);
+				ReleaseSysCache(amtup);
+				break;
+			}
 		case AccessMethodOperatorRelationId:
 			{
 				Relation	amopDesc;
@@ -4561,6 +4621,10 @@ getObjectTypeDescription(const ObjectAddress *object, bool missing_ok)
 			appendStringInfoString(&buffer, "access method");
 			break;
 
+		case AccessMethodImplementationId:
+			appendStringInfoString(&buffer, "access method implementation");
+			break;
+
 		case AccessMethodOperatorRelationId:
 			appendStringInfoString(&buffer, "operator of access method");
 			break;
@@ -5190,6 +5254,24 @@ getObjectIdentityParts(const ObjectAddress *object,
 				appendStringInfoString(&buffer, quote_identifier(amname));
 				if (objname)
 					*objname = list_make1(amname);
+			}
+			break;
+
+		case AccessMethodImplementationId:
+			{
+				char	   *implname;
+
+				implname = get_amimpl_implname(object->objectId);
+				if (!implname)
+				{
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for access method %u",
+							 object->objectId);
+					break;
+				}
+				appendStringInfoString(&buffer, quote_identifier(implname));
+				if (objname)
+					*objname = list_make1(implname);
 			}
 			break;
 

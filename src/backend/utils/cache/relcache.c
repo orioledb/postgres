@@ -1482,6 +1482,8 @@ RelationInitIndexAccessInfo(Relation relation)
 	relation->rd_amhandler = aform->amhandler;
 	ReleaseSysCache(tuple);
 
+// Add search of AM implementations
+
 	indnatts = RelationGetNumberOfAttributes(relation);
 	if (indnatts != IndexRelationGetNumberOfAttributes(relation))
 		elog(ERROR, "relnatts disagrees with indnatts for index %u",

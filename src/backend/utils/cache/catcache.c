@@ -1248,7 +1248,9 @@ InitCatCachePhase2(CatCache *cache, bool touch_index)
 
 	if (touch_index &&
 		cache->id != AMOID &&
-		cache->id != AMNAME)
+		cache->id != AMNAME &&
+		cache->id != AMIMPLOID &&
+		cache->id != AMIMPLNAME)
 	{
 		Relation	idesc;
 
@@ -1311,6 +1313,8 @@ IndexScanOK(CatCache *cache)
 
 		case AMOID:
 		case AMNAME:
+		case AMIMPLOID:
+		case AMIMPLNAME:
 
 			/*
 			 * Always do heap scans in pg_am, because it's so small there's

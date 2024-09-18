@@ -313,7 +313,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		DeallocateStmt PrepareStmt ExecuteStmt
 		DropOwnedStmt ReassignOwnedStmt
 		AlterTSConfigurationStmt AlterTSDictionaryStmt
-		CreateMatViewStmt RefreshMatViewStmt CreateAmStmt
+		CreateMatViewStmt RefreshMatViewStmt CreateAmStmt CreateAmImplStmt
 		CreatePublicationStmt AlterPublicationStmt
 		CreateSubscriptionStmt AlterSubscriptionStmt DropSubscriptionStmt
 
@@ -739,7 +739,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	HANDLER HAVING HEADER_P HOLD HOUR_P
 
-	IDENTITY_P IF_P IGNORE_P ILIKE IMMEDIATE IMMUTABLE IMPLICIT_P IMPORT_P IN_P INCLUDE
+	IDENTITY_P IF_P IGNORE_P ILIKE IMMEDIATE IMMUTABLE IMPLEMENTATION IMPLICIT_P IMPORT_P IN_P INCLUDE
 	INCLUDING INCREMENT INDENT INDEX INDEXES INHERIT INHERITS INITIALLY INLINE_P
 	INNER_P INOUT INPUT_P INSENSITIVE INSERT INSTEAD INT_P INTEGER
 	INTERSECT INTERVAL INTO INVOKER IS ISNULL ISOLATION
@@ -1040,6 +1040,7 @@ stmt:
 			| ConstraintsSetStmt
 			| CopyStmt
 			| CreateAmStmt
+			| CreateAmImplStmt
 			| CreateAsStmt
 			| CreateAssertionStmt
 			| CreateCastStmt
@@ -6119,6 +6120,25 @@ CreateAmStmt: CREATE ACCESS METHOD name TYPE_P am_type HANDLER handler_name
 am_type:
 			INDEX			{ $$ = AMTYPE_INDEX; }
 		|	TABLE			{ $$ = AMTYPE_TABLE; }
+		;
+
+/*****************************************************************************
+ *
+ *		QUERY:
+ *				CREATE IMPLEMENTATION implname FOR am_name
+ *					HANDLER handler_name
+ *
+ *****************************************************************************/
+
+CreateAmImplStmt: CREATE IMPLEMENTATION name FOR ACCESS METHOD name HANDLER handler_name
+				{
+					CreateAmImplStmt *n = makeNode(CreateAmImplStmt);
+
+					n->implname = $3;
+					n->amname = $7;
+					n->handler_name = $9;
+					$$ = (Node *) n;
+				}
 		;
 
 /*****************************************************************************
@@ -18013,6 +18033,7 @@ unreserved_keyword:
 			| IGNORE_P
 			| IMMEDIATE
 			| IMMUTABLE
+			| IMPLEMENTATION
 			| IMPLICIT_P
 			| IMPORT_P
 			| INCLUDE
@@ -18606,6 +18627,7 @@ bare_label_keyword:
 			| ILIKE
 			| IMMEDIATE
 			| IMMUTABLE
+			| IMPLEMENTATION
 			| IMPLICIT_P
 			| IMPORT_P
 			| IN_P

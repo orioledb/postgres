@@ -30,6 +30,7 @@ CATALOG_HEADERS := \
 	pg_opfamily.h \
 	pg_opclass.h \
 	pg_am.h \
+	pg_amimpl.h \
 	pg_amop.h \
 	pg_amproc.h \
 	pg_language.h \
@@ -91,6 +92,7 @@ POSTGRES_BKI_SRCS := $(addprefix $(top_srcdir)/src/include/catalog/, $(CATALOG_H
 POSTGRES_BKI_DATA = \
 	pg_aggregate.dat \
 	pg_am.dat \
+	pg_amimpl.dat \
 	pg_amop.dat \
 	pg_amproc.dat \
 	pg_authid.dat \

@@ -3117,6 +3117,18 @@ typedef struct AlterPolicyStmt
 } AlterPolicyStmt;
 
 /*----------------------
+ *		Create ACCESS METHOD IMPLEMENTATION Statement
+ *----------------------
+ */
+typedef struct CreateAmImplStmt
+{
+	NodeTag		type;
+	char	   *amname;			/* access method name */
+	char	   *implname;		/* table AM implementation name */
+	List	   *handler_name;	/* handler function name */
+} CreateAmImplStmt;
+
+/*----------------------
  *		Create ACCESS METHOD Statement
  *----------------------
  */
