@@ -1684,6 +1684,7 @@ OprCacheKey
 OprInfo
 OprProofCacheEntry
 OprProofCacheKey
+OrArgIndexMatch
 OuterJoinClauseInfo
 OutputPluginCallbacks
 OutputPluginOptions
