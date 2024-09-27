@@ -91,6 +91,7 @@ typedef struct RunningTransactionsData
 	TransactionId nextXid;		/* xid from ShmemVariableCache->nextXid */
 	TransactionId oldestRunningXid; /* *not* oldestXmin */
 	TransactionId latestCompletedXid;	/* so we can set xmax */
+	CommitSeqNo csn;	/* current csn */
 
 	TransactionId *xids;		/* array of (sub)xids still running */
 } RunningTransactionsData;
