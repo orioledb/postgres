@@ -93,6 +93,7 @@ typedef struct RunningTransactionsData
 	TransactionId oldestDatabaseRunningXid; /* same as above, but within the
 											 * current database */
 	TransactionId latestCompletedXid;	/* so we can set xmax */
+	CommitSeqNo csn;	/* current csn */
 
 	TransactionId *xids;		/* array of (sub)xids still running */
 } RunningTransactionsData;

@@ -126,7 +126,8 @@ typedef struct
 	pairingheap_node ph_node;
 } RetainUndoLocationPHNode;
 
-typedef struct CSNSnapshotData {
+typedef struct CSNSnapshotData
+{
 	uint64			xmin;
 	CommitSeqNo		snapshotcsn;
 	XLogRecPtr		xlogptr;

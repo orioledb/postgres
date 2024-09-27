@@ -93,6 +93,8 @@ struct SnapBuild
 	 */
 	TransactionId next_phase_at;
 
+	CSNSnapshotData csnSnapshotData;
+
 	/*
 	 * Array of transactions which could have catalog changes that committed
 	 * between xmin and xmax.
