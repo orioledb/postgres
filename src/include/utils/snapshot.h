@@ -129,6 +129,12 @@ typedef struct
 	pairingheap_node ph_node;
 } RetainUndoLocationPHNode;
 
+typedef struct CSNSnapshotData {
+	uint64			xmin;
+	CommitSeqNo		snapshotcsn;
+	XLogRecPtr		xlogptr;
+} CSNSnapshotData;
+
 /*
  * Struct representing all kind of possible snapshots.
  *
@@ -224,7 +230,7 @@ typedef struct SnapshotData
 
 	RetainUndoLocationPHNode undoRegularLocationPhNode;
 	RetainUndoLocationPHNode undoSystemLocationPhNode;
-	CommitSeqNo	snapshotcsn;
+	CSNSnapshotData	csnSnapshotData;
 } SnapshotData;
 
 typedef void (*snapshot_hook_type) (Snapshot snapshot);
