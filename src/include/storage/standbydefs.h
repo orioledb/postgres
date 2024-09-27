@@ -52,6 +52,7 @@ typedef struct xl_running_xacts
 	TransactionId nextXid;		/* xid from TransamVariables->nextXid */
 	TransactionId oldestRunningXid; /* *not* oldestXmin */
 	TransactionId latestCompletedXid;	/* so we can set xmax */
+	CommitSeqNo csn;	/* current csn */
 
 	TransactionId xids[FLEXIBLE_ARRAY_MEMBER];
 } xl_running_xacts;
