@@ -2859,6 +2859,7 @@ GetRunningTransactionData(void)
 	CurrentRunningXacts->oldestRunningXid = oldestRunningXid;
 	CurrentRunningXacts->oldestDatabaseRunningXid = oldestDatabaseRunningXid;
 	CurrentRunningXacts->latestCompletedXid = latestCompletedXid;
+	CurrentRunningXacts->csn = pg_atomic_read_u64(&TransamVariables->nextCommitSeqNo);
 
 	Assert(TransactionIdIsValid(CurrentRunningXacts->nextXid));
 	Assert(TransactionIdIsValid(CurrentRunningXacts->oldestRunningXid));
