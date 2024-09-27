@@ -260,7 +260,7 @@ typedef struct SerializedSnapshotData
 	bool		suboverflowed;
 	bool		takenDuringRecovery;
 	CommandId	curcid;
-	CommitSeqNo	snapshotcsn;
+	CSNSnapshotData	csnSnapshotData;
 	uint64		undoRegularLocation;
 	uint64		undoRegularXmin;
 	uint64		undoSystemLocation;
@@ -1779,7 +1779,9 @@ SerializeSnapshot(Snapshot snapshot, char *start_address)
 	serialized_snapshot.suboverflowed = snapshot->suboverflowed;
 	serialized_snapshot.takenDuringRecovery = snapshot->takenDuringRecovery;
 	serialized_snapshot.curcid = snapshot->curcid;
-	serialized_snapshot.snapshotcsn = snapshot->snapshotcsn;
+	serialized_snapshot.csnSnapshotData.xmin = snapshot->csnSnapshotData.xmin;
+	serialized_snapshot.csnSnapshotData.snapshotcsn = snapshot->csnSnapshotData.snapshotcsn;
+	serialized_snapshot.csnSnapshotData.xlogptr = snapshot->csnSnapshotData.xlogptr;
 	serialized_snapshot.undoRegularXmin = snapshot->undoRegularLocationPhNode.xmin;
 	serialized_snapshot.undoRegularLocation = snapshot->undoRegularLocationPhNode.undoLocation;
 	serialized_snapshot.undoSystemXmin = snapshot->undoSystemLocationPhNode.xmin;
@@ -1857,7 +1859,9 @@ RestoreSnapshot(char *start_address)
 	snapshot->takenDuringRecovery = serialized_snapshot.takenDuringRecovery;
 	snapshot->curcid = serialized_snapshot.curcid;
 	snapshot->snapXactCompletionCount = 0;
-	snapshot->snapshotcsn = serialized_snapshot.snapshotcsn;
+	snapshot->csnSnapshotData.xmin = serialized_snapshot.csnSnapshotData.xmin;
+	snapshot->csnSnapshotData.snapshotcsn = serialized_snapshot.csnSnapshotData.snapshotcsn;
+	snapshot->csnSnapshotData.xlogptr = serialized_snapshot.csnSnapshotData.xlogptr;
 	snapshot->undoRegularLocationPhNode.xmin = serialized_snapshot.undoRegularXmin;
 	snapshot->undoRegularLocationPhNode.undoLocation = serialized_snapshot.undoRegularLocation;
 	snapshot->undoSystemLocationPhNode.xmin = serialized_snapshot.undoSystemXmin;
