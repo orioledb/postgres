@@ -91,5 +91,7 @@ extern void SnapBuildProcessNewCid(SnapBuild *builder, TransactionId xid,
 extern void SnapBuildProcessRunningXacts(SnapBuild *builder, XLogRecPtr lsn,
 										 struct xl_running_xacts *running);
 extern void SnapBuildSerializationPoint(SnapBuild *builder, XLogRecPtr lsn);
+extern void SnapBuildUpdateCSNSnaphot(SnapBuild *builder,
+									  CSNSnapshotData *csnSnapshotData);
 
 #endif							/* SNAPBUILD_H */
