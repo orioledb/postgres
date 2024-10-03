@@ -436,7 +436,7 @@ static void MaybeStartSlotSyncWorker(void);
  * even during recovery.
  */
 #define PgArchStartupAllowed()	\
-	(((XLogArchivingActive() && pmState == PM_RUN) ||			\
+	(((XLogArchivingActive() && (pmState == PM_RUN || pmState == PM_SHUTDOWN)) || \
 	  (XLogArchivingAlways() &&									  \
 	   (pmState == PM_RECOVERY || pmState == PM_HOT_STANDBY))) && \
 	 PgArchCanRestart())
