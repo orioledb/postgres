@@ -3300,7 +3300,7 @@ LaunchMissingBackgroundProcesses(void)
 	 * even during recovery.
 	 */
 	if (PgArchPMChild == NULL &&
-		((XLogArchivingActive() && pmState == PM_RUN) ||
+		((XLogArchivingActive() && (pmState == PM_RUN || pmState == PM_WAIT_XLOG_SHUTDOWN)) ||
 		 (XLogArchivingAlways() && (pmState == PM_RECOVERY || pmState == PM_HOT_STANDBY))) &&
 		PgArchCanRestart())
 		PgArchPMChild = StartChildProcess(B_ARCHIVER);
