@@ -38,6 +38,7 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/resowner.h"
+#include "utils/resowner_private.h"
 #include "utils/syscache.h"
 
 
@@ -141,7 +142,7 @@ static const ResourceOwnerDesc catlistref_resowner_desc =
 };
 
 /* Convenience wrappers over ResourceOwnerRemember/Forget */
-static inline void
+void
 ResourceOwnerRememberCatCacheRef(ResourceOwner owner, HeapTuple tuple)
 {
 	ResourceOwnerRemember(owner, PointerGetDatum(tuple), &catcache_resowner_desc);
@@ -151,7 +152,7 @@ ResourceOwnerForgetCatCacheRef(ResourceOwner owner, HeapTuple tuple)
 {
 	ResourceOwnerForget(owner, PointerGetDatum(tuple), &catcache_resowner_desc);
 }
-static inline void
+void
 ResourceOwnerRememberCatCacheListRef(ResourceOwner owner, CatCList *list)
 {
 	ResourceOwnerRemember(owner, PointerGetDatum(list), &catlistref_resowner_desc);
