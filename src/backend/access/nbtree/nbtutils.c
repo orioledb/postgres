@@ -42,8 +42,6 @@ static void _bt_array_set_low_or_high(Relation rel, ScanKey skey,
 									  BTArrayKeyInfo *array, bool low_not_high);
 static bool _bt_array_decrement(Relation rel, ScanKey skey, BTArrayKeyInfo *array);
 static bool _bt_array_increment(Relation rel, ScanKey skey, BTArrayKeyInfo *array);
-static bool _bt_advance_array_keys_increment(IndexScanDesc scan, ScanDirection dir,
-											 bool *skip_array_set);
 static bool _bt_tuple_before_array_skeys(IndexScanDesc scan, ScanDirection dir,
 										 IndexTuple tuple, TupleDesc tupdesc, int tupnatts,
 										 bool readpagetup, int sktrig, bool *scanBehind);
@@ -969,7 +967,7 @@ _bt_array_increment(Relation rel, ScanKey skey, BTArrayKeyInfo *array)
  * On false result, the scankeys stay the same, and the array keys are not
  * advanced (every array remains at its final element for scan direction).
  */
-static bool
+bool
 _bt_advance_array_keys_increment(IndexScanDesc scan, ScanDirection dir,
 								 bool *skip_array_set)
 {
