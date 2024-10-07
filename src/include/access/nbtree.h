@@ -1288,6 +1288,7 @@ extern BTScanInsert _bt_mkscankey(Relation rel, IndexTuple itup);
 extern void _bt_freestack(BTStack stack);
 extern bool _bt_start_prim_scan(IndexScanDesc scan, ScanDirection dir);
 extern void _bt_start_array_keys(IndexScanDesc scan, ScanDirection dir);
+extern bool _bt_advance_array_keys_increment(IndexScanDesc scan, ScanDirection dir);
 extern void _bt_preprocess_keys(IndexScanDesc scan);
 extern bool _bt_checkkeys(IndexScanDesc scan, BTReadPageState *pstate, bool arrayKeys,
 						  IndexTuple tuple, int tupnatts);
