@@ -1321,6 +1321,8 @@ extern int	_bt_binsrch_array_skey(FmgrInfo *orderproc,
 								   BTArrayKeyInfo *array, ScanKey cur,
 								   int32 *set_elem_result);
 extern void _bt_start_array_keys(IndexScanDesc scan, ScanDirection dir);
+extern bool _bt_advance_array_keys_increment(IndexScanDesc scan, ScanDirection dir,
+											 bool *skip_array_set);
 extern bool _bt_checkkeys(IndexScanDesc scan, BTReadPageState *pstate, bool arrayKeys,
 						  IndexTuple tuple, int tupnatts);
 extern bool _bt_scanbehind_checkkeys(IndexScanDesc scan, ScanDirection dir,
