@@ -73,7 +73,6 @@ static int	_bt_binsrch_array_skey(FmgrInfo *orderproc,
 								   Datum tupdatum, bool tupnull,
 								   BTArrayKeyInfo *array, ScanKey cur,
 								   int32 *set_elem_result);
-static bool _bt_advance_array_keys_increment(IndexScanDesc scan, ScanDirection dir);
 static void _bt_rewind_nonrequired_arrays(IndexScanDesc scan, ScanDirection dir);
 static bool _bt_tuple_before_array_skeys(IndexScanDesc scan, ScanDirection dir,
 										 IndexTuple tuple, TupleDesc tupdesc, int tupnatts,
@@ -1377,7 +1376,7 @@ _bt_start_array_keys(IndexScanDesc scan, ScanDirection dir)
  * On false result, the scankeys stay the same, and the array keys are not
  * advanced (every array remains at its final element for scan direction).
  */
-static bool
+bool
 _bt_advance_array_keys_increment(IndexScanDesc scan, ScanDirection dir)
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
