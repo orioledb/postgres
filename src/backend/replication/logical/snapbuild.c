@@ -663,6 +663,7 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 	snap->snapshot_type = SNAPSHOT_MVCC;
 	snap->xcnt = newxcnt;
 	snap->xip = newxip;
+	snap->csnSnapshotData = builder->csnSnapshotData;
 
 	return snap;
 }
@@ -1279,6 +1280,10 @@ SnapBuildProcessRunningXacts(SnapBuild *builder, XLogRecPtr lsn, xl_running_xact
 	ReorderBufferTXN *txn;
 	TransactionId xmin;
 
+	builder->csnSnapshotData.snapshotcsn = running->csn;
+	builder->csnSnapshotData.xmin = 0;
+	builder->csnSnapshotData.xlogptr = lsn;
+
 	/*
 	 * If we're not consistent yet, inspect the record to see whether it
 	 * allows to get closer to being consistent. If we are consistent, dump
@@ -1306,9 +1311,6 @@ SnapBuildProcessRunningXacts(SnapBuild *builder, XLogRecPtr lsn, xl_running_xact
 	 * we hit fast paths in heapam_visibility.c.
 	 */
 	builder->xmin = running->oldestRunningXid;
-	builder->csnSnapshotData.snapshotcsn = running->csn;
-	builder->csnSnapshotData.xmin = 0;
-	builder->csnSnapshotData.xlogptr = lsn;
 
 	/* Remove transactions we don't need to keep track off anymore */
 	SnapBuildPurgeOlderTxn(builder);
