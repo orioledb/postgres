@@ -516,6 +516,7 @@ SetTransactionSnapshot(Snapshot sourcesnap, VirtualTransactionId *sourcevxid,
 	CurrentSnapshot->xmin = sourcesnap->xmin;
 	CurrentSnapshot->xmax = sourcesnap->xmax;
 	CurrentSnapshot->xcnt = sourcesnap->xcnt;
+	CurrentSnapshot->csnSnapshotData = sourcesnap->csnSnapshotData;
 	Assert(sourcesnap->xcnt <= GetMaxSnapshotXidCount());
 	if (sourcesnap->xcnt > 0)
 		memcpy(CurrentSnapshot->xip, sourcesnap->xip,
