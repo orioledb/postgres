@@ -7518,8 +7518,6 @@ CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn, XLogRecPtr pagePtr,
 static void
 CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 {
-	if (CheckPoint_hook)
-		CheckPoint_hook(checkPointRedo, flags);
 	CheckPointRelationMap();
 	CheckPointReplicationSlots(flags & CHECKPOINT_IS_SHUTDOWN);
 	CheckPointSnapBuild();
@@ -7535,6 +7533,9 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	CheckPointMultiXact();
 	CheckPointPredicate();
 	CheckPointBuffers(flags);
+
+	if (CheckPoint_hook)
+		CheckPoint_hook(checkPointRedo, flags);
 
 	/* Perform all queued up fsyncs */
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_SYNC_START();
