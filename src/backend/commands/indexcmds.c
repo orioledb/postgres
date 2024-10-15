@@ -220,7 +220,7 @@ CheckIndexCompatible(Oid oldId,
 						accessMethodName)));
 	accessMethodForm = (Form_pg_am) GETSTRUCT(tuple);
 	accessMethodId = accessMethodForm->oid;
-	amRoutine = GetIndexAmRoutine(oldId, accessMethodForm->amhandler);
+	amRoutine = GetIndexAmRoutineExtended(oldId, accessMethodForm->amhandler);
 	ReleaseSysCache(tuple);
 
 	amcanorder = amRoutine->amcanorder;
