@@ -348,7 +348,8 @@ typedef struct IndexAmRoutine
 
 /* Functions in access/index/amapi.c */
 extern IndexAmRoutine *GetIndexAmRoutineWithTableAM(Oid tamoid, Oid amhandler);
-extern IndexAmRoutine *GetIndexAmRoutine(Oid indoid, Oid amhandler);
+extern IndexAmRoutine *GetIndexAmRoutine(Oid amhandler);
+extern IndexAmRoutine *GetIndexAmRoutineExtended(Oid indoid, Oid amhandler);
 extern IndexAmRoutine *GetIndexAmRoutineByAmId(Oid indoid, Oid amoid, bool noerror);
 extern CompareType IndexAmTranslateStrategy(StrategyNumber strategy, Oid amoid, Oid opfamily, bool missing_ok);
 extern StrategyNumber IndexAmTranslateCompareType(CompareType cmptype, Oid amoid, Oid opfamily, bool missing_ok);
