@@ -1323,7 +1323,7 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 	amrec = (Form_pg_am) GETSTRUCT(ht_am);
 
 	/* Fetch the index AM's API struct */
-	amroutine = GetIndexAmRoutine(indexrelid, amrec->amhandler);
+	amroutine = GetIndexAmRoutineExtended(indexrelid, amrec->amhandler);
 
 	/*
 	 * Get the index expressions, if any.  (NOTE: we do not use the relcache
