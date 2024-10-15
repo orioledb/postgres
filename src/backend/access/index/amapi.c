@@ -47,7 +47,6 @@ GetIndexAmRoutineWithTableAM(Oid tamoid, Oid amhandler)
 	return routine;
 }
 
-
 /*
  * GetIndexAmRoutine - call the specified access method handler routine to get
  * its IndexAmRoutine struct, which will be palloc'd in the caller's context.
@@ -57,7 +56,13 @@ GetIndexAmRoutineWithTableAM(Oid tamoid, Oid amhandler)
  * indexes for the system catalogs.  relcache.c relies on that.
  */
 IndexAmRoutine *
-GetIndexAmRoutine(Oid indoid, Oid amhandler)
+GetIndexAmRoutine(Oid amhandler)
+{
+	return GetIndexAmRoutineExtended(InvalidOid, amhandler);
+}
+
+IndexAmRoutine *
+GetIndexAmRoutineExtended(Oid indoid, Oid amhandler)
 {
 	HeapTuple	ht_idx;
 	HeapTuple	ht_tblrel;
@@ -146,7 +151,7 @@ GetIndexAmRoutineByAmId(Oid indoid, Oid amoid, bool noerror)
 	ReleaseSysCache(tuple);
 
 	/* And finally, call the handler function to get the API struct. */
-	return GetIndexAmRoutine(indoid, amhandler);
+	return GetIndexAmRoutineExtended(indoid, amhandler);
 }
 
 
