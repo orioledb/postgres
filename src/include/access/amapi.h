@@ -107,11 +107,22 @@ typedef void (*ambuildempty_function) (Relation indexRelation);
 typedef bool (*aminsert_function) (Relation indexRelation,
 								   Datum *values,
 								   bool *isnull,
+								   ItemPointer tupleid,
+								   Relation heapRelation,
+								   IndexUniqueCheck checkUnique,
+								   bool indexUnchanged,
+								   struct IndexInfo *indexInfo);
+
+/* extended version of aminsert taking Datum tupleid */
+typedef bool (*aminsert_extended_function) (Relation indexRelation,
+								   Datum *values,
+								   bool *isnull,
 								   Datum tupleid,
 								   Relation heapRelation,
 								   IndexUniqueCheck checkUnique,
 								   bool indexUnchanged,
 								   struct IndexInfo *indexInfo);
+
 /* update this tuple */
 typedef bool (*amupdate_function) (Relation indexRelation,
 								   bool new_valid,
@@ -288,6 +299,7 @@ typedef struct IndexAmRoutine
 	ambuild_function ambuild;
 	ambuildempty_function ambuildempty;
 	aminsert_function aminsert;
+	aminsert_extended_function aminsertextended;
 	aminsertcleanup_function aminsertcleanup;
 	amupdate_function amupdate;
 	amdelete_function amdelete;
