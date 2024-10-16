@@ -63,7 +63,8 @@ ginhandler(PG_FUNCTION_ARGS)
 
 	amroutine->ambuild = ginbuild;
 	amroutine->ambuildempty = ginbuildempty;
-	amroutine->aminsert = gininsert;
+	amroutine->aminsert = NULL;
+	amroutine->aminsertextended = gininsert;
 	amroutine->aminsertcleanup = NULL;
 	amroutine->ambulkdelete = ginbulkdelete;
 	amroutine->amvacuumcleanup = ginvacuumcleanup;
