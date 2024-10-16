@@ -116,7 +116,8 @@ brinhandler(PG_FUNCTION_ARGS)
 
 	amroutine->ambuild = brinbuild;
 	amroutine->ambuildempty = brinbuildempty;
-	amroutine->aminsert = brininsert;
+	amroutine->aminsert = NULL;
+	amroutine->aminsertextended = brininsert;
 	amroutine->ambulkdelete = brinbulkdelete;
 	amroutine->amvacuumcleanup = brinvacuumcleanup;
 	amroutine->amcanreturn = NULL;
