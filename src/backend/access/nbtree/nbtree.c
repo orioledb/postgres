@@ -127,7 +127,8 @@ bthandler(PG_FUNCTION_ARGS)
 
 	amroutine->ambuild = btbuild;
 	amroutine->ambuildempty = btbuildempty;
-	amroutine->aminsert = btinsert;
+	amroutine->aminsert = NULL;
+	amroutine->aminsertextended = btinsert;
 	amroutine->aminsertcleanup = NULL;
 	amroutine->ambulkdelete = btbulkdelete;
 	amroutine->amvacuumcleanup = btvacuumcleanup;
