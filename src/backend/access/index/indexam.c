@@ -225,14 +225,14 @@ index_insert(Relation indexRelation,
 			 IndexInfo *indexInfo)
 {
 	RELATION_CHECKS;
-	CHECK_REL_PROCEDURE(aminsert);
+	CHECK_REL_PROCEDURE(aminsertextended);
 
 	if (!(indexRelation->rd_indam->ampredlocks))
 		CheckForSerializableConflictIn(indexRelation,
 									   (ItemPointer) NULL,
 									   InvalidBlockNumber);
 
-	return indexRelation->rd_indam->aminsert(indexRelation, values, isnull,
+	return indexRelation->rd_indam->aminsertextended(indexRelation, values, isnull,
 											 tupleid, heapRelation,
 											 checkUnique, indexUnchanged,
 											 indexInfo);
