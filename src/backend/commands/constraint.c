@@ -173,7 +173,7 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 		 * the row is now dead, because that is the TID the index will know
 		 * about.
 		 */
-		index_insert(indexRel, values, isnull, ItemPointerGetDatum(&checktid),
+		index_insert(indexRel, values, isnull, &checktid,
 					 trigdata->tg_relation, UNIQUE_CHECK_EXISTING,
 					 false, indexInfo);
 	}
