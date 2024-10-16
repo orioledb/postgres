@@ -3148,6 +3148,7 @@ amgetbitmap_function
 amgettuple_function
 aminitparallelscan_function
 aminsert_function
+aminsert_extended_function
 ammarkpos_function
 amoptions_function
 amparallelrescan_function

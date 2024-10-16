@@ -82,7 +82,8 @@ hashhandler(PG_FUNCTION_ARGS)
 
 	amroutine->ambuild = hashbuild;
 	amroutine->ambuildempty = hashbuildempty;
-	amroutine->aminsert = hashinsert;
+	amroutine->aminsert = NULL;
+	amroutine->aminsertextended = hashinsert;
 	amroutine->ambulkdelete = hashbulkdelete;
 	amroutine->amvacuumcleanup = hashvacuumcleanup;
 	amroutine->amcanreturn = NULL;
