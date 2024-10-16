@@ -303,7 +303,8 @@ dihandler(PG_FUNCTION_ARGS)
 
 	amroutine->ambuild = dibuild;
 	amroutine->ambuildempty = dibuildempty;
-	amroutine->aminsert = diinsert;
+	amroutine->aminsert = NULL;
+	amroutine->aminsertextended = diinsert;
 	amroutine->ambulkdelete = dibulkdelete;
 	amroutine->amvacuumcleanup = divacuumcleanup;
 	amroutine->amcanreturn = NULL;
