@@ -225,17 +225,32 @@ index_insert(Relation indexRelation,
 			 IndexInfo *indexInfo)
 {
 	RELATION_CHECKS;
-	CHECK_REL_PROCEDURE(aminsertextended);
+
+	if (indexRelation->rd_indam->aminsertextended == NULL && indexRelation->rd_indam->aminsert == NULL )
+		elog(ERROR, "at least one function aminsert or aminsertextended should be defined for index \"%s\"", \
+			RelationGetRelationName(indexRelation));
 
 	if (!(indexRelation->rd_indam->ampredlocks))
 		CheckForSerializableConflictIn(indexRelation,
 									   (ItemPointer) NULL,
 									   InvalidBlockNumber);
 
-	return indexRelation->rd_indam->aminsertextended(indexRelation, values, isnull,
+	if (indexRelation->rd_indam->aminsert)
+	{
+		/* compatibility method for extension AM's not aware of aminsertextended */
+		return indexRelation->rd_indam->aminsert(indexRelation, values, isnull,
+											 DatumGetItemPointer(tupleid), heapRelation,
+											 checkUnique, indexUnchanged,
+											 indexInfo);
+	}
+	else
+	{
+		/* index insert method for internal AM's and Orioledb that are aware of aminsertextended */
+		return indexRelation->rd_indam->aminsertextended(indexRelation, values, isnull,
 											 tupleid, heapRelation,
 											 checkUnique, indexUnchanged,
 											 indexInfo);
+	}
 }
 
 /* ----------------
