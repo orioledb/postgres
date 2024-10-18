@@ -229,6 +229,7 @@ main(int argc, char **argv)
 			case 6:
 				if (!parse_sync_method(optarg, &sync_method))
 					exit(1);
+				break;
 
 			case 'e':			/* -e or --extension */
 				simple_string_list_append(&extensions, optarg);
