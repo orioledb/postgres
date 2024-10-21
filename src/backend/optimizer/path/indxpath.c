@@ -98,8 +98,7 @@ static List *build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 							   IndexOptInfo *index, IndexClauseSet *clauses,
 							   bool useful_predicate,
 							   ScanTypeControl scantype,
-							   bool *skip_nonnative_saop,
-							   bool *skip_lower_saop);
+							   bool *skip_nonnative_saop);
 static List *build_paths_for_OR(PlannerInfo *root, RelOptInfo *rel,
 								List *clauses, List *other_clauses);
 static List *generate_bitmap_or_paths(PlannerInfo *root, RelOptInfo *rel,
@@ -703,7 +702,6 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 {
 	List	   *indexpaths;
 	bool		skip_nonnative_saop = false;
-	bool            skip_lower_saop = false;
 	ListCell   *lc;
 
 	/*
@@ -714,24 +712,8 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 								   index, clauses,
 								   index->predOK,
 								   ST_ANYSCAN,
-								   &skip_nonnative_saop,
-								   &skip_lower_saop);
+								   &skip_nonnative_saop);
 
-	 /*
-	  * If we skipped any lower-order ScalarArrayOpExprs on an index with an AM
-	  * that supports them, then try again including those clauses.  This will
-	  * produce paths with more selectivity but no ordering.
-	  */
-	if (skip_lower_saop)
-	{
-		indexpaths = list_concat(indexpaths,
-					build_index_paths(root, rel,
-						index, clauses,
-						index->predOK,
-						ST_ANYSCAN,
-						&skip_nonnative_saop,
-						NULL));
-	}
 	/*
 	 * Submit all the ones that can form plain IndexScan plans to add_path. (A
 	 * plain IndexPath can represent either a plain IndexScan or an
@@ -768,7 +750,6 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 									   index, clauses,
 									   false,
 									   ST_BITMAPSCAN,
-									   NULL,
 									   NULL);
 		*bitindexpaths = list_concat(*bitindexpaths, indexpaths);
 	}
@@ -813,8 +794,7 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 				  IndexOptInfo *index, IndexClauseSet *clauses,
 				  bool useful_predicate,
 				  ScanTypeControl scantype,
-				  bool *skip_nonnative_saop,
-				  bool *skip_lower_saop)
+				  bool *skip_nonnative_saop)
 {
 	List	   *result = NIL;
 	IndexPath  *ipath;
@@ -825,7 +805,6 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	List	   *orderbyclausecols;
 	List	   *index_pathkeys;
 	List	   *useful_pathkeys;
-	bool            found_lower_saop_clause;
 	bool		pathkeys_possibly_useful;
 	bool		index_is_ordered;
 	bool		index_only_scan;
@@ -864,7 +843,6 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	 * otherwise accounted for.
 	 */
 	index_clauses = NIL;
-	found_lower_saop_clause = false;
 	outer_relids = bms_copy(rel->lateral_relids);
 	for (indexcol = 0; indexcol < index->nkeycolumns; indexcol++)
 	{
@@ -887,16 +865,6 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 				 */
 				*skip_nonnative_saop = true;
 				continue;
-			}
-			if (skip_nonnative_saop && IsA(rinfo->clause, ScalarArrayOpExpr) && indexcol > 0)
-			{
-				if (skip_lower_saop)
-				{
-					/* Caller doesn't want to lose index ordering */
-					*skip_lower_saop = true;
-					continue;
-				}
-			found_lower_saop_clause = true;
 			}
 
 			/* OK to include this clause */
@@ -929,7 +897,6 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	 * if we are only trying to build bitmap indexscans.
 	 */
 	pathkeys_possibly_useful = (scantype != ST_BITMAPSCAN &&
-								!found_lower_saop_clause &&
 								has_useful_pathkeys(root, rel));
 	index_is_ordered = (index->sortopfamily != NULL);
 	if (index_is_ordered && pathkeys_possibly_useful)
@@ -1181,7 +1148,6 @@ build_paths_for_OR(PlannerInfo *root, RelOptInfo *rel,
 									   index, &clauseset,
 									   useful_predicate,
 									   ST_BITMAPSCAN,
-									   NULL,
 									   NULL);
 		result = list_concat(result, indexpaths);
 	}
