@@ -1943,13 +1943,11 @@ explain (costs off)
 SELECT thousand, tenthous FROM tenk1
 WHERE thousand < 2 AND tenthous IN (1001,3000)
 ORDER BY thousand;
-                                      QUERY PLAN                                      
---------------------------------------------------------------------------------------
- Sort
-   Sort Key: thousand
-   ->  Index Only Scan using tenk1_thous_tenthous on tenk1
-         Index Cond: ((thousand < 2) AND (tenthous = ANY ('{1001,3000}'::integer[])))
-(4 rows)
+                                   QUERY PLAN                                   
+--------------------------------------------------------------------------------
+ Index Only Scan using tenk1_thous_tenthous on tenk1
+   Index Cond: ((thousand < 2) AND (tenthous = ANY ('{1001,3000}'::integer[])))
+(2 rows)
 
 SELECT thousand, tenthous FROM tenk1
 WHERE thousand < 2 AND tenthous IN (1001,3000)
@@ -1965,13 +1963,11 @@ explain (costs off)
 SELECT thousand, tenthous FROM tenk1
 WHERE thousand < 2 AND tenthous IN (1001,3000)
 ORDER BY thousand DESC, tenthous DESC;
-                                      QUERY PLAN                                      
---------------------------------------------------------------------------------------
- Sort
-   Sort Key: thousand DESC, tenthous DESC
-   ->  Index Only Scan using tenk1_thous_tenthous on tenk1
-         Index Cond: ((thousand < 2) AND (tenthous = ANY ('{1001,3000}'::integer[])))
-(4 rows)
+                                   QUERY PLAN                                   
+--------------------------------------------------------------------------------
+ Index Only Scan Backward using tenk1_thous_tenthous on tenk1
+   Index Cond: ((thousand < 2) AND (tenthous = ANY ('{1001,3000}'::integer[])))
+(2 rows)
 
 SELECT thousand, tenthous FROM tenk1
 WHERE thousand < 2 AND tenthous IN (1001,3000)
