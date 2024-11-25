@@ -3468,8 +3468,7 @@ match_orclause_to_indexcol(PlannerInfo *root,
 		{
 			Const *value = (Const *) lfirst(lc);
 
-			Assert(!value->constisnull && value->constvalue);
-
+			Assert(!value->constisnull);
 			elems[i++] = value->constvalue;
 		}
 
