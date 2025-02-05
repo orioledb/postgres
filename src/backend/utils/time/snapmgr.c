@@ -206,10 +206,9 @@ typedef struct SerializedSnapshotData
 	TimestampTz whenTaken;
 	XLogRecPtr	lsn;
 	CSNSnapshotData	csnSnapshotData;
-	uint64		undoRegularLocation;
-	uint64		undoRegularXmin;
+	uint64		undoRegularRowLocation;
+	uint64		undoRegularPageLocation;
 	uint64		undoSystemLocation;
-	uint64		undoSystemXmin;
 } SerializedSnapshotData;
 
 /*
@@ -1767,9 +1766,8 @@ SerializeSnapshot(Snapshot snapshot, char *start_address)
 	serialized_snapshot.csnSnapshotData.xmin = snapshot->csnSnapshotData.xmin;
 	serialized_snapshot.csnSnapshotData.snapshotcsn = snapshot->csnSnapshotData.snapshotcsn;
 	serialized_snapshot.csnSnapshotData.xlogptr = snapshot->csnSnapshotData.xlogptr;
-	serialized_snapshot.undoRegularXmin = snapshot->undoRegularLocationPhNode.xmin;
-	serialized_snapshot.undoRegularLocation = snapshot->undoRegularLocationPhNode.undoLocation;
-	serialized_snapshot.undoSystemXmin = snapshot->undoSystemLocationPhNode.xmin;
+	serialized_snapshot.undoRegularRowLocation = snapshot->undoRegularRowLocationPhNode.undoLocation;
+	serialized_snapshot.undoRegularPageLocation = snapshot->undoRegularPageLocationPhNode.undoLocation;
 	serialized_snapshot.undoSystemLocation = snapshot->undoSystemLocationPhNode.undoLocation;
 
 	/*
@@ -1849,9 +1847,8 @@ RestoreSnapshot(char *start_address)
 	snapshot->csnSnapshotData.xmin = serialized_snapshot.csnSnapshotData.xmin;
 	snapshot->csnSnapshotData.snapshotcsn = serialized_snapshot.csnSnapshotData.snapshotcsn;
 	snapshot->csnSnapshotData.xlogptr = serialized_snapshot.csnSnapshotData.xlogptr;
-	snapshot->undoRegularLocationPhNode.xmin = serialized_snapshot.undoRegularXmin;
-	snapshot->undoRegularLocationPhNode.undoLocation = serialized_snapshot.undoRegularLocation;
-	snapshot->undoSystemLocationPhNode.xmin = serialized_snapshot.undoSystemXmin;
+	snapshot->undoRegularRowLocationPhNode.undoLocation = serialized_snapshot.undoRegularRowLocation;
+	snapshot->undoRegularPageLocationPhNode.undoLocation = serialized_snapshot.undoRegularPageLocation;
 	snapshot->undoSystemLocationPhNode.undoLocation = serialized_snapshot.undoSystemLocation;
 
 	/* Copy XIDs, if present. */
