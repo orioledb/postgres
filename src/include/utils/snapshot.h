@@ -125,7 +125,6 @@ typedef struct SnapshotData *Snapshot;
 typedef struct
 {
 	uint64		undoLocation;		/* undo log location retained by this snapshot */
-	uint64		xmin;
 	pairingheap_node ph_node;
 } RetainUndoLocationPHNode;
 
@@ -229,7 +228,8 @@ typedef struct SnapshotData
 	 */
 	uint64		snapXactCompletionCount;
 
-	RetainUndoLocationPHNode undoRegularLocationPhNode;
+	RetainUndoLocationPHNode undoRegularRowLocationPhNode;
+	RetainUndoLocationPHNode undoRegularPageLocationPhNode;
 	RetainUndoLocationPHNode undoSystemLocationPhNode;
 	CSNSnapshotData	csnSnapshotData;
 } SnapshotData;
