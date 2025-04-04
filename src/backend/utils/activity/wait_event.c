@@ -221,6 +221,9 @@ pgstat_get_wait_activity(WaitEventActivity w)
 		case WAIT_EVENT_BGWRITER_MAIN:
 			event_name = "BgWriterMain";
 			break;
+		case WAIT_EVENT_REWIND_WORKER_MAIN:
+			event_name = "RewindWorkerMain";
+			break;
 		case WAIT_EVENT_CHECKPOINTER_MAIN:
 			event_name = "CheckpointerMain";
 			break;
