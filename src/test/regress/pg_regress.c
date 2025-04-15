@@ -61,8 +61,8 @@ static char *shellprog = SHELLPROG;
  * Windows-style newlines, but the comparison files might or might not.
  */
 #ifndef WIN32
-const char *basic_diff_opts = "";
-const char *pretty_diff_opts = "-U3";
+const char *basic_diff_opts = "-I \"NOTICE\" -I \"DETAIL\" -I \"WARNING\"";
+const char *pretty_diff_opts = "-I \"NOTICE\" -I \"DETAIL\" -I \"WARNING\" -U3";
 #else
 const char *basic_diff_opts = "-w";
 const char *pretty_diff_opts = "-w -U3";
