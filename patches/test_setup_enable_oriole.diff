@@ -1,0 +1,27 @@
+diff --git a/src/test/regress/expected/test_setup.out b/src/test/regress/expected/test_setup.out
+index 3d0eeec996..70ce94e21a 100644
+--- a/src/test/regress/expected/test_setup.out
++++ b/src/test/regress/expected/test_setup.out
+@@ -21,6 +21,8 @@ GRANT ALL ON SCHEMA public TO public;
+ -- Create a tablespace we can use in tests.
+ SET allow_in_place_tablespaces = true;
+ CREATE TABLESPACE regress_tblspace LOCATION '';
++-- Enable orioledb extension
++CREATE EXTENSION orioledb;
+ --
+ -- These tables have traditionally been referenced by many tests,
+ -- so create and populate them.  Insert only non-error values here.
+diff --git a/src/test/regress/sql/test_setup.sql b/src/test/regress/sql/test_setup.sql
+index 06b0e2121f..867ad6a2df 100644
+--- a/src/test/regress/sql/test_setup.sql
++++ b/src/test/regress/sql/test_setup.sql
+@@ -27,6 +27,9 @@ GRANT ALL ON SCHEMA public TO public;
+ SET allow_in_place_tablespaces = true;
+ CREATE TABLESPACE regress_tblspace LOCATION '';
+ 
++-- Enable orioledb extension
++CREATE EXTENSION orioledb;
++
+ --
+ -- These tables have traditionally been referenced by many tests,
+ -- so create and populate them.  Insert only non-error values here.
