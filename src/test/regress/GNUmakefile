@@ -103,6 +103,10 @@ check-tests: all | temp-install
 installcheck: all
 	$(pg_regress_installcheck) $(REGRESS_OPTS) --schedule=$(srcdir)/parallel_schedule --max-connections=1 $(EXTRA_TESTS)
 
+# Run tests that work with oriole
+installcheck-oriole: all
+	$(pg_regress_installcheck) $(REGRESS_OPTS) --schedule=$(srcdir)/parallel_schedule_oriole --max-connections=1 $(EXTRA_TESTS)
+
 installcheck-parallel: all
 	$(pg_regress_installcheck) $(REGRESS_OPTS) --schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
 

@@ -1,0 +1,129 @@
+# ----------
+# src/test/regress/parallel_schedule
+#
+# Most test scripts can be run after running just test_setup and possibly
+# create_index.  Exceptions to this rule are documented below.
+#
+# By convention, we put no more than twenty tests in any one parallel group;
+# this limits the number of connections needed to run the tests.
+# ----------
+
+# required setup steps
+test: test_setup
+
+# ----------
+# The first group of parallel tests
+# ----------
+test: boolean char name varchar text int2 int4 int8 oid float4 float8 bit numeric txid uuid enum money pg_lsn regproc
+
+# ----------
+# The second group of parallel tests
+# multirangetypes depends on rangetypes
+# multirangetypes shouldn't run concurrently with type_sanity
+# ----------
+test: md5 numerology lseg line path circle date time timetz timestamp timestamptz interval inet macaddr macaddr8
+
+# ----------
+# Another group of parallel tests
+# geometry depends on point, lseg, line, box, path, polygon, circle
+# horology depends on date, time, timetz, timestamp, timestamptz, interval
+# ----------
+test: horology tstypes regex comments expressions unicode xid mvcc
+
+# ----------
+# Load huge amounts of data
+# We should split the data files into single files and then
+# execute two copy tests in parallel, to check that copy itself
+# is concurrent safe.
+# ----------
+test: copy copyselect copydml
+
+# ----------
+# More groups of parallel tests
+# Note: many of the tests in later groups depend on create_index
+# ----------
+test: create_function_c create_misc create_operator create_procedure create_type create_schema create_view
+
+# ----------
+# Another group of parallel tests
+# ----------
+test: create_aggregate create_function_sql create_cast typed_table drop_if_exists
+
+# ----------
+# sanity_check does a vacuum, affecting the sort order of SELECT *
+# results. So it should not run parallel to other tests.
+# ----------
+
+# ----------
+# Another group of parallel tests
+# aggregates depends on create_aggregate
+# join depends on create_misc
+# ----------
+test: select_into select_implicit select_having random delete
+
+# ----------
+# Another group of parallel tests
+# ----------
+test: init_privs security_label collate object_address drop_operator password 
+
+# ----------
+# Additional BRIN tests
+# ----------
+
+# ----------
+# Another group of parallel tests
+# psql depends on create_am
+# amutils depends on geometry, create_index_spgist, hash_index, brin
+# ----------
+test: alter_generic alter_operator misc async dbsize sysviews tsrf create_role
+
+# collate.linux.utf8 and collate.icu.utf8 tests cannot be run in parallel with each other
+
+# ----------
+# Run these alone so they don't run out of parallel workers
+# select_parallel depends on create_misc
+# ----------
+
+# no relation related tests can be put in this group
+test: subscription
+
+# ----------
+# Another group of parallel tests
+# select_views depends on create_view
+# ----------
+test: select_views portals_p2 dependency guc bitmapops xmlmap functional_deps advisory_lock 
+
+# ----------
+# Another group of parallel tests (JSON related)
+# ----------
+test: json_encoding jsonpath jsonpath_encoding jsonb_jsonpath sqljson sqljson_queryfuncs sqljson_jsontable
+
+# ----------
+# Another group of parallel tests
+# with depends on create_misc
+# NB: temp.sql does a reconnect which transiently uses 2 connections,
+# so keep this parallel group to at most 19 tests
+# ----------
+test: plancache rangefuncs prepare sequence polymorphism largeobject xml
+
+# ----------
+# Another group of parallel tests
+#
+# The stats test resets stats, so nothing else needing stats access can be in
+# this group.
+# ----------
+test: hash_part predicate
+
+# event_trigger depends on create_am and cannot run concurrently with
+# any test that runs DDL
+# oidjoins is read-only, though, and should run late for best coverage
+test: oidjoins 
+
+# event_trigger_login cannot run concurrently with any other tests because
+# on-login event handling could catch connection of a concurrent test.
+test: event_trigger_login
+
+# this test also uses event triggers, so likewise run it by itself
+
+# run tablespace test at the end because it drops the tablespace created during
+# setup that other tests may use.
