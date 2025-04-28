@@ -7,14 +7,14 @@ on:
 jobs:
   test:
     runs-on:
-     - ubuntu-20.04
+     - ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         compiler: [clang, gcc]
         check_type: [normal, debug]
     env:
-      LLVM_VER: 10
+      LLVM_VER: 19
       COMPILER: ${{ matrix.compiler }}
       CHECK_TYPE: ${{ matrix.check_type }}
     steps:
