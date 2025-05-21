@@ -314,6 +314,10 @@ extern void heap_vacuum_rel(Relation rel,
 							struct VacuumParams *params, BufferAccessStrategy bstrategy);
 
 /* in heap/heapam_visibility.c */
+typedef TransactionId (*VacuumHorizonHookType) (void);
+
+extern VacuumHorizonHookType VacuumHorizonHook;
+
 extern bool HeapTupleSatisfiesVisibility(HeapTuple htup, Snapshot snapshot,
 										 Buffer buffer);
 extern TM_Result HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
@@ -327,8 +331,6 @@ extern void HeapTupleSetHintBits(HeapTupleHeader tuple, Buffer buffer,
 extern bool HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple);
 extern bool HeapTupleIsSurelyDead(HeapTuple htup,
 								  struct GlobalVisState *vistest);
-
-extern void SetHintBitsHorizon(TransactionId new_horizon);
 
 /*
  * To avoid leaking too much knowledge about reorderbuffer implementation
