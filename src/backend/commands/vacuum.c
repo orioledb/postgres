@@ -1150,6 +1150,14 @@ vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
 	 * any time, and that each vacuum is always an independent transaction.
 	 */
 	cutoffs->OldestXmin = GetOldestNonRemovableTransactionId(rel);
+	if (VacuumHorizonHook)
+	{
+		TransactionId horizon = VacuumHorizonHook();
+
+		if (TransactionIdIsValid(horizon) &&
+			TransactionIdFollows(cutoffs->OldestXmin, horizon))
+			cutoffs->OldestXmin = horizon;
+	}
 
 	Assert(TransactionIdIsNormal(cutoffs->OldestXmin));
 
@@ -1653,6 +1661,14 @@ vac_update_datfrozenxid(void)
 	 * cannot produce a wrong minimum by starting with this.
 	 */
 	newFrozenXid = GetOldestNonRemovableTransactionId(NULL);
+	if (VacuumHorizonHook)
+	{
+		TransactionId horizon = VacuumHorizonHook();
+
+		if (TransactionIdIsValid(horizon) &&
+			TransactionIdFollows(newFrozenXid, horizon))
+			newFrozenXid = horizon;
+	}
 
 	/*
 	 * Similarly, initialize the MultiXact "min" with the value that would be
