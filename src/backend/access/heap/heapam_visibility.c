@@ -80,7 +80,7 @@
 #include "utils/combocid.h"
 #include "utils/snapmgr.h"
 
-static TransactionId hint_bit_horizon = InvalidTransactionId;
+VacuumHorizonHookType VacuumHorizonHook = NULL;
 
 /*
  * SetHintBits()
@@ -130,10 +130,14 @@ SetHintBits(HeapTupleHeader tuple, Buffer buffer,
 		}
 	}
 
-	if (TransactionIdIsValid(hint_bit_horizon) &&
-		TransactionIdIsValid(xid) &&
-		TransactionIdFollows(xid, hint_bit_horizon))
-		return;
+	if (TransactionIdIsValid(xid) && VacuumHorizonHook)
+	{
+		TransactionId horizon = VacuumHorizonHook();
+
+		if (TransactionIdIsValid(horizon) &&
+			TransactionIdFollows(xid, horizon))
+			return;
+	}
 
 	tuple->t_infomask |= infomask;
 	MarkBufferDirtyHint(buffer, true);
@@ -1793,10 +1797,4 @@ HeapTupleSatisfiesVisibility(HeapTuple htup, Snapshot snapshot, Buffer buffer)
 	}
 
 	return false;				/* keep compiler quiet */
-}
-
-void
-SetHintBitsHorizon(TransactionId new_horizon)
-{
-	hint_bit_horizon = new_horizon;
 }
