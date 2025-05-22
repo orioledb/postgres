@@ -3754,6 +3754,8 @@ CountUserBackends(Oid roleid)
  * backend startup.  The caller should normally hold an exclusive lock on the
  * target DB before calling this, which is one reason we mustn't wait
  * indefinitely.
+ *
+ * If databaseId is InvalidOid, count all non-bgworker backends in a cluster.
  */
 bool
 CountOtherDBBackends(Oid databaseId, int *nbackends, int *nprepared)
@@ -3783,8 +3785,22 @@ CountOtherDBBackends(Oid databaseId, int *nbackends, int *nprepared)
 			PGPROC	   *proc = &allProcs[pgprocno];
 			uint8		statusFlags = ProcGlobal->statusFlags[index];
 
-			if (proc->databaseId != databaseId)
-				continue;
+			if (databaseId != InvalidOid)
+			{
+				if (proc->databaseId != databaseId)
+					continue;
+			}
+			else
+			{
+				if (!proc->isRegularBackend)
+				{
+					if (proc->pid == 0)
+						(*nprepared)++;
+
+					continue;	/* do not count background workers */
+				}
+			}
+
 			if (proc == MyProc)
 				continue;
 
@@ -3832,6 +3848,8 @@ CountOtherDBBackends(Oid databaseId, int *nbackends, int *nprepared)
  *
  * If the target database has a prepared transaction or permissions checks
  * fail for a connection, this fails without terminating anything.
+ *
+ * If databaseId is InvalidOid, terminate all backends in a cluster.
  */
 void
 TerminateOtherDBBackends(Oid databaseId)
@@ -3848,7 +3866,7 @@ TerminateOtherDBBackends(Oid databaseId)
 		int			pgprocno = arrayP->pgprocnos[i];
 		PGPROC	   *proc = &allProcs[pgprocno];
 
-		if (proc->databaseId != databaseId)
+		if (databaseId != InvalidOid && proc->databaseId != databaseId)
 			continue;
 		if (proc == MyProc)
 			continue;
@@ -3862,7 +3880,9 @@ TerminateOtherDBBackends(Oid databaseId)
 	LWLockRelease(ProcArrayLock);
 
 	if (nprepared > 0)
-		ereport(ERROR,
+	{
+		if (databaseId != InvalidOid)
+			ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_IN_USE),
 				 errmsg("database \"%s\" is being used by prepared transactions",
 						get_database_name(databaseId)),
@@ -3870,6 +3890,15 @@ TerminateOtherDBBackends(Oid databaseId)
 								  "There are %d prepared transactions using the database.",
 								  nprepared,
 								  nprepared)));
+		else
+			ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_IN_USE),
+				 errmsg("cluster is being used by prepared transactions"),
+				 errdetail_plural("There is %d prepared transaction using the cluster.",
+								  "There are %d prepared transactions using the cluster.",
+								  nprepared,
+								  nprepared)));
+	}
 
 	if (pids)
 	{
