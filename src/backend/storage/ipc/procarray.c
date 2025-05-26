@@ -3704,7 +3704,7 @@ CountUserBackends(Oid roleid)
  * target DB before calling this, which is one reason we mustn't wait
  * indefinitely.
  *
- * If databaseId is InvalidOid, count all backends in a cluster.
+ * If databaseId is InvalidOid, count all non-bgworker backends in a cluster.
  */
 bool
 CountOtherDBBackends(Oid databaseId, int *nbackends, int *nprepared)
@@ -3734,8 +3734,17 @@ CountOtherDBBackends(Oid databaseId, int *nbackends, int *nprepared)
 			PGPROC	   *proc = &allProcs[pgprocno];
 			uint8		statusFlags = ProcGlobal->statusFlags[index];
 
-			if (databaseId != InvalidOid && proc->databaseId != databaseId)
-				continue;
+			if (databaseId != InvalidOid)
+			{
+				if (proc->databaseId != databaseId)
+					continue;
+			}
+			else
+			{
+				if (proc->isBackgroundWorker)
+					continue;	/* do not count background workers */
+			}
+
 			if (proc == MyProc)
 				continue;
 
