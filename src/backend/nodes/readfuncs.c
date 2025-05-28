@@ -494,6 +494,7 @@ _readRangeTblEntry(void)
 		case RTE_RELATION:
 			READ_OID_FIELD(relid);
 			READ_CHAR_FIELD(relkind);
+			READ_INT_FIELD(reftype);
 			READ_INT_FIELD(rellockmode);
 			READ_NODE_FIELD(tablesample);
 			READ_UINT_FIELD(perminfoindex);
