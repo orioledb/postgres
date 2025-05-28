@@ -1474,6 +1474,12 @@ CacheInvalidateRelcacheByDbidRelid(Oid dbid, Oid relid)
 	msg.rc.id = SHAREDINVALRELCACHE_ID;
 	msg.rc.dbId = dbid;
 	msg.rc.relId = relid;
+
+/* Initialize isLocal if temp tables are available */
+#ifdef TEMP_TABLE_SCOPE_LOCAL
+	msg.isLocal = false;
+#endif
+
 	/* check AddCatcacheInvalidationMessage() for an explanation */
 	VALGRIND_MAKE_MEM_DEFINED(&msg, sizeof(msg));
 
