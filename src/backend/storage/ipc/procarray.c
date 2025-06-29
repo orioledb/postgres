@@ -48,6 +48,7 @@
 #include <signal.h>
 
 #include "access/clog.h"
+#include "access/heapam.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
 #include "access/twophase.h"
@@ -2004,23 +2005,36 @@ TransactionId
 GetOldestNonRemovableTransactionId(Relation rel)
 {
 	ComputeXidHorizonsResult horizons;
+	TransactionId	result = InvalidTransactionId;
 
 	ComputeXidHorizons(&horizons);
 
 	switch (GlobalVisHorizonKindForRel(rel))
 	{
 		case VISHORIZON_SHARED:
-			return horizons.shared_oldest_nonremovable;
+			result = horizons.shared_oldest_nonremovable;
+			break;
 		case VISHORIZON_CATALOG:
-			return horizons.catalog_oldest_nonremovable;
+			result = horizons.catalog_oldest_nonremovable;
+			break;
 		case VISHORIZON_DATA:
-			return horizons.data_oldest_nonremovable;
+			result = horizons.data_oldest_nonremovable;
+			break;
 		case VISHORIZON_TEMP:
-			return horizons.temp_oldest_nonremovable;
+			result = horizons.temp_oldest_nonremovable;
+			break;
 	}
 
-	/* just to prevent compiler warnings */
-	return InvalidTransactionId;
+	if (VacuumHorizonHook)
+	{
+		TransactionId horizon = VacuumHorizonHook();
+
+		if (TransactionIdIsValid(horizon) &&
+			TransactionIdFollows(result, horizon))
+			result = horizon;
+	}
+
+	return result;
 }
 
 /*
@@ -4112,6 +4126,20 @@ GlobalVisTestFor(Relation rel)
 		case VISHORIZON_TEMP:
 			state = &GlobalVisTempRels;
 			break;
+	}
+
+	if (VacuumHorizonHook)
+	{
+		TransactionId horizon = VacuumHorizonHook();
+		if (TransactionIdIsValid(horizon))
+		{
+			FullTransactionId fullHorizon = FullXidRelativeTo(state->definitely_needed, horizon);
+
+			if (FullTransactionIdFollows(state->definitely_needed, fullHorizon))
+				state->definitely_needed = fullHorizon;
+			if (FullTransactionIdFollows(state->maybe_needed, fullHorizon))
+				state->maybe_needed = fullHorizon;
+		}
 	}
 
 	Assert(FullTransactionIdIsValid(state->definitely_needed) &&
