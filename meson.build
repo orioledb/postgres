@@ -153,7 +153,8 @@ cdata.set('PG_VERSION_NUM', pg_version_num)
 # PG_VERSION_STR is built later, it depends on compiler test results
 cdata.set_quoted('CONFIGURE_ARGS', '')
 
-orioledb_patchset_version = '22'
+git_describe_tags = run_command('git', 'describe', '--tags', check: true)
+orioledb_patchset_version = git_describe_tags.stdout().strip().split('_')[1]
 
 
 ###############################################################
