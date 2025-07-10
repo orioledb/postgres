@@ -3756,7 +3756,12 @@ CountOtherDBBackends(Oid databaseId, int *nbackends, int *nprepared)
 			else
 			{
 				if (proc->isBackgroundWorker)
+				{
+					if (proc->pid == 0)
+						(*nprepared)++;
+
 					continue;	/* do not count background workers */
+				}
 			}
 
 			if (proc == MyProc)
