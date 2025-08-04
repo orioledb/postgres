@@ -626,11 +626,17 @@ table_block_parallelscan_nextpage(Relation rel,
  * is stored, and if it uses them in the expected manner (e.g. the actual data
  * is in the main fork rather than some other), it can use this implementation
  * of the relation_size callback rather than implementing its own.
+ *
+ * Different counting methods is not supported for this function yet. It's expected
+ * DEFAULT_SIZE in all cases.
  */
-uint64
-table_block_relation_size(Relation rel, ForkNumber forkNumber)
+int64
+table_block_relation_size(Relation rel, ForkNumber forkNumber, uint8 method)
 {
 	uint64		nblocks = 0;
+
+	if (method != DEFAULT_SIZE)
+		return -1;
 
 	/* InvalidForkNumber indicates returning the size for all forks */
 	if (forkNumber == InvalidForkNumber)
@@ -641,7 +647,7 @@ table_block_relation_size(Relation rel, ForkNumber forkNumber)
 	else
 		nblocks = smgrnblocks(RelationGetSmgr(rel), forkNumber);
 
-	return nblocks * BLCKSZ;
+	return (int64) nblocks * BLCKSZ;
 }
 
 /*
