@@ -30,6 +30,7 @@
 #include "utils/relfilenumbermap.h"
 #include "utils/relmapper.h"
 #include "utils/syscache.h"
+#include "access/tableam.h"
 
 /* Divide by two and round away from zero */
 #define half_rounded(x)   (((x) + ((x) < 0 ? -1 : 1)) / 2)
@@ -342,6 +343,61 @@ calculate_relation_size(RelFileLocator *rfn, ProcNumber backend, ForkNumber fork
 	return totalsize;
 }
 
+/*
+ * Try to get size using proper relation_size method in table am. Fallback to previous method
+ * if rd_tableam->relation_size doesn't support requested counting method or otherwise refuses
+ * to count (with negative output)
+ */
+static
+int64 try_tableam_relation_size(Relation rel, ForkNumber forkNum, bool allforks, uint8 method)
+{
+	int64 size = 0;
+
+	if (rel->rd_rel->relkind == RELKIND_INDEX)
+	{
+		/* For index check rd_tableam for parent relation */
+		Relation        tbl;
+
+		tbl = relation_open(rel->rd_index->indrelid, AccessShareLock);
+		if(tbl->rd_tableam && tbl->rd_tableam->relation_size)
+		{
+			/* We call relation_size method for parent relation but provide index relation as an argument.
+			 * Method for index is always RELATION_SIZE
+			*/
+			if (allforks)
+			{
+				for (ForkNumber i = 0; i <= MAX_FORKNUM; i++)
+				{
+					size += tbl->rd_tableam->relation_size(rel, i, RELATION_SIZE);
+				}
+			}
+			else
+				size = tbl->rd_tableam->relation_size(rel, forkNum, RELATION_SIZE);
+
+			if (size >= 0)
+			{
+				relation_close(tbl, AccessShareLock);
+				return size;
+			}
+		}
+		relation_close(tbl, AccessShareLock);
+	}
+	else if (rel->rd_tableam && rel->rd_tableam->relation_size)
+	{
+		if (allforks)
+		{
+			for (ForkNumber i = 0; i <= MAX_FORKNUM; i++)
+				size += rel->rd_tableam->relation_size(rel, i, method);
+		}
+		else
+			size = rel->rd_tableam->relation_size(rel, forkNum, method);
+
+		if (size >= 0)
+			return size;
+	}
+	return -1;
+}
+
 Datum
 pg_relation_size(PG_FUNCTION_ARGS)
 {
@@ -361,6 +417,18 @@ pg_relation_size(PG_FUNCTION_ARGS)
 	 */
 	if (rel == NULL)
 		PG_RETURN_NULL();
+
+	/*
+	 * Try to get size using proper relation_size method in table am. Fallback to previous method
+	 * if rd_tableam->relation_size doesn't support requested counting method or otherwise refuses
+	 * to count (with negative output)
+	 */
+	size = try_tableam_relation_size(rel, forkname_to_number(text_to_cstring(forkName)), false, RELATION_SIZE);
+	if (size >= 0)
+	{
+		relation_close(rel, AccessShareLock);
+		PG_RETURN_INT64(size);
+	}
 
 	size = calculate_relation_size(&(rel->rd_locator), rel->rd_backend,
 								   forkname_to_number(text_to_cstring(forkName)));
@@ -494,6 +562,18 @@ pg_table_size(PG_FUNCTION_ARGS)
 	if (rel == NULL)
 		PG_RETURN_NULL();
 
+	/*
+	 * Try to get size using proper relation_size method in table am. Fallback to previous method
+	 * if rd_tableam->relation_size doesn't support requested counting method or otherwise refuses
+	 * to count (with negative output)
+	 */
+	size = try_tableam_relation_size(rel, InvalidForkNumber, true, TABLE_SIZE);
+	if (size >= 0)
+	{
+		relation_close(rel, AccessShareLock);
+		PG_RETURN_INT64(size);
+	}
+
 	size = calculate_table_size(rel);
 
 	relation_close(rel, AccessShareLock);
@@ -506,12 +586,24 @@ pg_indexes_size(PG_FUNCTION_ARGS)
 {
 	Oid			relOid = PG_GETARG_OID(0);
 	Relation	rel;
-	int64		size;
+	int64		size = 0;
 
 	rel = try_relation_open(relOid, AccessShareLock);
 
 	if (rel == NULL)
 		PG_RETURN_NULL();
+
+	if (rel->rd_tableam && rel->rd_tableam->relation_size)
+	{
+		for (ForkNumber forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
+			size += rel->rd_tableam->relation_size(rel, forkNum , INDEXES_SIZE);
+
+		if(size >= 0)
+		{
+			relation_close(rel, AccessShareLock);
+			PG_RETURN_INT64(size);
+		}
+	}
 
 	size = calculate_indexes_size(rel);
 
@@ -554,6 +646,18 @@ pg_total_relation_size(PG_FUNCTION_ARGS)
 
 	if (rel == NULL)
 		PG_RETURN_NULL();
+
+	/*
+	 * Try to get size using proper relation_size method in table am. Fallback to previous method
+	 * if rd_tableam->relation_size doesn't support requested counting method or otherwise refuses
+	 * to count (with negative output)
+	 */
+	size = try_tableam_relation_size(rel, InvalidForkNumber, true, TOTAL_SIZE);
+	if (size >= 0)
+	{
+		relation_close(rel, AccessShareLock);
+		PG_RETURN_INT64(size);
+	}
 
 	size = calculate_total_relation_size(rel);
 
