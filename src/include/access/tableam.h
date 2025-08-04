@@ -287,6 +287,15 @@ typedef struct TM_IndexDeleteOp
 #define TABLE_MODIFY_FETCH_OLD_TUPLE 0x0002
 #define TABLE_MODIFY_LOCK_UPDATED	0x0004
 
+/* "method" flag bits for relation_size */
+/* Default behavior implemented for heap AM */
+#define DEFAULT_SIZE (0)
+/* Extended behavior that AM can provide */
+#define RELATION_SIZE (1)
+#define TABLE_SIZE (2)
+#define TOTAL_SIZE (3)
+#define TOAST_TABLE_SIZE (4)
+#define INDEXES_SIZE (5)
 
 /* Typedef for callback function for table_index_build_scan */
 typedef void (*IndexBuildCallback) (Relation index,
@@ -746,7 +755,7 @@ typedef struct TableAmRoutine
 	 * probable that we'll need to revise the interface for those at some
 	 * point.
 	 */
-	uint64		(*relation_size) (Relation rel, ForkNumber forkNumber);
+	int64		(*relation_size) (Relation rel, ForkNumber forkNumber, uint8 method);
 
 
 	/*
@@ -1909,7 +1918,8 @@ table_index_validate_scan(Relation table_rel,
 static inline uint64
 table_relation_size(Relation rel, ForkNumber forkNumber)
 {
-	return rel->rd_tableam->relation_size(rel, forkNumber);
+	int64 res = rel->rd_tableam->relation_size(rel, forkNumber, DEFAULT_SIZE);
+	return res >= 0 ? res : 0;
 }
 
 /*
@@ -2132,7 +2142,7 @@ extern void table_block_parallelscan_startblock_init(Relation rel,
  * ----------------------------------------------------------------------------
  */
 
-extern uint64 table_block_relation_size(Relation rel, ForkNumber forkNumber);
+extern int64 table_block_relation_size(Relation rel, ForkNumber forkNumber, uint8 method);
 extern void table_block_relation_estimate_size(Relation rel,
 											   int32 *attr_widths,
 											   BlockNumber *pages,
