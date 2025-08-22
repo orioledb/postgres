@@ -2994,6 +2994,7 @@ heapam_reloptions(char relkind, Datum reloptions, bool validate)
 
 static const TableAmRoutine heapam_methods = {
 	.type = T_TableAmRoutine,
+	.amcanbackward = true,
 
 	.slot_callbacks = heapam_slot_callbacks,
 	.get_row_ref_type = heapam_get_row_ref_type,
