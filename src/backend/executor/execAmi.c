@@ -14,6 +14,8 @@
 
 #include "access/amapi.h"
 #include "access/htup_details.h"
+#include "access/tableam.h"
+#include "catalog/pg_am_d.h"
 #include "catalog/pg_class.h"
 #include "executor/nodeAgg.h"
 #include "executor/nodeAppend.h"
@@ -63,6 +65,7 @@
 #include "utils/syscache.h"
 
 static bool IndexSupportsBackwardScan(Oid indexid);
+static bool TableSupportsBackwardScan(Oid tableid);
 
 
 /*
@@ -569,6 +572,20 @@ ExecSupportsBackwardScan(Plan *node)
 		case T_SeqScan:
 		case T_TidScan:
 		case T_TidRangeScan:
+			{
+				ListCell   *lc = list_head(node->targetlist);
+
+				if (lc != NULL)
+				{
+					TargetEntry *tle = lfirst(lc);
+
+					if (OidIsValid(tle->resorigtbl))
+						return TableSupportsBackwardScan(tle->resorigtbl);
+				}
+
+				return true;
+			}
+
 		case T_FunctionScan:
 		case T_ValuesScan:
 		case T_CteScan:
@@ -619,6 +636,31 @@ IndexSupportsBackwardScan(Oid indexid)
 
 	pfree(amroutine);
 	ReleaseSysCache(ht_idxrel);
+
+	return result;
+}
+
+/*
+ * An SeqScan, TidScan or TidRangeScan node supports backward scan only if the
+ * table's AM does.
+ */
+static bool
+TableSupportsBackwardScan(Oid tableid)
+{
+	bool		result;
+	HeapTuple	ht_tabrel;
+	Form_pg_class tabrelrec;
+
+	/* Fetch the pg_class tuple of the index relation */
+	ht_tabrel = SearchSysCache1(RELOID, ObjectIdGetDatum(tableid));
+	if (!HeapTupleIsValid(ht_tabrel))
+		elog(ERROR, "cache lookup failed for relation %u", tableid);
+	tabrelrec = (Form_pg_class) GETSTRUCT(ht_tabrel);
+
+	/* Currently only heap AM supports backward scan */
+	result = tabrelrec->relam == HEAP_TABLE_AM_OID;
+
+	ReleaseSysCache(ht_tabrel);
 
 	return result;
 }
