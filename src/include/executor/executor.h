@@ -105,7 +105,7 @@ extern void ExecReScan(PlanState *node);
 extern void ExecMarkPos(PlanState *node);
 extern void ExecRestrPos(PlanState *node);
 extern bool ExecSupportsMarkRestore(struct Path *pathnode);
-extern bool ExecSupportsBackwardScan(Plan *node);
+extern bool ExecSupportsBackwardScan(Plan *node, List *rtable);
 extern bool ExecMaterializesOutput(NodeTag plantype);
 
 /*
