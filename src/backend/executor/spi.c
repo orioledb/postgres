@@ -1697,7 +1697,8 @@ SPI_cursor_open_internal(const char *name, SPIPlanPtr plan,
 		if (list_length(stmt_list) == 1 &&
 			linitial_node(PlannedStmt, stmt_list)->commandType != CMD_UTILITY &&
 			linitial_node(PlannedStmt, stmt_list)->rowMarks == NIL &&
-			ExecSupportsBackwardScan(linitial_node(PlannedStmt, stmt_list)->planTree))
+			ExecSupportsBackwardScan(linitial_node(PlannedStmt, stmt_list)->planTree,
+									 linitial_node(PlannedStmt, stmt_list)->rtable))
 			portal->cursorOptions |= CURSOR_OPT_SCROLL;
 		else
 			portal->cursorOptions |= CURSOR_OPT_NO_SCROLL;
