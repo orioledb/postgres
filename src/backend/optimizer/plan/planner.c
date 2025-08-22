@@ -459,7 +459,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	 */
 	if (cursorOptions & CURSOR_OPT_SCROLL)
 	{
-		if (!ExecSupportsBackwardScan(top_plan))
+		if (!ExecSupportsBackwardScan(top_plan, root->parse->rtable))
 			top_plan = materialize_finished_plan(top_plan);
 	}
 
