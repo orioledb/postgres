@@ -144,7 +144,7 @@ PerformCursorOpen(ParseState *pstate, DeclareCursorStmt *cstmt, ParamListInfo pa
 	if (!(portal->cursorOptions & (CURSOR_OPT_SCROLL | CURSOR_OPT_NO_SCROLL)))
 	{
 		if (plan->rowMarks == NIL &&
-			ExecSupportsBackwardScan(plan->planTree))
+			ExecSupportsBackwardScan(plan->planTree, plan->rtable))
 			portal->cursorOptions |= CURSOR_OPT_SCROLL;
 		else
 			portal->cursorOptions |= CURSOR_OPT_NO_SCROLL;
