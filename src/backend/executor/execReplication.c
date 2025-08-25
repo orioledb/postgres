@@ -568,6 +568,8 @@ FindConflictTuple(ResultRelInfo *resultRelInfo, EState *estate,
 {
 	Relation	rel = resultRelInfo->ri_RelationDesc;
 	ItemPointerData conflictTid;
+	Datum		conflictRowid = 0;
+	Datum		conflictTidOutDatum;
 	TM_FailureData tmfd;
 	TM_Result	res;
 
@@ -580,8 +582,16 @@ FindConflictTuple(ResultRelInfo *resultRelInfo, EState *estate,
 	BuildConflictIndexInfo(resultRelInfo, conflictindex);
 
 retry:
+	if (table_get_row_ref_type(rel) == ROW_REF_ROWID)
+		conflictTidOutDatum = PointerGetDatum(&conflictRowid);
+	else
+	{
+		ItemPointerSetInvalid(&conflictTid);
+		conflictTidOutDatum = ItemPointerGetDatum(&conflictTid);
+	}
 	if (ExecCheckIndexConstraints(resultRelInfo, slot, estate,
-								  &conflictTid, &slot->tts_tid,
+								  conflictTidOutDatum,
+								  slot_get_tupleid(rel, slot),
 								  list_make1_oid(conflictindex)))
 	{
 		if (*conflictslot)
@@ -595,7 +605,9 @@ retry:
 
 	PushActiveSnapshot(GetLatestSnapshot());
 
-	res = table_tuple_lock(rel, PointerGetDatum(&conflictTid),
+	res = table_tuple_lock(rel,
+						   table_get_row_ref_type(rel) == ROW_REF_ROWID ?
+						   conflictRowid : conflictTidOutDatum,
 						   GetActiveSnapshot(),
 						   *conflictslot,
 						   GetCurrentCommandId(false),

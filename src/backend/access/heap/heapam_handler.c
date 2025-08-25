@@ -396,18 +396,32 @@ heapam_tuple_insert_with_arbiter(ResultRelInfo *resultRelInfo,
 	Relation	rel = resultRelInfo->ri_RelationDesc;
 	uint32		specToken;
 	ItemPointerData conflictTid;
+	Datum		conflictTidDatum;
 	bool		specConflict;
 	List	   *recheckIndexes = NIL;
+
+	ItemPointerSetInvalid(&conflictTid);
 
 	while (true)
 	{
 		ItemPointerData invalidItemPtr;
+		Datum		invalidItemPtrDatum;
 
 		ItemPointerSetInvalid(&invalidItemPtr);
+		invalidItemPtrDatum = ItemPointerGetDatum(&invalidItemPtr);
 		specConflict = false;
 
+		if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
+		{
+			Assert(false);
+		}
+		else
+		{
+			conflictTidDatum = ItemPointerGetDatum(&conflictTid);
+		}
+
 		if (!ExecCheckIndexConstraints(resultRelInfo, slot, estate,
-									   &conflictTid, &invalidItemPtr,
+									   conflictTidDatum, invalidItemPtrDatum,
 									   arbiterIndexes))
 		{
 			if (lockedSlot)
@@ -2317,7 +2331,7 @@ heapam_index_validate_scan(Relation heapRelation,
 			index_insert(indexRelation,
 						 values,
 						 isnull,
-						 &rootTuple,
+						 ItemPointerGetDatum(&rootTuple),
 						 heapRelation,
 						 indexInfo->ii_Unique ?
 						 UNIQUE_CHECK_YES : UNIQUE_CHECK_NO,
