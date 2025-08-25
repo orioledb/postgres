@@ -129,12 +129,12 @@ typedef enum
 
 static bool check_exclusion_or_unique_constraint(Relation heap, Relation index,
 												 IndexInfo *indexInfo,
-												 ItemPointer tupleid,
+												 Datum tupleidDatum,
 												 const Datum *values, const bool *isnull,
 												 EState *estate, bool newIndex,
 												 CEOUC_WAIT_MODE waitMode,
 												 bool violationOK,
-												 ItemPointer conflictTid);
+												 Datum *conflictTidDatum);
 
 static bool index_recheck_constraint(Relation index, const Oid *constr_procs,
 									 const Datum *existing_values, const bool *existing_isnull,
@@ -325,19 +325,18 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 	ExprContext *econtext;
 	Datum		values[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
-	ItemPointer	tupleid;
-
+	Datum		tupleidDatum;
 
 	if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
 	{
 		bool	isnull;
-		tupleid = DatumGetItemPointer(slot_getsysattr(slot, RowIdAttributeNumber, &isnull));
+		tupleidDatum = slot_getsysattr(slot, RowIdAttributeNumber, &isnull);
 		Assert(!isnull);
 	}
 	else
 	{
 		Assert(ItemPointerIsValid(&slot->tts_tid));
-		tupleid = &slot->tts_tid;
+		tupleidDatum = ItemPointerGetDatum(&slot->tts_tid);
 	}
 
 	/*
@@ -461,7 +460,7 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 			index_insert(indexRelation, /* index relation */
 						 values,	/* array of index Datums */
 						 isnull,	/* null flags */
-						 tupleid,	/* tid of heap tuple */
+						 tupleidDatum,	/* tid of heap tuple */
 						 heapRelation,	/* heap relation */
 						 checkUnique,	/* type of uniqueness check to do */
 						 indexUnchanged,	/* UPDATE without logical change? */
@@ -505,7 +504,7 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 			satisfiesConstraint =
 				check_exclusion_or_unique_constraint(heapRelation,
 													 indexRelation, indexInfo,
-													 tupleid, values, isnull,
+													 tupleidDatum, values, isnull,
 													 estate, false,
 													 waitMode, violationOK, NULL);
 		}
@@ -548,18 +547,18 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 	ExprContext *econtext;
 	Datum		values[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
-	ItemPointer	tupleid;
+	Datum		tupleidDatum;
 
 	if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
 	{
 		bool	isnull;
-		tupleid = DatumGetItemPointer(slot_getsysattr(slot, RowIdAttributeNumber, &isnull));
+		tupleidDatum = slot_getsysattr(slot, RowIdAttributeNumber, &isnull);
 		Assert(!isnull);
 	}
 	else
 	{
 		Assert(ItemPointerIsValid(&slot->tts_tid));
-		tupleid = &slot->tts_tid;
+		tupleidDatum = ItemPointerGetDatum(&slot->tts_tid);
 	}
 
 	/*
@@ -677,19 +676,19 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 		{
 			Datum		valuesOld[INDEX_MAX_KEYS];
 			bool		isnullOld[INDEX_MAX_KEYS];
-			Datum		oldTupleid;
+			Datum		oldTupleidDatum;
 			bool		old_valid = true;
 
 			if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
 			{
 				bool	isnull;
-				oldTupleid = slot_getsysattr(oldSlot, RowIdAttributeNumber, &isnull);
+				oldTupleidDatum = slot_getsysattr(oldSlot, RowIdAttributeNumber, &isnull);
 				Assert(!isnull);
 			}
 			else
 			{
 				Assert(ItemPointerIsValid(&oldSlot->tts_tid));
-				oldTupleid = PointerGetDatum(&oldSlot->tts_tid);
+				oldTupleidDatum = ItemPointerGetDatum(&oldSlot->tts_tid);
 			}
 
 			econtext = GetPerTupleExprContext(estate);
@@ -728,10 +727,10 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 							 old_valid,
 							 values,	/* array of index Datums */
 							 isnull,	/* null flags */
-							 ItemPointerGetDatum(tupleid),	/* tid of heap tuple */
+							 tupleidDatum,	/* tid of heap tuple */
 							 valuesOld,
 							 isnullOld,
-							 oldTupleid,
+							 oldTupleidDatum,
 							 heapRelation,	/* heap relation */
 							 checkUnique,	/* type of uniqueness check to do */
 							 indexInfo);	/* index AM may need this */
@@ -754,7 +753,7 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 				index_insert(indexRelation, /* index relation */
 							 values,	/* array of index Datums */
 							 isnull,	/* null flags */
-							 tupleid,	/* tid of heap tuple */
+							 tupleidDatum,	/* tid of heap tuple */
 							 heapRelation,	/* heap relation */
 							 checkUnique,	/* type of uniqueness check to do */
 							 indexUnchanged,	/* UPDATE without logical change? */
@@ -799,7 +798,7 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 			satisfiesConstraint =
 				check_exclusion_or_unique_constraint(heapRelation,
 													 indexRelation, indexInfo,
-													 tupleid, values, isnull,
+													 tupleidDatum, values, isnull,
 													 estate, false,
 													 waitMode, violationOK, NULL);
 		}
@@ -952,8 +951,8 @@ ExecDeleteIndexTuples(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
  */
 bool
 ExecCheckIndexConstraints(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
-						  EState *estate, ItemPointer conflictTid,
-						  ItemPointer tupleid, List *arbiterIndexes)
+						  EState *estate, Datum conflictTidDatum,
+						  Datum tupleidDatum, List *arbiterIndexes)
 {
 	int			i;
 	int			numIndices;
@@ -963,11 +962,16 @@ ExecCheckIndexConstraints(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 	ExprContext *econtext;
 	Datum		values[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
-	ItemPointerData invalidItemPtr;
 	bool		checkedIndex = false;
 
-	ItemPointerSetInvalid(conflictTid);
-	ItemPointerSetInvalid(&invalidItemPtr);
+	if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
+	{
+		Assert(false);
+	}
+	else
+	{
+		ItemPointerSetInvalid(DatumGetItemPointer(conflictTidDatum));
+	}
 
 	/*
 	 * Get information from the result relation info structure.
@@ -1054,12 +1058,19 @@ ExecCheckIndexConstraints(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 					   values,
 					   isnull);
 
-		satisfiesConstraint =
-			check_exclusion_or_unique_constraint(heapRelation, indexRelation,
-												 indexInfo, tupleid,
-												 values, isnull, estate, false,
-												 CEOUC_WAIT, true,
-												 conflictTid);
+		if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
+		{
+			Assert(false);
+		}
+		else
+		{
+			satisfiesConstraint =
+				check_exclusion_or_unique_constraint(heapRelation, indexRelation,
+													indexInfo, tupleidDatum,
+													values, isnull, estate, false,
+													CEOUC_WAIT, true,
+													&conflictTidDatum);
+		}
 		if (!satisfiesConstraint)
 			return false;
 	}
@@ -1115,12 +1126,12 @@ ExecCheckIndexConstraints(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 static bool
 check_exclusion_or_unique_constraint(Relation heap, Relation index,
 									 IndexInfo *indexInfo,
-									 ItemPointer tupleid,
+									 Datum tupleidDatum,
 									 const Datum *values, const bool *isnull,
 									 EState *estate, bool newIndex,
 									 CEOUC_WAIT_MODE waitMode,
 									 bool violationOK,
-									 ItemPointer conflictTid)
+									 Datum *conflictTidDatum)
 {
 	Oid		   *constr_procs;
 	uint16	   *constr_strats;
@@ -1249,14 +1260,21 @@ retry:
 		/*
 		 * Ignore the entry for the tuple we're trying to check.
 		 */
-		if (ItemPointerIsValid(tupleid) &&
-			ItemPointerEquals(tupleid, &existing_slot->tts_tid))
+		if (table_get_row_ref_type(heap) != ROW_REF_ROWID)
 		{
-			if (found_self)		/* should not happen */
-				elog(ERROR, "found self tuple multiple times in index \"%s\"",
-					 RelationGetRelationName(index));
-			found_self = true;
-			continue;
+			ItemPointer tupleid = DatumGetItemPointer(tupleidDatum);
+
+			if (ItemPointerIsValid(tupleid) &&
+				ItemPointerEquals(tupleid, &existing_slot->tts_tid))
+			{
+				if (found_self)		/* should not happen */
+					elog(ERROR, "found self tuple multiple times in index \"%s\"",
+						RelationGetRelationName(index));
+				found_self = true;
+				continue;
+			}
+		} else {
+			/* TODO: Add same thing for rowid if possible */
 		}
 
 		/*
@@ -1316,8 +1334,20 @@ retry:
 		if (violationOK)
 		{
 			conflict = true;
-			if (conflictTid)
-				*conflictTid = existing_slot->tts_tid;
+			if (conflictTidDatum)
+			{
+				if (table_get_row_ref_type(heap) == ROW_REF_ROWID)
+				{
+					bool	isnull;
+					*conflictTidDatum = slot_getsysattr(existing_slot, RowIdAttributeNumber, &isnull);
+					Assert(!isnull);
+				}
+				else
+				{
+					ItemPointer conflictTid = DatumGetItemPointer(*conflictTidDatum);
+					*conflictTid = existing_slot->tts_tid;
+				}
+			}
 			break;
 		}
 
@@ -1374,11 +1404,11 @@ retry:
 void
 check_exclusion_constraint(Relation heap, Relation index,
 						   IndexInfo *indexInfo,
-						   ItemPointer tupleid,
+						   Datum tupleidDatum,
 						   const Datum *values, const bool *isnull,
 						   EState *estate, bool newIndex)
 {
-	(void) check_exclusion_or_unique_constraint(heap, index, indexInfo, tupleid,
+	(void) check_exclusion_or_unique_constraint(heap, index, indexInfo, tupleidDatum,
 												values, isnull,
 												estate, newIndex,
 												CEOUC_WAIT, false, NULL);
