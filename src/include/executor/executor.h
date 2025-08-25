@@ -649,13 +649,31 @@ extern void ExecDeleteIndexTuples(ResultRelInfo *resultRelInfo,
 								  EState *estate);
 extern bool ExecCheckIndexConstraints(ResultRelInfo *resultRelInfo,
 									  TupleTableSlot *slot,
-									  EState *estate, ItemPointer conflictTid,
+									  EState *estate, Datum conflictTidDatum,
 									  List *arbiterIndexes);
 extern void check_exclusion_constraint(Relation heap, Relation index,
 									   IndexInfo *indexInfo,
-									   ItemPointer tupleid,
+									   Datum tupleidDatum,
 									   const Datum *values, const bool *isnull,
 									   EState *estate, bool newIndex);
+
+/* waitMode argument to check_exclusion_or_unique_constraint() */
+typedef enum
+{
+	CEOUC_WAIT,
+	CEOUC_NOWAIT,
+	CEOUC_LIVELOCK_PREVENTING_WAIT,
+} CEOUC_WAIT_MODE;
+
+extern bool
+check_exclusion_or_unique_constraint(Relation heap, Relation index,
+									 IndexInfo *indexInfo,
+									 Datum tupleidDatum,
+									 const Datum *values, const bool *isnull,
+									 EState *estate, bool newIndex,
+									 CEOUC_WAIT_MODE waitMode,
+									 bool violationOK,
+									 Datum *conflictTidDatum);
 
 /*
  * prototypes from functions in execReplication.c
