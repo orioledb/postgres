@@ -753,12 +753,12 @@ extern void ExecDeleteIndexTuples(ResultRelInfo *resultRelInfo,
 								  EState *estate);
 extern bool ExecCheckIndexConstraints(ResultRelInfo *resultRelInfo,
 									  TupleTableSlot *slot,
-									  EState *estate, ItemPointer conflictTid,
-									  ItemPointer tupleid,
+									  EState *estate, Datum conflictTidDatum,
+									  Datum tupleidDatum,
 									  List *arbiterIndexes);
 extern void check_exclusion_constraint(Relation heap, Relation index,
 									   IndexInfo *indexInfo,
-									   ItemPointer tupleid,
+									   Datum tupleidDatum,
 									   const Datum *values, const bool *isnull,
 									   EState *estate, bool newIndex);
 
