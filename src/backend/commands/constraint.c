@@ -40,8 +40,8 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 {
 	TriggerData *trigdata = (TriggerData *) fcinfo->context;
 	const char *funcname = "unique_key_recheck";
-	ItemPointerData checktid;
-	ItemPointerData tmptid;
+	Datum checktidDatum;
+	Datum tmptidDatum;
 	Relation	indexRel;
 	IndexInfo  *indexInfo;
 	EState	   *estate;
@@ -72,16 +72,38 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 	 * Get the new data that was inserted/updated.
 	 */
 	if (TRIGGER_FIRED_BY_INSERT(trigdata->tg_event))
-		checktid = trigdata->tg_trigslot->tts_tid;
+	{
+		if (table_get_row_ref_type(trigdata->tg_relation) == ROW_REF_ROWID)
+		{
+			bool	isnull;
+			checktidDatum = slot_getsysattr(trigdata->tg_trigslot, RowIdAttributeNumber, &isnull);
+			Assert(!isnull);
+		}
+		else
+		{
+			checktidDatum = ItemPointerGetDatum(&trigdata->tg_trigslot->tts_tid);
+		}
+	}
 	else if (TRIGGER_FIRED_BY_UPDATE(trigdata->tg_event))
-		checktid = trigdata->tg_newslot->tts_tid;
+	{
+		if (table_get_row_ref_type(trigdata->tg_relation) == ROW_REF_ROWID)
+		{
+			bool	isnull;
+			checktidDatum = slot_getsysattr(trigdata->tg_trigslot, RowIdAttributeNumber, &isnull);
+			Assert(!isnull);
+		}
+		else
+		{
+			checktidDatum = ItemPointerGetDatum(&trigdata->tg_trigslot->tts_tid);
+		}
+	}
 	else
 	{
 		ereport(ERROR,
 				(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
 				 errmsg("function \"%s\" must be fired for INSERT or UPDATE",
 						funcname)));
-		ItemPointerSetInvalid(&checktid);	/* keep compiler quiet */
+		checktidDatum = 0;
 	}
 
 	slot = table_slot_create(trigdata->tg_relation, NULL);
@@ -104,12 +126,12 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 	 * it's possible the index entry has also been marked dead, and even
 	 * removed.
 	 */
-	tmptid = checktid;
+	tmptidDatum = checktidDatum;
 	{
 		IndexFetchTableData *scan = table_index_fetch_begin(trigdata->tg_relation);
 		bool		call_again = false;
 
-		if (!table_index_fetch_tuple(scan, PointerGetDatum(&tmptid), SnapshotSelf, slot,
+		if (!table_index_fetch_tuple(scan, tmptidDatum, SnapshotSelf, slot,
 									 &call_again, NULL))
 		{
 			/*
@@ -171,7 +193,7 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 		 * the row is now dead, because that is the TID the index will know
 		 * about.
 		 */
-		index_insert(indexRel, values, isnull, &checktid,
+		index_insert(indexRel, values, isnull, checktidDatum,
 					 trigdata->tg_relation, UNIQUE_CHECK_EXISTING,
 					 false, indexInfo);
 
@@ -187,7 +209,7 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 		 * the child is a conflict.
 		 */
 		check_exclusion_constraint(trigdata->tg_relation, indexRel, indexInfo,
-								   &tmptid, values, isnull,
+								   tmptidDatum, values, isnull,
 								   estate, false);
 	}
 
