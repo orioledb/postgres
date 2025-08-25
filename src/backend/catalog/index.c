@@ -3222,6 +3222,8 @@ IndexCheckExclusion(Relation heapRelation,
 
 	while (table_scan_getnextslot(scan, ForwardScanDirection, slot))
 	{
+		Datum		tupleidDatum;
+
 		CHECK_FOR_INTERRUPTS();
 
 		/*
@@ -3242,12 +3244,25 @@ IndexCheckExclusion(Relation heapRelation,
 					   values,
 					   isnull);
 
+		if (table_get_row_ref_type(heapRelation) == ROW_REF_ROWID)
+		{
+			bool	isnull;
+			tupleidDatum = slot_getsysattr(slot, RowIdAttributeNumber, &isnull);
+			Assert(!isnull);
+		}
+		else
+		{
+			Assert(ItemPointerIsValid(&slot->tts_tid));
+			tupleidDatum = PointerGetDatum(&slot->tts_tid);
+		}
+
 		/*
 		 * Check that this tuple has no conflicts.
 		 */
 		check_exclusion_constraint(heapRelation,
 								   indexRelation, indexInfo,
-								   &(slot->tts_tid), values, isnull,
+								   tupleidDatum,
+								   values, isnull,
 								   estate, true);
 
 		MemoryContextReset(econtext->ecxt_per_tuple_memory);
