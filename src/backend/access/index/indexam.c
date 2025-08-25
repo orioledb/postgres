@@ -213,7 +213,7 @@ bool
 index_insert(Relation indexRelation,
 			 Datum *values,
 			 bool *isnull,
-			 ItemPointer tupleid,
+			 Datum tupleidDatum,
 			 Relation heapRelation,
 			 IndexUniqueCheck checkUnique,
 			 bool indexUnchanged,
@@ -234,7 +234,7 @@ index_insert(Relation indexRelation,
 	{
 		/* compatibility method for extension AM's not aware of aminsertextended */
 		return indexRelation->rd_indam->aminsert(indexRelation, values, isnull,
-											 tupleid, heapRelation,
+											 DatumGetItemPointer(tupleidDatum), heapRelation,
 											 checkUnique, indexUnchanged,
 											 indexInfo);
 	}
@@ -242,7 +242,7 @@ index_insert(Relation indexRelation,
 	{
 		/* index insert method for internal AM's and Orioledb that are aware of aminsertextended */
 		return indexRelation->rd_indam->aminsertextended(indexRelation, values, isnull,
-											 ItemPointerGetDatum(tupleid), heapRelation,
+											 tupleidDatum, heapRelation,
 											 checkUnique, indexUnchanged,
 											 indexInfo);
 	}

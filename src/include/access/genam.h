@@ -167,7 +167,7 @@ extern void index_close(Relation relation, LOCKMODE lockmode);
 
 extern bool index_insert(Relation indexRelation,
 						 Datum *values, bool *isnull,
-						 ItemPointer tupleid,
+						 Datum tupleidDatum,
 						 Relation heapRelation,
 						 IndexUniqueCheck checkUnique,
 						 bool indexUnchanged,
