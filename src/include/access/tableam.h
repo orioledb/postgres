@@ -309,6 +309,8 @@ typedef struct TableAmRoutine
 	/* this must be set to T_TableAmRoutine */
 	NodeTag		type;
 
+	/* does AM support backward scanning? */
+	bool		amcanbackward;
 
 	/* ------------------------------------------------------------------------
 	 * Slot related callbacks.
