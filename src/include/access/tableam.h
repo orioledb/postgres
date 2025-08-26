@@ -327,6 +327,7 @@ typedef struct TableAmRoutine
 	const TupleTableSlotOps *(*slot_callbacks) (Relation rel);
 
 	RowRefType	(*get_row_ref_type) (Relation rel);
+	bool		(*row_ref_equals)(Relation rel, Datum tupleidDatum1, Datum tupleidDatum2);
 
 	void		(*free_rd_amcache) (Relation rel);
 
@@ -2164,6 +2165,19 @@ table_get_row_ref_type(Relation rel)
 		return rel->rd_tableam->get_row_ref_type(rel);
 	else
 		return ROW_REF_TID;
+}
+
+static inline bool
+table_row_ref_equals(Relation rel, Datum tupleidDatum1, Datum tupleidDatum2)
+{
+	if (rel->rd_tableam)
+		return rel->rd_tableam->row_ref_equals(rel, tupleidDatum1, tupleidDatum2);
+	else
+	{
+		ItemPointer tupleid1 = DatumGetItemPointer(tupleidDatum1);
+		ItemPointer tupleid2 = DatumGetItemPointer(tupleidDatum2);
+		return ItemPointerEquals(tupleid1, tupleid2);
+	}
 }
 
 static inline void
