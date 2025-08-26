@@ -83,6 +83,14 @@ heapam_get_row_ref_type(Relation rel)
 	return ROW_REF_TID;
 }
 
+static bool
+heapam_row_ref_equals(Relation rel, Datum tupleidDatum1, Datum tupleidDatum2)
+{
+	ItemPointer tupleid1 = DatumGetItemPointer(tupleidDatum1);
+	ItemPointer tupleid2 = DatumGetItemPointer(tupleidDatum2);
+	return ItemPointerEquals(tupleid1, tupleid2);
+}
+
 static void
 heapam_free_rd_amcache(Relation rel)
 {
@@ -2979,6 +2987,7 @@ static const TableAmRoutine heapam_methods = {
 
 	.slot_callbacks = heapam_slot_callbacks,
 	.get_row_ref_type = heapam_get_row_ref_type,
+	.row_ref_equals = heapam_row_ref_equals,
 	.free_rd_amcache = heapam_free_rd_amcache,
 
 	.scan_begin = heap_beginscan,
