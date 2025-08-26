@@ -14,7 +14,9 @@
 
 #include "access/amapi.h"
 #include "access/htup_details.h"
+#include "access/tableam.h"
 #include "executor/execdebug.h"
+#include "catalog/pg_class.h"
 #include "executor/nodeAgg.h"
 #include "executor/nodeAppend.h"
 #include "executor/nodeBitmapAnd.h"
@@ -61,10 +63,12 @@
 #include "nodes/extensible.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/pathnodes.h"
+#include "parser/parsetree.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
 
 static bool IndexSupportsBackwardScan(Oid indexid);
+static bool TableSupportsBackwardScan(Oid tableid);
 
 
 /*
@@ -509,7 +513,7 @@ ExecSupportsMarkRestore(Path *pathnode)
  * children do.  Therefore, this routine must be passed a complete plan tree.
  */
 bool
-ExecSupportsBackwardScan(Plan *node)
+ExecSupportsBackwardScan(Plan *node, List *rtable)
 {
 	if (node == NULL)
 		return false;
@@ -526,7 +530,7 @@ ExecSupportsBackwardScan(Plan *node)
 	{
 		case T_Result:
 			if (outerPlan(node) != NULL)
-				return ExecSupportsBackwardScan(outerPlan(node));
+				return ExecSupportsBackwardScan(outerPlan(node), rtable);
 			else
 				return false;
 
@@ -540,7 +544,7 @@ ExecSupportsBackwardScan(Plan *node)
 
 				foreach(l, ((Append *) node)->appendplans)
 				{
-					if (!ExecSupportsBackwardScan((Plan *) lfirst(l)))
+					if (!ExecSupportsBackwardScan((Plan *) lfirst(l), rtable))
 						return false;
 				}
 				/* need not check tlist because Append doesn't evaluate it */
@@ -561,7 +565,7 @@ ExecSupportsBackwardScan(Plan *node)
 			return IndexSupportsBackwardScan(((IndexOnlyScan *) node)->indexid);
 
 		case T_SubqueryScan:
-			return ExecSupportsBackwardScan(((SubqueryScan *) node)->subplan);
+			return ExecSupportsBackwardScan(((SubqueryScan *) node)->subplan, rtable);
 
 		case T_CustomScan:
 			if (((CustomScan *) node)->flags & CUSTOMPATH_SUPPORT_BACKWARD_SCAN)
@@ -571,6 +575,16 @@ ExecSupportsBackwardScan(Plan *node)
 		case T_SeqScan:
 		case T_TidScan:
 		case T_TidRangeScan:
+			{
+				RangeTblEntry *rte;
+
+				Assert(((Scan *) node)->scanrelid > 0 &&
+					   ((Scan *) node)->scanrelid <= list_length(rtable));
+
+				rte = rt_fetch(((Scan *) node)->scanrelid, rtable);
+				return TableSupportsBackwardScan(rte->relid);
+			}
+
 		case T_FunctionScan:
 		case T_ValuesScan:
 		case T_CteScan:
@@ -589,7 +603,7 @@ ExecSupportsBackwardScan(Plan *node)
 
 		case T_LockRows:
 		case T_Limit:
-			return ExecSupportsBackwardScan(outerPlan(node));
+			return ExecSupportsBackwardScan(outerPlan(node), rtable);
 
 		default:
 			return false;
@@ -621,6 +635,34 @@ IndexSupportsBackwardScan(Oid indexid)
 
 	pfree(amroutine);
 	ReleaseSysCache(ht_idxrel);
+
+	return result;
+}
+
+/*
+ * An SeqScan, TidScan or TidRangeScan node supports backward scan only if the
+ * table's AM does.
+ */
+static bool
+TableSupportsBackwardScan(Oid tableid)
+{
+	bool		result;
+	HeapTuple	ht_tabrel;
+	Form_pg_class tabrelrec;
+	const TableAmRoutine *amroutine;
+
+	/* Fetch the pg_class tuple of the index relation */
+	ht_tabrel = SearchSysCache1(RELOID, ObjectIdGetDatum(tableid));
+	if (!HeapTupleIsValid(ht_tabrel))
+		elog(ERROR, "cache lookup failed for relation %u", tableid);
+	tabrelrec = (Form_pg_class) GETSTRUCT(ht_tabrel);
+
+	/* Fetch the table AM's API struct */
+	amroutine = GetTableAmRoutineByAmOid(tabrelrec->relam);
+
+	result = amroutine->amcanbackward;
+
+	ReleaseSysCache(ht_tabrel);
 
 	return result;
 }
