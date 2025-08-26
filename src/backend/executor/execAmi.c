@@ -15,7 +15,6 @@
 #include "access/amapi.h"
 #include "access/htup_details.h"
 #include "access/tableam.h"
-#include "catalog/pg_am_d.h"
 #include "catalog/pg_class.h"
 #include "executor/nodeAgg.h"
 #include "executor/nodeAppend.h"
