@@ -1212,7 +1212,26 @@ retry:
 				continue;
 			}
 		} else {
-			/* TODO: Add same thing for rowid if possible */
+			Assert(tupleidDatum > 0);
+			Pointer rowid = DatumGetPointer(tupleidDatum);
+
+			if (PointerIsValid(rowid))
+			{
+				bool	isnull;
+				Datum existing_rowid;
+
+				existing_rowid = slot_getsysattr(existing_slot, RowIdAttributeNumber, &isnull);
+				Assert(!isnull);
+
+				if (table_row_ref_equals(heap, tupleidDatum, existing_rowid))
+				{
+					if (found_self)		/* should not happen */
+						elog(ERROR, "found self tuple multiple times in index \"%s\"",
+							RelationGetRelationName(index));
+					found_self = true;
+					continue;
+				}
+			}
 		}
 
 		/*
