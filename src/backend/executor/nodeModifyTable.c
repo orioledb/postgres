@@ -3714,7 +3714,9 @@ ExecModifyTable(PlanState *pstate)
 					if (isNull)
 						elog(ERROR, "rowid is NULL");
 
-					tupleid = datumCopy(datum, false, -1);
+					tupleid = PointerGetDatum(PG_DETOAST_DATUM(datum));
+					if (tupleid == datum)
+						tupleid = datumCopy(datum, false, -1);
 				}
 			}
 
