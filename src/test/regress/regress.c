@@ -605,10 +605,6 @@ make_tuple_indirect(PG_FUNCTION_ARGS)
 		if (VARATT_IS_EXTERNAL_INDIRECT(attr))
 			continue;
 
-		/* orioledb toast values cannot have indirect pointers */
-		if (VARATT_IS_EXTERNAL_ORIOLEDB(attr))
-			continue;
-
 		/* copy datum, so it still lives later */
 		if (VARATT_IS_EXTERNAL_ONDISK(attr) || VARATT_IS_EXTERNAL_ORIOLEDB(attr))
 			attr = detoast_external_attr(attr);

@@ -91,7 +91,8 @@ test: subscription
 # Another group of parallel tests
 # select_views depends on create_view
 # ----------
-test: select_views portals_p2 dependency guc bitmapops xmlmap functional_deps advisory_lock indirect_toast
+# indirect_toast should not be enabled for oriole as it breaks the engine constraints with its function make_tuple_indirect
+test: select_views portals_p2 dependency guc bitmapops xmlmap functional_deps advisory_lock 
 
 # ----------
 # Another group of parallel tests (JSON related)
