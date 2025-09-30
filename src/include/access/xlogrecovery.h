@@ -48,6 +48,8 @@ typedef enum RecoveryPauseState
 	RECOVERY_PAUSED				/* recovery is paused */
 } RecoveryPauseState;
 
+typedef XLogRecPtr (*GetReplayXlogPtrHookType) (void);
+
 /* User-settable GUC parameters */
 extern PGDLLIMPORT bool recoveryTargetInclusive;
 extern PGDLLIMPORT int recoveryTargetAction;
@@ -75,6 +77,9 @@ extern PGDLLIMPORT bool reachedConsistency;
 
 /* Are we currently in standby mode? */
 extern PGDLLIMPORT bool StandbyMode;
+
+/* Hook for extensions to tune replay xlog pointer */
+extern PGDLLIMPORT GetReplayXlogPtrHookType GetReplayXlogPtrHook;
 
 extern Size XLogRecoveryShmemSize(void);
 extern void XLogRecoveryShmemInit(void);
@@ -137,6 +142,7 @@ extern void RemovePromoteSignalFiles(void);
 
 extern bool HotStandbyActive(void);
 extern XLogRecPtr GetXLogReplayRecPtr(TimeLineID *replayTLI);
+extern XLogRecPtr GetEffectiveXlogReplayRecPtr(void);
 extern RecoveryPauseState GetRecoveryPauseState(void);
 extern void SetRecoveryPause(bool recoveryPause);
 extern void GetXLogReceiptTime(TimestampTz *rtime, bool *fromStream);
