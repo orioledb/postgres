@@ -1127,7 +1127,7 @@ XLogWalRcvSendReply(bool force, bool requestReply)
 	/* Construct a new message */
 	writePtr = LogstreamResult.Write;
 	flushPtr = LogstreamResult.Flush;
-	applyPtr = GetXLogReplayRecPtr(NULL);
+	applyPtr = GetEffectiveXlogReplayRecPtr();
 
 	resetStringInfo(&reply_message);
 	pq_sendbyte(&reply_message, 'r');
