@@ -358,7 +358,7 @@ pg_last_wal_replay_lsn(PG_FUNCTION_ARGS)
 {
 	XLogRecPtr	recptr;
 
-	recptr = GetXLogReplayRecPtr(NULL);
+	recptr = GetEffectiveXlogReplayRecPtr();
 
 	if (recptr == 0)
 		PG_RETURN_NULL();
