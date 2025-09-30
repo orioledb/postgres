@@ -4575,6 +4575,28 @@ GetXLogReplayRecPtr(TimeLineID *replayTLI)
 	return recptr;
 }
 
+GetReplayXlogPtrHookType GetReplayXlogPtrHook = NULL;
+
+/*
+ * Get effective latest redo apply position.
+ *
+ * Can be tuned by extensions processing WAL records asyncronously.
+ */
+XLogRecPtr
+GetEffectiveXlogReplayRecPtr(void)
+{
+	XLogRecPtr	recptr = InvalidXLogRecPtr;
+
+	SpinLockAcquire(&XLogRecoveryCtl->info_lck);
+	if (GetReplayXlogPtrHook)
+		recptr = GetReplayXlogPtrHook();
+	if (recptr == InvalidXLogRecPtr)
+		recptr = XLogRecoveryCtl->lastReplayedEndRecPtr;
+	SpinLockRelease(&XLogRecoveryCtl->info_lck);
+
+	return recptr;
+}
+
 
 /*
  * Get position of last applied, or the record being applied.
