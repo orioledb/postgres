@@ -131,6 +131,7 @@ typedef struct
 typedef struct CSNSnapshotData
 {
 	uint64			xmin;
+	uint64			nextXid;
 	CommitSeqNo		snapshotcsn;
 	XLogRecPtr		xlogptr;
 } CSNSnapshotData;
