@@ -13,6 +13,7 @@
 #define SNAPBUILD_H
 
 #include "access/xlogdefs.h"
+#include "storage/standbydefs.h"
 #include "utils/snapmgr.h"
 
 typedef enum
@@ -57,6 +58,10 @@ struct ReorderBuffer;
 struct xl_heap_new_cid;
 struct xl_running_xacts;
 
+typedef void (*WaitSnapshotHookType) (RunningTransactionsExtension *extension);
+
+extern PGDLLIMPORT WaitSnapshotHookType waitSnapshotHook;
+
 extern void CheckPointSnapBuild(void);
 
 extern SnapBuild *AllocateSnapshotBuilder(struct ReorderBuffer *reorder,
@@ -92,8 +97,7 @@ extern void SnapBuildProcessNewCid(SnapBuild *builder, TransactionId xid,
 extern void SnapBuildProcessRunningXacts(SnapBuild *builder, XLogRecPtr lsn,
 										 struct xl_running_xacts *running);
 extern void SnapBuildSerializationPoint(SnapBuild *builder, XLogRecPtr lsn);
-extern void SnapBuildUpdateCSNSnaphot(SnapBuild *builder,
-									  CSNSnapshotData *csnSnapshotData);
+extern CSNSnapshotData *SnapBuildGetCSNSnaphot(SnapBuild *builder);
 
 extern bool SnapBuildSnapshotExists(XLogRecPtr lsn);
 

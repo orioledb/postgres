@@ -1334,8 +1334,9 @@ SnapBuildProcessRunningXacts(SnapBuild *builder, XLogRecPtr lsn, xl_running_xact
 	ReorderBufferTXN *txn;
 	TransactionId xmin;
 
-	builder->csnSnapshotData.snapshotcsn = running->csn;
-	builder->csnSnapshotData.xmin = 0;
+	builder->csnSnapshotData.snapshotcsn = running->extension.csn;
+	builder->csnSnapshotData.xmin = running->extension.runXmin;
+	builder->csnSnapshotData.nextXid = running->extension.nextXid;
 	builder->csnSnapshotData.xlogptr = lsn;
 
 	/*
@@ -1365,9 +1366,6 @@ SnapBuildProcessRunningXacts(SnapBuild *builder, XLogRecPtr lsn, xl_running_xact
 	 * we hit fast paths in heapam_visibility.c.
 	 */
 	builder->xmin = running->oldestRunningXid;
-	builder->csnSnapshotData.snapshotcsn = running->csn;
-	builder->csnSnapshotData.xmin = 0;
-	builder->csnSnapshotData.xlogptr = lsn;
 
 	/* Remove transactions we don't need to keep track off anymore */
 	SnapBuildPurgeOlderTxn(builder);
@@ -1494,7 +1492,8 @@ SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *runn
 	 * NB: We might have already started to incrementally assemble a snapshot,
 	 * so we need to be careful to deal with that.
 	 */
-	if (running->oldestRunningXid == running->nextXid)
+	if (running->oldestRunningXid == running->nextXid &&
+		running->extension.runXmin == running->extension.nextXid)
 	{
 		if (builder->start_decoding_at == InvalidXLogRecPtr ||
 			builder->start_decoding_at <= lsn)
@@ -1623,6 +1622,11 @@ SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *runn
 	return true;
 }
 
+/*
+ * Hook for custom waits in SnapBuildWaitSnapshot() provided by extensions.
+ */
+WaitSnapshotHookType waitSnapshotHook = NULL;
+
 /* ---
  * Iterate through xids in record, wait for all older than the cutoff to
  * finish.  Then, if possible, log a new xl_running_xacts record.
@@ -1656,6 +1660,12 @@ SnapBuildWaitSnapshot(xl_running_xacts *running, TransactionId cutoff)
 
 		XactLockTableWait(xid, NULL, NULL, XLTW_None);
 	}
+
+	/*
+	 * Give extensions chance for their custom waits.
+	 */
+	if (waitSnapshotHook)
+		waitSnapshotHook(&running->extension);
 
 	/*
 	 * All transactions we needed to finish finished - try to ensure there is
@@ -2287,9 +2297,8 @@ SnapBuildSnapshotExists(XLogRecPtr lsn)
 	return ret == 0;
 }
 
-void
-SnapBuildUpdateCSNSnaphot(SnapBuild *builder,
-						  CSNSnapshotData *csnSnapshotData)
+CSNSnapshotData *
+SnapBuildGetCSNSnaphot(SnapBuild *builder)
 {
-	builder->csnSnapshotData = *csnSnapshotData;
+	return &builder->csnSnapshotData;
 }
