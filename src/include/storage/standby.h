@@ -91,12 +91,16 @@ typedef struct RunningTransactionsData
 	TransactionId nextXid;		/* xid from ShmemVariableCache->nextXid */
 	TransactionId oldestRunningXid; /* *not* oldestXmin */
 	TransactionId latestCompletedXid;	/* so we can set xmax */
-	CommitSeqNo csn;	/* current csn */
+	RunningTransactionsExtension extension;
 
 	TransactionId *xids;		/* array of (sub)xids still running */
 } RunningTransactionsData;
 
 typedef RunningTransactionsData *RunningTransactions;
+
+typedef void (*GetRunningTransactionsExtensionHookType) (RunningTransactionsExtension *extension);
+
+extern PGDLLIMPORT GetRunningTransactionsExtensionHookType getRunningTransactionsExtension;
 
 extern void LogAccessExclusiveLock(Oid dbOid, Oid relOid);
 extern void LogAccessExclusiveLockPrepare(void);
