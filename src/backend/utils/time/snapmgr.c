@@ -1779,9 +1779,7 @@ SerializeSnapshot(Snapshot snapshot, char *start_address)
 	serialized_snapshot.suboverflowed = snapshot->suboverflowed;
 	serialized_snapshot.takenDuringRecovery = snapshot->takenDuringRecovery;
 	serialized_snapshot.curcid = snapshot->curcid;
-	serialized_snapshot.csnSnapshotData.xmin = snapshot->csnSnapshotData.xmin;
-	serialized_snapshot.csnSnapshotData.snapshotcsn = snapshot->csnSnapshotData.snapshotcsn;
-	serialized_snapshot.csnSnapshotData.xlogptr = snapshot->csnSnapshotData.xlogptr;
+	serialized_snapshot.csnSnapshotData = snapshot->csnSnapshotData;
 	serialized_snapshot.undoRegularRowLocation = snapshot->undoRegularRowLocationPhNode.undoLocation;
 	serialized_snapshot.undoRegularPageLocation = snapshot->undoRegularPageLocationPhNode.undoLocation;
 	serialized_snapshot.undoSystemLocation = snapshot->undoSystemLocationPhNode.undoLocation;
@@ -1858,9 +1856,7 @@ RestoreSnapshot(char *start_address)
 	snapshot->takenDuringRecovery = serialized_snapshot.takenDuringRecovery;
 	snapshot->curcid = serialized_snapshot.curcid;
 	snapshot->snapXactCompletionCount = 0;
-	snapshot->csnSnapshotData.xmin = serialized_snapshot.csnSnapshotData.xmin;
-	snapshot->csnSnapshotData.snapshotcsn = serialized_snapshot.csnSnapshotData.snapshotcsn;
-	snapshot->csnSnapshotData.xlogptr = serialized_snapshot.csnSnapshotData.xlogptr;
+	snapshot->csnSnapshotData = serialized_snapshot.csnSnapshotData;
 	snapshot->undoRegularRowLocationPhNode.undoLocation = serialized_snapshot.undoRegularRowLocation;
 	snapshot->undoRegularPageLocationPhNode.undoLocation = serialized_snapshot.undoRegularPageLocation;
 	snapshot->undoSystemLocationPhNode.undoLocation = serialized_snapshot.undoSystemLocation;
