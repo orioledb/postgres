@@ -42,6 +42,17 @@ typedef struct xl_standby_locks
 } xl_standby_locks;
 
 /*
+ * A part of xl_running_xacts and RunningTransactionsData to be filled by
+ * extensions.
+ */
+typedef struct
+{
+	uint64		nextXid;
+	uint64		runXmin;
+	CommitSeqNo csn;	/* current csn */
+} RunningTransactionsExtension;
+
+/*
  * When we write running xact data to WAL, we use this structure.
  */
 typedef struct xl_running_xacts
@@ -52,7 +63,7 @@ typedef struct xl_running_xacts
 	TransactionId nextXid;		/* xid from ShmemVariableCache->nextXid */
 	TransactionId oldestRunningXid; /* *not* oldestXmin */
 	TransactionId latestCompletedXid;	/* so we can set xmax */
-	CommitSeqNo csn;	/* current csn */
+	RunningTransactionsExtension extension;
 
 	TransactionId xids[FLEXIBLE_ARRAY_MEMBER];
 } xl_running_xacts;
