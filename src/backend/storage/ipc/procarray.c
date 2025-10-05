@@ -2681,6 +2681,11 @@ ProcArrayInstallRestoredXmin(TransactionId xmin, PGPROC *proc)
 }
 
 /*
+ * A hook for filling RunningTransactionsExtension structure by extensions.
+ */
+GetRunningTransactionsExtensionHookType getRunningTransactionsExtension = NULL;
+
+/*
  * GetRunningTransactionData -- returns information about running transactions.
  *
  * Similar to GetSnapshotData but returns more information. We include
@@ -2872,7 +2877,20 @@ GetRunningTransactionData(void)
 	CurrentRunningXacts->oldestRunningXid = oldestRunningXid;
 	CurrentRunningXacts->oldestDatabaseRunningXid = oldestDatabaseRunningXid;
 	CurrentRunningXacts->latestCompletedXid = latestCompletedXid;
-	CurrentRunningXacts->csn = pg_atomic_read_u64(&TransamVariables->nextCommitSeqNo);
+
+	/*
+	 * Give extensions chance to fill their structs.
+	 */
+	if (getRunningTransactionsExtension)
+	{
+		getRunningTransactionsExtension(&CurrentRunningXacts->extension);
+	}
+	else
+	{
+		CurrentRunningXacts->extension.csn = 0;
+		CurrentRunningXacts->extension.nextXid = 0;
+		CurrentRunningXacts->extension.runXmin = 0;
+	}
 
 	Assert(TransactionIdIsValid(CurrentRunningXacts->nextXid));
 	Assert(TransactionIdIsValid(CurrentRunningXacts->oldestRunningXid));

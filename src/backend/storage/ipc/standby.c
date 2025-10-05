@@ -1353,7 +1353,7 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
 	xlrec.nextXid = CurrRunningXacts->nextXid;
 	xlrec.oldestRunningXid = CurrRunningXacts->oldestRunningXid;
 	xlrec.latestCompletedXid = CurrRunningXacts->latestCompletedXid;
-	xlrec.csn = CurrRunningXacts->csn;
+	xlrec.extension = CurrRunningXacts->extension;
 
 	/* Header */
 	XLogBeginInsert();
