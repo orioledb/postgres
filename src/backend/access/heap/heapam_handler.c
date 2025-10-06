@@ -982,6 +982,12 @@ heapam_relation_nontransactional_truncate(Relation rel)
 	RelationTruncate(rel, 0);
 }
 
+static bool
+heapam_relation_reindex(Relation rel, int flags, ReindexParams *params)
+{
+	return reindex_relation(rel, flags, params);
+}
+
 static void
 heapam_relation_copy_data(Relation rel, const RelFileLocator *newrlocator)
 {
@@ -2955,6 +2961,7 @@ static const TableAmRoutine heapam_methods = {
 
 	.relation_set_new_filelocator = heapam_relation_set_new_filelocator,
 	.relation_nontransactional_truncate = heapam_relation_nontransactional_truncate,
+	.relation_reindex = heapam_relation_reindex,
 	.relation_copy_data = heapam_relation_copy_data,
 	.relation_copy_for_cluster = heapam_relation_copy_for_cluster,
 	.relation_vacuum = heap_vacuum_rel,
