@@ -3898,9 +3898,8 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
  * index rebuild.
  */
 bool
-reindex_relation(Oid relid, int flags, ReindexParams *params)
+reindex_relation(Relation rel, int flags, ReindexParams *params)
 {
-	Relation	rel;
 	Oid			toast_relid;
 	List	   *indexIds;
 	char		persistence;
@@ -3908,15 +3907,6 @@ reindex_relation(Oid relid, int flags, ReindexParams *params)
 	ListCell   *indexId;
 	int			i;
 
-	/*
-	 * Open and lock the relation.  ShareLock is sufficient since we only need
-	 * to prevent schema and data changes in it.  The lock level used here
-	 * should match ReindexTable().
-	 */
-	if ((params->options & REINDEXOPT_MISSING_OK) != 0)
-		rel = try_table_open(relid, ShareLock);
-	else
-		rel = table_open(relid, ShareLock);
 
 	/* if relation is gone, leave */
 	if (!rel)
@@ -4008,11 +3998,6 @@ reindex_relation(Oid relid, int flags, ReindexParams *params)
 		i++;
 	}
 
-	/*
-	 * Close rel, but continue to hold the lock.
-	 */
-	table_close(rel, NoLock);
-
 	result = (indexIds != NIL);
 
 	/*
@@ -4028,10 +4013,20 @@ reindex_relation(Oid relid, int flags, ReindexParams *params)
 		 * This rule is enforced by setting tablespaceOid to InvalidOid.
 		 */
 		ReindexParams newparams = *params;
+	  	/*
+	  	 * Open and lock the relation.  ShareLock is sufficient since we only need
+	  	 * to prevent schema and data changes in it.  The lock level used here
+	  	 * should match ReindexTable().
+	  	 */
+	  	Relation toast_rel = table_open(toast_relid, ShareLock);
 
 		newparams.options &= ~(REINDEXOPT_MISSING_OK);
 		newparams.tablespaceOid = InvalidOid;
-		result |= reindex_relation(toast_relid, flags, &newparams);
+		result |= reindex_relation(toast_rel, flags, &newparams);
+		/*
+		 * Close rel, but continue to hold the lock.
+		 */
+		table_close(toast_rel, NoLock);
 	}
 
 	return result;
