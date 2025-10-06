@@ -2037,7 +2037,6 @@ ExecuteTruncateGuts(List *explicit_rels,
 		}
 		else
 		{
-			Oid			heap_relid;
 			Oid			toast_relid;
 			ReindexParams reindex_params = {0};
 
@@ -2058,8 +2057,6 @@ ExecuteTruncateGuts(List *explicit_rels,
 			 */
 			RelationSetNewRelfilenumber(rel, rel->rd_rel->relpersistence);
 
-			heap_relid = RelationGetRelid(rel);
-
 			/*
 			 * The same for the toast table, if any.
 			 */
@@ -2077,7 +2074,7 @@ ExecuteTruncateGuts(List *explicit_rels,
 			/*
 			 * Reconstruct the indexes to match, and we're done.
 			 */
-			reindex_relation(heap_relid, REINDEX_REL_PROCESS_TOAST,
+			table_relation_reindex(rel, REINDEX_REL_PROCESS_TOAST,
 							 &reindex_params);
 		}
 
