@@ -3399,6 +3399,7 @@ adjust_appendrel_attrs_context
 amadjustmembers_function
 ambeginscan_function
 ambuild_function
+amreuse_function
 ambuildempty_function
 ambuildphasename_function
 ambulkdelete_function
