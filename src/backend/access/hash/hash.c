@@ -86,6 +86,7 @@ hashhandler(PG_FUNCTION_ARGS)
 	amroutine->amkeytype = INT4OID;
 
 	amroutine->ambuild = hashbuild;
+	amroutine->amreuse = NULL;
 	amroutine->ambuildempty = hashbuildempty;
 	amroutine->aminsert = NULL;
 	amroutine->aminsertextended = hashinsert;

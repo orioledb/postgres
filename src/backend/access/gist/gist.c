@@ -87,6 +87,7 @@ gisthandler(PG_FUNCTION_ARGS)
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = gistbuild;
+	amroutine->amreuse = NULL;
 	amroutine->ambuildempty = gistbuildempty;
 	amroutine->aminsert = NULL;
 	amroutine->aminsertextended = gistinsert;
