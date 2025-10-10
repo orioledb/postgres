@@ -66,6 +66,7 @@ ginhandler(PG_FUNCTION_ARGS)
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = ginbuild;
+	amroutine->amreuse = NULL;
 	amroutine->ambuildempty = ginbuildempty;
 	amroutine->aminsert = NULL;
 	amroutine->aminsertextended = gininsert;
