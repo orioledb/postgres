@@ -104,6 +104,9 @@ typedef IndexBuildResult *(*ambuild_function) (Relation heapRelation,
 											   Relation indexRelation,
 											   struct IndexInfo *indexInfo);
 
+/* reuse current index - don't drop it */
+typedef void (*amreuse_function) (Relation indexRelation);
+
 /* build empty index */
 typedef void (*ambuildempty_function) (Relation indexRelation);
 
@@ -295,6 +298,7 @@ typedef struct IndexAmRoutine
 
 	/* interface functions */
 	ambuild_function ambuild;
+	amreuse_function amreuse;
 	ambuildempty_function ambuildempty;
 	aminsert_function aminsert;
 	aminsert_extended_function aminsertextended;
