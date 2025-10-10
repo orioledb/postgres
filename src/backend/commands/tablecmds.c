@@ -96,6 +96,7 @@
 #include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/elog.h"
 #include "utils/fmgroids.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
@@ -15946,9 +15947,50 @@ TryReuseIndex(Oid oldId, IndexStmt *stmt)
 		/* If it's a partitioned index, there is no storage to share. */
 		if (irel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
 		{
+			HeapTuple	tuple;
+			Form_pg_am	accessMethodForm;
+			IndexAmRoutine *amRoutine;
+			char	   *accessMethodName;
+			Oid heapRelId = IndexGetRelation(oldId, false);
+			Relation heapRel = table_open(heapRelId, ShareLock);
+			
 			stmt->oldNumber = irel->rd_locator.relNumber;
 			stmt->oldCreateSubid = irel->rd_createSubid;
 			stmt->oldFirstRelfilelocatorSubid = irel->rd_firstRelfilelocatorSubid;
+			
+			
+			/*
+			 * look up the access method to call amreuse
+			 */
+			accessMethodName = stmt->accessMethod;
+			tuple = SearchSysCache1(AMNAME, PointerGetDatum(accessMethodName));
+			if (!HeapTupleIsValid(tuple))
+			{
+				/*
+				 * Hack to provide more-or-less-transparent updating of old RTREE
+				 * indexes to GiST: if RTREE is requested and not found, use GIST.
+				 */
+				if (strcmp(accessMethodName, "rtree") == 0)
+				{
+					ereport(NOTICE,
+							(errmsg("substituting access method \"gist\" for obsolete method \"rtree\"")));
+					accessMethodName = "gist";
+					tuple = SearchSysCache1(AMNAME, PointerGetDatum(accessMethodName));
+				}
+
+				if (!HeapTupleIsValid(tuple))
+					ereport(ERROR,
+							(errcode(ERRCODE_UNDEFINED_OBJECT),
+							 errmsg("access method \"%s\" does not exist",
+									accessMethodName)));
+			}
+			accessMethodForm = (Form_pg_am) GETSTRUCT(tuple);
+			amRoutine = GetIndexAmRoutineWithTableAM(heapRel->rd_rel->relam, accessMethodForm->amhandler);
+			table_close(heapRel, NoLock);
+			
+			if(amRoutine->amreuse) {
+				(*amRoutine->amreuse)(irel);
+			}
 		}
 		index_close(irel, NoLock);
 	}
