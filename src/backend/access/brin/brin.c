@@ -272,6 +272,7 @@ brinhandler(PG_FUNCTION_ARGS)
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = brinbuild;
+	amroutine->amreuse = NULL;
 	amroutine->ambuildempty = brinbuildempty;
 	amroutine->aminsert = NULL;
 	amroutine->aminsertextended = brininsert;

@@ -130,6 +130,7 @@ blhandler(PG_FUNCTION_ARGS)
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = blbuild;
+	amroutine->amreuse = NULL;
 	amroutine->ambuildempty = blbuildempty;
 	amroutine->aminsert = NULL;
 	amroutine->aminsertextended = blinsert;

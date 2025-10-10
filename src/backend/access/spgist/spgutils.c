@@ -69,6 +69,7 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = spgbuild;
+	amroutine->amreuse = NULL;
 	amroutine->ambuildempty = spgbuildempty;
 	amroutine->aminsert = NULL;
 	amroutine->aminsertextended = spginsert;

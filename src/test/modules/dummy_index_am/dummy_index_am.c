@@ -302,6 +302,7 @@ dihandler(PG_FUNCTION_ARGS)
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = dibuild;
+	amroutine->amreuse = NULL;
 	amroutine->ambuildempty = dibuildempty;
 	amroutine->aminsert = NULL;
 	amroutine->aminsertextended = diinsert;
