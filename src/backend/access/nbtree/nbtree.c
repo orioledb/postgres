@@ -126,6 +126,7 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = btbuild;
+	amroutine->amreuse = NULL;
 	amroutine->ambuildempty = btbuildempty;
 	amroutine->aminsert = NULL;
 	amroutine->aminsertextended = btinsert;
