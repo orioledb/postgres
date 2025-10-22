@@ -2225,6 +2225,7 @@ ExecuteTruncateGuts(List *explicit_rels,
 		}
 		else
 		{
+			Oid			heap_relid;
 			Oid			toast_relid;
 			ReindexParams reindex_params = {0};
 
@@ -2245,6 +2246,8 @@ ExecuteTruncateGuts(List *explicit_rels,
 			 */
 			RelationSetNewRelfilenumber(rel, rel->rd_rel->relpersistence);
 
+			heap_relid = RelationGetRelid(rel);
+
 			/*
 			 * The same for the toast table, if any.
 			 */
@@ -2262,8 +2265,8 @@ ExecuteTruncateGuts(List *explicit_rels,
 			/*
 			 * Reconstruct the indexes to match, and we're done.
 			 */
-			table_relation_reindex(rel, NULL, REINDEX_REL_PROCESS_TOAST,
-										 &reindex_params);
+			reindex_relation(NULL, heap_relid, REINDEX_REL_PROCESS_TOAST,
+							 &reindex_params);
 		}
 
 		pgstat_count_truncate(rel);

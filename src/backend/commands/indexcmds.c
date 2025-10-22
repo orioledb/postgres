@@ -3099,23 +3099,12 @@ ReindexTable(const ReindexStmt *stmt, const ReindexParams *params, bool isTopLev
 	else
 	{
 		ReindexParams newparams = *params;
-		Relation rel;
 
 		newparams.options |= REINDEXOPT_REPORT_PROGRESS;
-		
-		if ((newparams.options & REINDEXOPT_MISSING_OK) != 0)
-			rel = try_table_open(heapOid, ShareLock);
-		else
-			rel = table_open(heapOid, ShareLock);
-		result = table_relation_reindex(rel, stmt,
+		result = reindex_relation(stmt, heapOid,
 								  REINDEX_REL_PROCESS_TOAST |
 								  REINDEX_REL_CHECK_CONSTRAINTS,
 								  &newparams);
-		/*
-		 * Close rel, but continue to hold the lock.
-		 */
-		table_close(rel, NoLock);
-			
 		if (!result)
 			ereport(NOTICE,
 					(errmsg("table \"%s\" has no indexes to reindex",
@@ -3546,24 +3535,13 @@ ReindexMultipleInternal(const ReindexStmt *stmt, const List *relids, const Reind
 		{
 			bool		result;
 			ReindexParams newparams = *params;
-			Relation rel;
 
 			newparams.options |=
 				REINDEXOPT_REPORT_PROGRESS | REINDEXOPT_MISSING_OK;
-			/*
-			 * Open and lock the relation.  ShareLock is sufficient since we only need
-			 * to prevent schema and data changes in it.  The lock level used here
-			 * should match ReindexTable().
-			 */
-			rel = try_table_open(relid, ShareLock);
-			result = table_relation_reindex(rel, stmt,
+			result = reindex_relation(stmt, relid,
 									  REINDEX_REL_PROCESS_TOAST |
 									  REINDEX_REL_CHECK_CONSTRAINTS,
 									  &newparams);
-			/*
-			 * Close rel, but continue to hold the lock.
-			 */
-			table_close(rel, NoLock);
 
 			if (result && (params->options & REINDEXOPT_VERBOSE) != 0)
 				ereport(INFO,
