@@ -580,8 +580,14 @@ toast_raw_datum_size(Datum value)
 
 	if (VARATT_IS_EXTERNAL_ORIOLEDB(attr))
 	{
-		OToastExternal *toasted = (OToastExternal*) VARDATA_EXTERNAL(attr);
-		result = toasted->raw_size + VARHDRSZ;
+		/* Assuming that data could be unaligned.
+		 * Basically same as in VARATT_EXTERNAL_GET_POINTER */
+		int32	raw_size;
+		varattrib_1b_e *attre = (varattrib_1b_e *) (attr);
+		memcpy(&raw_size,
+			   VARDATA_EXTERNAL(attre) + offsetof(OToastExternal, raw_size),
+			   sizeof(raw_size));
+		result = raw_size + VARHDRSZ;
 	}
 	else if (VARATT_IS_EXTERNAL_ONDISK(attr))
 	{
@@ -642,8 +648,14 @@ toast_datum_size(Datum value)
 
 	if (VARATT_IS_EXTERNAL_ORIOLEDB(attr))
 	{
-		OToastExternal *toasted = (OToastExternal*) VARDATA_EXTERNAL(attr);
-		result = toasted->toasted_size - VARHDRSZ;
+		/* Assuming that data could be unaligned.
+		 * Basically same as in VARATT_EXTERNAL_GET_POINTER */
+		int32	toasted_size;
+		varattrib_1b_e *attre = (varattrib_1b_e *) (attr);
+		memcpy(&toasted_size,
+			   VARDATA_EXTERNAL(attre) + offsetof(OToastExternal, toasted_size),
+			   sizeof(toasted_size));
+		result = toasted_size - VARHDRSZ;
 	}
 	else if (VARATT_IS_EXTERNAL_ONDISK(attr))
 	{

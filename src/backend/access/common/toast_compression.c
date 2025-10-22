@@ -264,8 +264,14 @@ toast_get_compression_id(struct varlena *attr)
 	 */
 	if (VARATT_IS_EXTERNAL_ORIOLEDB(attr))
 	{
-		OToastExternal *toasted = (OToastExternal*) VARDATA_EXTERNAL(attr);
-		cmid = toasted->formatFlags >> ORIOLEDB_EXT_FORMAT_FLAGS_BITS;
+		/* Assuming that data could be unaligned.
+		 * Basically same as in VARATT_EXTERNAL_GET_POINTER */
+		uint8	formatFlags;
+		varattrib_1b_e *attre = (varattrib_1b_e *) (attr);
+		memcpy(&formatFlags,
+			   VARDATA_EXTERNAL(attre) + offsetof(OToastExternal, formatFlags),
+			   sizeof(formatFlags));
+		cmid = formatFlags >> ORIOLEDB_EXT_FORMAT_FLAGS_BITS;
 	}
 	else if (VARATT_IS_EXTERNAL_ONDISK(attr))
 	{

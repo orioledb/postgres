@@ -304,11 +304,20 @@ typedef struct
 #define VARSIZE_SHORT(PTR)					VARSIZE_1B(PTR)
 #define VARDATA_SHORT(PTR)					VARDATA_1B(PTR)
 
+/* Needed, because OToastExternal could be unaligned */
+static inline uint16
+O_TOAST_DATA_SIZE(varattrib_1b_e *attre)
+{
+	uint16 data_size = 0;
+	memcpy(&data_size, VARDATA_1B_E(attre), sizeof(uint16));
+	return data_size;
+}
+
 #define VARTAG_EXTERNAL(PTR)				VARTAG_1B_E(PTR)
 #define VARSIZE_EXTERNAL(PTR)				(VARHDRSZ_EXTERNAL + VARTAG_SIZE(VARTAG_EXTERNAL(PTR)) \
 												+ (VARATT_IS_EXTERNAL_ORIOLEDB(PTR) ? \
-												  *((uint16 *) VARDATA_1B_E(PTR)) \
-												  : 0))
+												   O_TOAST_DATA_SIZE((varattrib_1b_e *) PTR) \
+												   : 0))
 
 #define VARDATA_EXTERNAL(PTR)				VARDATA_1B_E(PTR)
 
