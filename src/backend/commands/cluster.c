@@ -1449,7 +1449,6 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 	int			reindex_flags;
 	ReindexParams reindex_params = {0};
 	int			i;
-	Relation	oldHeap;
 
 	/* Report that we are now swapping relation files */
 	pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE,
@@ -1505,19 +1504,9 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 	/* Report that we are now reindexing relations */
 	pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE,
 								 PROGRESS_CLUSTER_PHASE_REBUILD_INDEX);
-	
-	/*
-	 * Open and lock the relation.  ShareLock is sufficient since we only need
-	 * to prevent schema and data changes in it.  The lock level used here
-	 * should match ReindexTable().
-	 */
-	oldHeap = table_open(OIDOldHeap, ShareLock);
-	table_relation_reindex(oldHeap, NULL, reindex_flags, &reindex_params);
-	/*
-	 * Close rel, but continue to hold the lock.
-	 */
-	table_close(oldHeap, NoLock);
-	
+
+	reindex_relation(NULL, OIDOldHeap, reindex_flags, &reindex_params);
+
 	/* Report that we are now doing clean up */
 	pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE,
 								 PROGRESS_CLUSTER_PHASE_FINAL_CLEANUP);

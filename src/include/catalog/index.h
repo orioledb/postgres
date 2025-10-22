@@ -162,7 +162,7 @@ extern void reindex_index(const ReindexStmt *stmt, Oid indexId,
 #define REINDEX_REL_FORCE_INDEXES_UNLOGGED	0x08
 #define REINDEX_REL_FORCE_INDEXES_PERMANENT 0x10
 
-extern bool reindex_relation(const ReindexStmt *stmt, Relation rel, int flags,
+extern bool reindex_relation(const ReindexStmt *stmt, Oid relid, int flags,
 							 const ReindexParams *params);
 
 extern bool ReindexIsProcessingHeap(Oid heapOid);

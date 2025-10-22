@@ -28,7 +28,6 @@
 #include "utils/guc.h"
 #include "utils/rel.h"
 #include "utils/snapshot.h"
-#include "catalog/index.h"
 
 
 #define DEFAULT_TABLE_ACCESS_METHOD	"heap"
@@ -652,9 +651,6 @@ typedef struct TableAmRoutine
 	 * See also table_relation_nontransactional_truncate().
 	 */
 	void		(*relation_nontransactional_truncate) (Relation rel);
-
-	/* See reindex_relation for reference about parameters */
-	bool        (*relation_reindex) (Relation rel, const ReindexStmt *stmt, int flags, const ReindexParams *params);
 
 	/*
 	 * See table_relation_copy_data().
@@ -1701,13 +1697,6 @@ static inline void
 table_relation_nontransactional_truncate(Relation rel)
 {
 	rel->rd_tableam->relation_nontransactional_truncate(rel);
-}
-
-/* See reindex_relation for reference about parameters */
-static inline bool
-table_relation_reindex(Relation rel, const ReindexStmt *stmt, int flags, const ReindexParams *params)
-{
-	return rel->rd_tableam->relation_reindex(rel, stmt, flags, params);
 }
 
 /*
