@@ -3028,7 +3028,8 @@ ReorderBufferAbortOld(ReorderBuffer *rb, TransactionId oldestRunningXid)
 
 		txn = dlist_container(ReorderBufferTXN, node, it.cur);
 
-		if (TransactionIdPrecedes(txn->xid, oldestRunningXid))
+		if (!(txn->txn_flags & RBTXN_DISTR_SKIP_CLEANUP) &&
+			TransactionIdPrecedes(txn->xid, oldestRunningXid))
 		{
 			elog(DEBUG2, "aborting old transaction %u", txn->xid);
 
