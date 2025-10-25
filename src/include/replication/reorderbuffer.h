@@ -187,6 +187,7 @@ typedef struct ReorderBufferChange
 #define RBTXN_SKIPPED_PREPARE	  		0x0080
 #define RBTXN_HAS_STREAMABLE_CHANGE		0x0100
 #define RBTXN_DISTR_INVAL_OVERFLOWED	0x0200
+#define RBTXN_DISTR_SKIP_CLEANUP		0x0400
 
 /* Does the transaction have catalog changes? */
 #define rbtxn_has_catalog_changes(txn) \
