@@ -50,6 +50,10 @@ typedef enum RecoveryPauseState
 
 typedef XLogRecPtr (*GetReplayXlogPtrHookType) (void);
 
+typedef bool (*RecoveryStopsBeforeHookType) (XLogReaderState *record,
+											 TransactionId *recordXid,
+											 TimestampTz *recordXtime);
+
 /* User-settable GUC parameters */
 extern PGDLLIMPORT bool recoveryTargetInclusive;
 extern PGDLLIMPORT int recoveryTargetAction;
@@ -80,6 +84,12 @@ extern PGDLLIMPORT bool StandbyMode;
 
 /* Hook for extensions to tune replay xlog pointer */
 extern PGDLLIMPORT GetReplayXlogPtrHookType GetReplayXlogPtrHook;
+
+/*
+ * Hook for extensions to be able to decides to stop applying the WAL files
+ * based on custom WAL records.
+ */
+extern PGDLLIMPORT RecoveryStopsBeforeHookType RecoveryStopsBeforeHook;
 
 extern Size XLogRecoveryShmemSize(void);
 extern void XLogRecoveryShmemInit(void);
