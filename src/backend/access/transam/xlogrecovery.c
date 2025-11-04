@@ -2567,8 +2567,28 @@ recoveryStopsBefore(XLogReaderState *record)
 		return true;
 	}
 
+	/* Check RecoveryStopsHook for custom records */
+	if (RmgrIdIsCustom(XLogRecGetRmid(record)) && (RecoveryStopsBeforeHook != NULL))
+	{
+		stopsHere = RecoveryStopsBeforeHook(record, &recordXid, &recordXtime);
+
+		if (stopsHere)
+		{
+			recoveryStopAfter = false;
+			recoveryStopXid = recordXid;
+			recoveryStopLSN = InvalidXLogRecPtr;
+			recoveryStopTime = recordXtime;
+			recoveryStopName[0] = '\0';
+
+			ereport(LOG,
+					(errmsg("recovery stopping by hook before transaction %u, time %s",
+							recoveryStopXid,
+							timestamptz_to_str(recoveryStopTime))));
+			return true;
+		}
+	}
 	/* Otherwise we only consider stopping before COMMIT or ABORT records. */
-	if (XLogRecGetRmid(record) != RM_XACT_ID)
+	else if (XLogRecGetRmid(record) != RM_XACT_ID)
 		return false;
 
 	xact_info = XLogRecGetInfo(record) & XLOG_XACT_OPMASK;
@@ -4505,6 +4525,8 @@ GetXLogReplayRecPtr(TimeLineID *replayTLI)
 }
 
 GetReplayXlogPtrHookType GetReplayXlogPtrHook = NULL;
+
+RecoveryStopsBeforeHookType RecoveryStopsBeforeHook = NULL;
 
 /*
  * Get effective latest redo apply position.
