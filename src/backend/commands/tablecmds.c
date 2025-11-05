@@ -14316,14 +14316,14 @@ TryReuseIndex(Oid oldId, IndexStmt *stmt)
 			Form_pg_am	accessMethodForm;
 			IndexAmRoutine *amRoutine;
 			char	   *accessMethodName;
-			Oid heapRelId = IndexGetRelation(oldId, false);
-			Relation heapRel = table_open(heapRelId, ShareLock);
-			
+			Oid			heapRelId = IndexGetRelation(oldId, false);
+			Relation	heapRel = table_open(heapRelId, ShareLock);
+
 			stmt->oldNumber = irel->rd_locator.relNumber;
 			stmt->oldCreateSubid = irel->rd_createSubid;
 			stmt->oldFirstRelfilelocatorSubid = irel->rd_firstRelfilelocatorSubid;
-			
-			
+
+
 			/*
 			 * look up the access method to call amreuse
 			 */
@@ -14332,8 +14332,9 @@ TryReuseIndex(Oid oldId, IndexStmt *stmt)
 			if (!HeapTupleIsValid(tuple))
 			{
 				/*
-				 * Hack to provide more-or-less-transparent updating of old RTREE
-				 * indexes to GiST: if RTREE is requested and not found, use GIST.
+				 * Hack to provide more-or-less-transparent updating of old
+				 * RTREE indexes to GiST: if RTREE is requested and not found,
+				 * use GIST.
 				 */
 				if (strcmp(accessMethodName, "rtree") == 0)
 				{
@@ -14353,9 +14354,10 @@ TryReuseIndex(Oid oldId, IndexStmt *stmt)
 			amRoutine = GetIndexAmRoutineWithTableAM(heapRel->rd_rel->relam, accessMethodForm->amhandler);
 			ReleaseSysCache(tuple);
 			table_close(heapRel, NoLock);
-			
-			if(amRoutine->amreuse) {
-				(*amRoutine->amreuse)(irel);
+
+			if (amRoutine->amreuse)
+			{
+				(*amRoutine->amreuse) (irel);
 			}
 		}
 		index_close(irel, NoLock);
