@@ -15989,6 +15989,7 @@ TryReuseIndex(Oid oldId, IndexStmt *stmt)
 			}
 			accessMethodForm = (Form_pg_am) GETSTRUCT(tuple);
 			amRoutine = GetIndexAmRoutineWithTableAM(heapRel->rd_rel->relam, accessMethodForm->amhandler);
+			ReleaseSysCache(tuple);
 			table_close(heapRel, NoLock);
 			
 			if(amRoutine->amreuse) {
