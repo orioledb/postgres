@@ -91,12 +91,12 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 		if (table_get_row_ref_type(trigdata->tg_relation) == ROW_REF_ROWID)
 		{
 			bool	isnull;
-			checktidDatum = slot_getsysattr(trigdata->tg_trigslot, RowIdAttributeNumber, &isnull);
+			checktidDatum = slot_getsysattr(trigdata->tg_newslot, RowIdAttributeNumber, &isnull);
 			Assert(!isnull);
 		}
 		else
 		{
-			checktidDatum = ItemPointerGetDatum(&trigdata->tg_trigslot->tts_tid);
+			checktidDatum = ItemPointerGetDatum(&trigdata->tg_newslot->tts_tid);
 		}
 	}
 	else
