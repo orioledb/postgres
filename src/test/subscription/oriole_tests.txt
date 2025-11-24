@@ -1,6 +1,7 @@
 # List of subscription tests to run with OrioleDB
 # Add test files here, one per line
 
+t/004_sync.pl
 t/005_encoding.pl
 t/006_rewrite.pl
 t/007_ddl.pl
