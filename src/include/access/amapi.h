@@ -142,6 +142,7 @@ typedef bool (*amupdate_function) (Relation indexRelation,
 								   Datum oldTupleid,
 								   Relation heapRelation,
 								   IndexUniqueCheck checkUnique,
+								   bool indexUnchanged,
 								   struct IndexInfo *indexInfo);
 /* delete this tuple */
 typedef bool (*amdelete_function) (Relation indexRelation,
