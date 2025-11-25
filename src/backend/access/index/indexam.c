@@ -269,6 +269,7 @@ index_update(Relation indexRelation,
 			 Datum oldTupleid,
 			 Relation heapRelation,
 			 IndexUniqueCheck checkUnique,
+			 bool indexUnchanged,
 			 IndexInfo *indexInfo)
 {
 	RELATION_CHECKS;
@@ -285,6 +286,7 @@ index_update(Relation indexRelation,
 											 valuesOld, isnullOld, oldTupleid,
 											 heapRelation,
 											 checkUnique,
+											 indexUnchanged,
 											 indexInfo);
 }
 

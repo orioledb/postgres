@@ -547,6 +547,7 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 		IndexInfo  *indexInfo;
 		bool		applyNoDupErr;
 		IndexUniqueCheck checkUnique;
+		bool		indexUnchanged;
 		bool		satisfiesConstraint;
 		bool		new_valid = true;
 
@@ -638,6 +639,16 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 		else
 			checkUnique = UNIQUE_CHECK_PARTIAL;
 
+		/*
+		* There's definitely going to be an index_insert() call for this
+		* index.  If we're being called as part of an UPDATE statement,
+		* consider if the 'indexUnchanged' = true hint should be passed.
+		*/
+		indexUnchanged = index_unchanged_by_update(resultRelInfo,
+												   estate,
+												   indexInfo,
+												   indexRelation);
+
 		if (indexRelation->rd_indam->ammvccaware)
 		{
 			Datum		valuesOld[INDEX_MAX_KEYS];
@@ -699,22 +710,12 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 							 oldTupleidDatum,
 							 heapRelation,	/* heap relation */
 							 checkUnique,	/* type of uniqueness check to do */
+							 indexUnchanged,	/* UPDATE without logical change? */
 							 indexInfo);	/* index AM may need this */
 
 		}
 		else
 		{
-			bool		indexUnchanged;
-			/*
-			* There's definitely going to be an index_insert() call for this
-			* index.  If we're being called as part of an UPDATE statement,
-			* consider if the 'indexUnchanged' = true hint should be passed.
-			*/
-			indexUnchanged = index_unchanged_by_update(resultRelInfo,
-													   estate,
-													   indexInfo,
-													   indexRelation);
-
 			satisfiesConstraint =
 				index_insert(indexRelation, /* index relation */
 							 values,	/* array of index Datums */
@@ -1207,9 +1208,10 @@ retry:
 				continue;
 			}
 		} else {
-			Assert(tupleidDatum > 0);
-			Pointer rowid = DatumGetPointer(tupleidDatum);
+			Pointer rowid;
 
+			Assert(tupleidDatum > 0);
+			rowid = DatumGetPointer(tupleidDatum);
 			if (PointerIsValid(rowid))
 			{
 				bool	isnull;
