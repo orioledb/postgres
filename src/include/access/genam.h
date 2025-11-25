@@ -160,6 +160,7 @@ extern bool index_update(Relation indexRelation,
 						 Datum oldTupleid,
 						 Relation heapRelation,
 						 IndexUniqueCheck checkUnique,
+						 bool indexUnchanged,
 						 struct IndexInfo *indexInfo);
 extern bool index_delete(Relation indexRelation, Datum *values, bool *isnull,
 						 Datum tupleid, Relation heapRelation,
