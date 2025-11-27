@@ -1103,7 +1103,7 @@ typedef struct RangeTblEntry
 	Index		perminfoindex pg_node_attr(query_jumble_ignore);
 	/* sampling info, or NULL */
 	struct TableSampleClause *tablesample;
-	RowRefType	reftype;
+	RowRefType	reftype pg_node_attr(query_jumble_ignore);
 
 	/*
 	 * Fields valid for a subquery RTE (else NULL):
