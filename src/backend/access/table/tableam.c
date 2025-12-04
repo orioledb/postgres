@@ -207,6 +207,7 @@ table_beginscan_parallel(Relation relation, ParallelTableScanDesc pscan)
  */
 bool
 table_index_fetch_tuple_check(Relation rel,
+							  Relation indexRel,
 							  ItemPointer tid,
 							  Snapshot snapshot,
 							  bool *all_dead)
@@ -217,7 +218,7 @@ table_index_fetch_tuple_check(Relation rel,
 	bool		found;
 
 	slot = table_slot_create(rel, NULL);
-	scan = table_index_fetch_begin(rel);
+	scan = table_index_fetch_begin(rel, indexRel);
 	found = table_index_fetch_tuple(scan, PointerGetDatum(tid), snapshot, slot, &call_again,
 									all_dead);
 	table_index_fetch_end(scan);
