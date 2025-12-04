@@ -130,9 +130,12 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 	 */
 	tmptidDatum = checktidDatum;
 	{
-		IndexFetchTableData *scan = table_index_fetch_begin(trigdata->tg_relation);
+		IndexFetchTableData *scan;
 		bool		call_again = false;
 
+		indexRel = index_open(trigdata->tg_trigger->tgconstrindid, AccessShareLock);
+		scan = table_index_fetch_begin(trigdata->tg_relation, indexRel);
+		index_close(indexRel, AccessShareLock);
 		if (!table_index_fetch_tuple(scan, tmptidDatum, SnapshotSelf, slot,
 									 &call_again, NULL))
 		{

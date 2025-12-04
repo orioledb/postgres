@@ -557,7 +557,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				 * with optimizations like heap's HOT, we have just a single
 				 * index entry for the entire chain.
 				 */
-				else if (table_index_fetch_tuple_check(heapRel, &htid,
+				else if (table_index_fetch_tuple_check(heapRel, rel, &htid,
 													   &SnapshotDirty,
 													   &all_dead))
 				{
@@ -615,7 +615,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 					 * entry.
 					 */
 					htid = itup->t_tid;
-					if (table_index_fetch_tuple_check(heapRel, &htid,
+					if (table_index_fetch_tuple_check(heapRel, rel, &htid,
 													  SnapshotSelf, NULL))
 					{
 						/* Normal case --- it's still live */
