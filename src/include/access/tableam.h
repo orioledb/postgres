@@ -453,7 +453,7 @@ typedef struct TableAmRoutine
 	 *
 	 * Tuples for an index scan can then be fetched via index_fetch_tuple.
 	 */
-	struct IndexFetchTableData *(*index_fetch_begin) (Relation rel);
+	struct IndexFetchTableData *(*index_fetch_begin) (Relation rel, Relation index);
 
 	/*
 	 * Reset index fetch. Typically this will release cross index fetch
@@ -1194,9 +1194,9 @@ table_parallelscan_reinitialize(Relation rel, ParallelTableScanDesc pscan)
  * Tuples for an index scan can then be fetched via table_index_fetch_tuple().
  */
 static inline IndexFetchTableData *
-table_index_fetch_begin(Relation rel)
+table_index_fetch_begin(Relation rel, Relation index)
 {
-	return rel->rd_tableam->index_fetch_begin(rel);
+	return rel->rd_tableam->index_fetch_begin(rel, index);
 }
 
 /*
@@ -1269,6 +1269,7 @@ table_index_fetch_tuple(struct IndexFetchTableData *scan,
  * unique index.
  */
 extern bool table_index_fetch_tuple_check(Relation rel,
+										  Relation indexRel,
 										  ItemPointer tid,
 										  Snapshot snapshot,
 										  bool *all_dead);
