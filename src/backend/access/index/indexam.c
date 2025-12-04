@@ -351,7 +351,7 @@ index_beginscan(Relation heapRelation,
 	scan->instrument = instrument;
 
 	/* prepare to fetch index matches from table */
-	scan->xs_heapfetch = table_index_fetch_begin(heapRelation);
+	scan->xs_heapfetch = table_index_fetch_begin(heapRelation, indexRelation);
 
 	return scan;
 }
@@ -682,7 +682,7 @@ index_beginscan_parallel(Relation heaprel, Relation indexrel,
 	scan->instrument = instrument;
 
 	/* prepare to fetch index matches from table */
-	scan->xs_heapfetch = table_index_fetch_begin(heaprel);
+	scan->xs_heapfetch = table_index_fetch_begin(heaprel, indexrel);
 
 	return scan;
 }

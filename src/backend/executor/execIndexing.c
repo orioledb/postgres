@@ -1148,6 +1148,7 @@ check_exclusion_or_unique_constraint(Relation heap, Relation index,
 	TupleTableSlot *existing_slot;
 	TupleTableSlot *save_scantuple;
 
+
 	if (indexInfo->ii_ExclusionOps)
 	{
 		constr_procs = indexInfo->ii_ExclusionProcs;
