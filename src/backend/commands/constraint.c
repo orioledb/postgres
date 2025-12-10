@@ -44,6 +44,7 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 	const char *funcname = "unique_key_recheck";
 	Datum checktidDatum;
 	Datum tmptidDatum;
+	ItemPointerData tmptid;
 	Relation	indexRel;
 	IndexInfo  *indexInfo;
 	EState	   *estate;
@@ -128,7 +129,16 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 	 * it's possible the index entry has also been marked dead, and even
 	 * removed.
 	 */
-	tmptidDatum = checktidDatum;
+	if (table_get_row_ref_type(trigdata->tg_relation) == ROW_REF_ROWID)
+	{
+		/* FIX: Probably wrong assumption */
+		tmptidDatum = checktidDatum;
+	}
+	else
+	{
+		tmptid = *DatumGetItemPointer(checktidDatum);
+		tmptidDatum = ItemPointerGetDatum(&tmptid);
+	}
 	{
 		IndexFetchTableData *scan;
 		bool		call_again = false;
