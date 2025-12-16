@@ -134,6 +134,8 @@ standby_desc_invalidations(StringInfo buf,
 			appendStringInfo(buf, " snapshot %u", msg->sn.relId);
 		else if (msg->id == SHAREDINVALRELSYNC_ID)
 			appendStringInfo(buf, " relsync %u", msg->rs.relid);
+		else if (msg->id == SHAREDINVALUSERCACHE_ID)
+			appendStringInfo(buf, " usercache %u", msg->usr.arg2);
 		else
 			appendStringInfo(buf, " unrecognized id %d", msg->id);
 	}
