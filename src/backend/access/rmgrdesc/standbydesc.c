@@ -136,6 +136,8 @@ standby_desc_invalidations(StringInfo buf,
 			appendStringInfo(buf, " relmap db %u", msg->rm.dbId);
 		else if (msg->id == SHAREDINVALSNAPSHOT_ID)
 			appendStringInfo(buf, " snapshot %u", msg->sn.relId);
+		else if (msg->id == SHAREDINVALUSERCACHE_ID)
+			appendStringInfo(buf, " usercache %u", msg->usr.arg2);
 		else
 			appendStringInfo(buf, " unrecognized id %d", msg->id);
 	}
