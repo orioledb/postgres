@@ -753,16 +753,18 @@ index_fetch_heap(IndexScanDesc scan, TupleTableSlot *slot)
 	bool		all_dead = false;
 	bool		found;
 	Datum		tupleid;
+	bool		is_rowid = false;
 
 	if (scan->xs_want_rowid)
 	{
 		Assert(!scan->xs_rowid.isnull);
 		tupleid = scan->xs_rowid.value;
+		is_rowid = true;
 	}
 	else
 		tupleid = PointerGetDatum(&scan->xs_heaptid);
 
-	found = table_index_fetch_tuple(scan->xs_heapfetch, tupleid,
+	found = table_index_fetch_tuple(scan->xs_heapfetch, tupleid, is_rowid,
 									scan->xs_snapshot, slot,
 									&scan->xs_heap_continue, &all_dead);
 

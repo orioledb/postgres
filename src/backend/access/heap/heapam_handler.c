@@ -140,6 +140,7 @@ heapam_index_fetch_end(IndexFetchTableData *scan)
 static bool
 heapam_index_fetch_tuple(struct IndexFetchTableData *scan,
 						 Datum tupleid,
+						 bool  is_rowid,
 						 Snapshot snapshot,
 						 TupleTableSlot *slot,
 						 bool *call_again, bool *all_dead)
