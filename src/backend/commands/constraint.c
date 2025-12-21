@@ -42,6 +42,7 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 	const char *funcname = "unique_key_recheck";
 	Datum checktidDatum;
 	Datum tmptidDatum;
+	bool  is_rowid = false;
 	ItemPointerData tmptid;
 	Relation	indexRel;
 	IndexInfo  *indexInfo;
@@ -79,11 +80,10 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 			bool	isnull;
 			checktidDatum = slot_getsysattr(trigdata->tg_trigslot, RowIdAttributeNumber, &isnull);
 			Assert(!isnull);
+			is_rowid = true;
 		}
 		else
-		{
 			checktidDatum = ItemPointerGetDatum(&trigdata->tg_trigslot->tts_tid);
-		}
 	}
 	else if (TRIGGER_FIRED_BY_UPDATE(trigdata->tg_event))
 	{
@@ -92,11 +92,10 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 			bool	isnull;
 			checktidDatum = slot_getsysattr(trigdata->tg_newslot, RowIdAttributeNumber, &isnull);
 			Assert(!isnull);
+			is_rowid = true;
 		}
 		else
-		{
 			checktidDatum = ItemPointerGetDatum(&trigdata->tg_newslot->tts_tid);
-		}
 	}
 	else
 	{
@@ -144,7 +143,7 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 		indexRel = index_open(trigdata->tg_trigger->tgconstrindid, AccessShareLock);
 		scan = table_index_fetch_begin(trigdata->tg_relation, indexRel);
 		index_close(indexRel, AccessShareLock);
-		if (!table_index_fetch_tuple(scan, tmptidDatum, SnapshotSelf, slot,
+		if (!table_index_fetch_tuple(scan, tmptidDatum, is_rowid, SnapshotSelf, slot,
 									 &call_again, NULL))
 		{
 			/*
