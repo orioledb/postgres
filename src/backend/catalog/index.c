@@ -2954,7 +2954,7 @@ index_build(Relation heapRelation,
 	 */
 	Assert(RelationIsValid(indexRelation));
 	Assert(PointerIsValid(indexRelation->rd_indam));
-	Assert(PointerIsValid(indexRelation->rd_indam->ambuild));
+	Assert(PointerIsValid(indexRelation->rd_indam->ambuild) || PointerIsValid(indexRelation->rd_indam->ambuildextended));
 	Assert(PointerIsValid(indexRelation->rd_indam->ambuildempty));
 
 	/*
@@ -3014,8 +3014,18 @@ index_build(Relation heapRelation,
 	/*
 	 * Call the access method's build procedure
 	 */
-	stats = indexRelation->rd_indam->ambuild(heapRelation, indexRelation,
-											 indexInfo);
+	if (indexRelation->rd_indam->ambuild)
+	{
+		stats = indexRelation->rd_indam->ambuild(heapRelation, indexRelation,
+												 indexInfo);
+	}
+	else
+	{
+		stats = indexRelation->rd_indam->ambuildextended(heapRelation, 
+														 indexRelation,
+														 indexInfo,
+														 isreindex);
+	}
 	Assert(PointerIsValid(stats));
 
 	/*

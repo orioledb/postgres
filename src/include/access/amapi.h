@@ -104,6 +104,11 @@ typedef IndexBuildResult *(*ambuild_function) (Relation heapRelation,
 											   Relation indexRelation,
 											   struct IndexInfo *indexInfo);
 
+/* extended version of ambuild to not break compatibility with other indexams */
+typedef IndexBuildResult *(*ambuild_extended_function) (Relation heapRelation,
+													    Relation indexRelation,
+													    struct IndexInfo *indexInfo,
+													    bool isreindex);
 /* reuse current index - don't drop it */
 typedef void (*amreuse_function) (Relation indexRelation);
 
@@ -305,6 +310,7 @@ typedef struct IndexAmRoutine
 
 	/* interface functions */
 	ambuild_function ambuild;
+	ambuild_extended_function ambuildextended;
 	amreuse_function amreuse;
 	ambuildempty_function ambuildempty;
 	aminsert_function aminsert;
