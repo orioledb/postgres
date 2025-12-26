@@ -411,14 +411,8 @@ heapam_tuple_insert_with_arbiter(ResultRelInfo *resultRelInfo,
 	{
 		specConflict = false;
 
-		if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
-		{
-			Assert(false);
-		}
-		else
-		{
-			conflictTidDatum = ItemPointerGetDatum(&conflictTid);
-		}
+		Assert(table_get_row_ref_type(resultRelInfo->ri_RelationDesc) != ROW_REF_ROWID);
+		conflictTidDatum = ItemPointerGetDatum(&conflictTid);
 
 		if (!ExecCheckIndexConstraints(resultRelInfo, slot, estate, conflictTidDatum,
 									   arbiterIndexes))
