@@ -1279,7 +1279,6 @@ retry:
 		} else {
 			Pointer rowid;
 
-			Assert(tupleidDatum > 0);
 			rowid = DatumGetPointer(tupleidDatum);
 			if (PointerIsValid(rowid))
 			{
