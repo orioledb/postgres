@@ -965,11 +965,7 @@ ExecCheckIndexConstraints(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 	bool		isnull[INDEX_MAX_KEYS];
 	bool		checkedIndex = false;
 
-	if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
-	{
-		Assert(false);
-	}
-	else
+	if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) != ROW_REF_ROWID)
 	{
 		ItemPointerSetInvalid(DatumGetItemPointer(conflictTidDatum));
 	}
@@ -1059,19 +1055,13 @@ ExecCheckIndexConstraints(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 					   values,
 					   isnull);
 
-		if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
-		{
-			Assert(false);
-		}
-		else
-		{
-			satisfiesConstraint =
-				check_exclusion_or_unique_constraint(heapRelation, indexRelation,
-													indexInfo, tupleidDatum,
-													values, isnull, estate, false,
-													CEOUC_WAIT, true,
-													&conflictTidDatum);
-		}
+		satisfiesConstraint =
+			check_exclusion_or_unique_constraint(heapRelation, indexRelation,
+												indexInfo, tupleidDatum,
+												values, isnull, estate, false,
+												CEOUC_WAIT, true,
+												&conflictTidDatum);
+
 		if (!satisfiesConstraint)
 			return false;
 	}
@@ -1132,7 +1122,7 @@ check_exclusion_or_unique_constraint(Relation heap, Relation index,
 									 EState *estate, bool newIndex,
 									 CEOUC_WAIT_MODE waitMode,
 									 bool violationOK,
-									 Datum *conflictTidDatum)
+									 Datum *conflictTidDatumPtr)
 {
 	Oid		   *constr_procs;
 	uint16	   *constr_strats;
@@ -1355,17 +1345,20 @@ retry:
 		if (violationOK)
 		{
 			conflict = true;
-			if (conflictTidDatum)
+			if (conflictTidDatumPtr)
 			{
 				if (table_get_row_ref_type(heap) == ROW_REF_ROWID)
 				{
 					bool	isnull;
-					*conflictTidDatum = slot_getsysattr(existing_slot, RowIdAttributeNumber, &isnull);
+					Datum conflictRowidPtrDatum = *conflictTidDatumPtr;
+					Datum *conflictRowidPtr = (Datum *) DatumGetPointer(conflictRowidPtrDatum);
+
+					*conflictRowidPtr = slot_getsysattr(existing_slot, RowIdAttributeNumber, &isnull);
 					Assert(!isnull);
 				}
 				else
 				{
-					ItemPointer conflictTid = DatumGetItemPointer(*conflictTidDatum);
+					ItemPointer conflictTid = DatumGetItemPointer(*conflictTidDatumPtr);
 					*conflictTid = existing_slot->tts_tid;
 				}
 			}
