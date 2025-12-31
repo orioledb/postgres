@@ -60,6 +60,7 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/pg_list.h"
 #include "optimizer/optimizer.h"
 #include "parser/parser.h"
 #include "pgstat.h"
@@ -3916,10 +3917,8 @@ reindex_relation(const ReindexStmt *stmt, Oid relid, int flags,
 	Relation	rel;
 	Oid			toast_relid;
 	List	   *indexIds;
-	char		persistence;
-	bool		result = false;
 	ListCell   *indexId;
-	int			i;
+	bool		result = false;
 
 	/*
 	 * Open and lock the relation.  ShareLock is sufficient since we only need
@@ -3993,19 +3992,6 @@ reindex_relation(const ReindexStmt *stmt, Oid relid, int flags,
 		result |= reindex_relation(stmt, toast_relid, flags, &newparams);
 	}
 
-	/*
-	 * Compute persistence of indexes: same as that of owning rel, unless
-	 * caller specified otherwise.
-	 */
-	if (flags & REINDEX_REL_FORCE_INDEXES_UNLOGGED)
-		persistence = RELPERSISTENCE_UNLOGGED;
-	else if (flags & REINDEX_REL_FORCE_INDEXES_PERMANENT)
-		persistence = RELPERSISTENCE_PERMANENT;
-	else
-		persistence = rel->rd_rel->relpersistence;
-
-	/* Reindex all the indexes. */
-	i = 1;
 	foreach(indexId, indexIds)
 	{
 		Oid			indexOid = lfirst_oid(indexId);
@@ -4032,23 +4018,13 @@ reindex_relation(const ReindexStmt *stmt, Oid relid, int flags,
 			 */
 			if (flags & REINDEX_REL_SUPPRESS_INDEX_USE)
 				RemoveReindexPending(indexOid);
-			continue;
+			indexIds = foreach_delete_current(indexIds, indexId);
 		}
-
-		reindex_index(stmt, indexOid, !(flags & REINDEX_REL_CHECK_CONSTRAINTS),
-					  persistence, params);
-
-		CommandCounterIncrement();
-
-		/* Index should no longer be in the pending list */
-		Assert(!ReindexIsProcessingIndex(indexOid));
-
-		/* Set index rebuild count */
-		pgstat_progress_update_param(PROGRESS_CLUSTER_INDEX_REBUILD_COUNT,
-									 i);
-		i++;
 	}
 
+	/* Reindex all the indexes. */
+	table_reindex_all(rel, stmt, flags, params, indexIds);
+	
 	/*
 	 * Close rel, but continue to hold the lock.
 	 */

@@ -45,6 +45,7 @@
 #include "storage/procarray.h"
 #include "storage/smgr.h"
 #include "utils/builtins.h"
+#include "utils/lsyscache.h"
 #include "utils/rel.h"
 
 static TM_Result heapam_tuple_lock(Relation relation, Datum tid,
@@ -2962,6 +2963,46 @@ heapam_reloptions(char relkind, Datum reloptions, bool validate)
 	return NULL;
 }
 
+static void
+heapam_reindex_all(Relation rel, const ReindexStmt *stmt,
+				   int flags, const ReindexParams *params,
+				   List *indexIds)
+{
+	int			i;
+	ListCell   *indexId;
+	char		persistence;
+
+	/*
+	 * Compute persistence of indexes: same as that of owning rel, unless
+	 * caller specified otherwise.
+	 */
+	if (flags & REINDEX_REL_FORCE_INDEXES_UNLOGGED)
+		persistence = RELPERSISTENCE_UNLOGGED;
+	else if (flags & REINDEX_REL_FORCE_INDEXES_PERMANENT)
+		persistence = RELPERSISTENCE_PERMANENT;
+	else
+		persistence = rel->rd_rel->relpersistence;
+
+	i = 1;
+	foreach(indexId, indexIds)
+	{
+		Oid			indexOid = lfirst_oid(indexId);
+
+		reindex_index(stmt, indexOid, !(flags & REINDEX_REL_CHECK_CONSTRAINTS),
+					  persistence, params);
+
+		CommandCounterIncrement();
+
+		/* Index should no longer be in the pending list */
+		Assert(!ReindexIsProcessingIndex(indexOid));
+
+		/* Set index rebuild count */
+		pgstat_progress_update_param(PROGRESS_CLUSTER_INDEX_REBUILD_COUNT,
+									 i);
+		i++;
+	}
+}
+
 /* ------------------------------------------------------------------------
  * Definition of the heap table access method.
  * ------------------------------------------------------------------------
@@ -3030,7 +3071,9 @@ static const TableAmRoutine heapam_methods = {
 
 	.tuple_is_current = heapam_tuple_is_current,
 
-	.reloptions = heapam_reloptions
+	.reloptions = heapam_reloptions,
+
+	.reindex_all = heapam_reindex_all,
 };
 
 

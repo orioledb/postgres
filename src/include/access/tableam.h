@@ -21,6 +21,7 @@
 #include "access/relscan.h"
 #include "access/sdir.h"
 #include "access/xact.h"
+#include "catalog/index.h"
 #include "executor/tuptable.h"
 #include "storage/read_stream.h"
 #include "nodes/execnodes.h"
@@ -939,6 +940,7 @@ typedef struct TableAmRoutine
 								  BlockNumber *totalpages);
 
 	bytea	   *(*reloptions) (char relkind, Datum reloptions, bool validate);
+	void		(*reindex_all)(Relation relation, const ReindexStmt *stmt, int flags, const ReindexParams *params, List *indexIds);
 } TableAmRoutine;
 
 
@@ -2267,6 +2269,13 @@ tableam_reloptions(const TableAmRoutine *tableam, char relkind,
 				   Datum reloptions, bool validate)
 {
 	return tableam->reloptions(relkind, reloptions, validate);
+}
+
+static inline void
+table_reindex_all(Relation relation, const ReindexStmt *stmt, int flags,
+				  const ReindexParams *params, List *indexIds)
+{
+	relation->rd_tableam->reindex_all(relation, stmt, flags, params, indexIds);
 }
 
 #endif							/* TABLEAM_H */
