@@ -314,12 +314,13 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 	Datum		values[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
 	ItemPointer	tupleid;
-
+	Datum		rowidDatum = (Datum) 0;
 
 	if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
 	{
 		bool	isnull;
-		tupleid = DatumGetItemPointer(slot_getsysattr(slot, RowIdAttributeNumber, &isnull));
+		rowidDatum = slot_getsysattr(slot, RowIdAttributeNumber, &isnull);
+		tupleid = DatumGetItemPointer(rowidDatum);
 		Assert(!isnull);
 	}
 	else
@@ -514,6 +515,9 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 		}
 	}
 
+	if (DatumGetPointer(rowidDatum) != NULL)
+		pfree(DatumGetPointer(rowidDatum));
+
 	return result;
 }
 
@@ -537,11 +541,13 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 	Datum		values[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
 	ItemPointer	tupleid;
+	Datum		rowidDatum = (Datum) 0;
 
 	if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
 	{
 		bool	isnull;
-		tupleid = DatumGetItemPointer(slot_getsysattr(slot, RowIdAttributeNumber, &isnull));
+		rowidDatum = slot_getsysattr(slot, RowIdAttributeNumber, &isnull);
+		tupleid = DatumGetItemPointer(rowidDatum);
 		Assert(!isnull);
 	}
 	else
@@ -666,12 +672,14 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 			Datum		valuesOld[INDEX_MAX_KEYS];
 			bool		isnullOld[INDEX_MAX_KEYS];
 			Datum		oldTupleid;
+			Datum		oldRowIdDatum = (Datum) 0;
 			bool		old_valid = true;
 
 			if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
 			{
 				bool	isnull;
-				oldTupleid = slot_getsysattr(oldSlot, RowIdAttributeNumber, &isnull);
+				oldRowIdDatum = slot_getsysattr(oldSlot, RowIdAttributeNumber, &isnull);
+				oldTupleid = oldRowIdDatum;
 				Assert(!isnull);
 			}
 			else
@@ -724,6 +732,8 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 							 checkUnique,	/* type of uniqueness check to do */
 							 indexInfo);	/* index AM may need this */
 
+			if (DatumGetPointer(oldRowIdDatum) != NULL)
+				pfree(DatumGetPointer(oldRowIdDatum));
 		}
 		else
 		{
@@ -808,6 +818,9 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 		}
 	}
 
+	if (DatumGetPointer(rowidDatum) != NULL)
+		pfree(DatumGetPointer(rowidDatum));
+
 	return result;
 }
 
@@ -824,11 +837,13 @@ ExecDeleteIndexTuples(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 	Datum		values[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
 	Datum		tupleid;
+	Datum		rowidDatum = (Datum) 0;
 
 	if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
 	{
 		bool	isnull;
-		tupleid = slot_getsysattr(slot, RowIdAttributeNumber, &isnull);
+		rowidDatum = slot_getsysattr(slot, RowIdAttributeNumber, &isnull);
+		tupleid = rowidDatum;
 		Assert(!isnull);
 	}
 	else
@@ -915,6 +930,9 @@ ExecDeleteIndexTuples(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 					 heapRelation,	/* heap relation */
 					 indexInfo);	/* index AM may need this */
 	}
+
+	if (DatumGetPointer(rowidDatum) != NULL)
+		pfree(DatumGetPointer(rowidDatum));
 }
 
 /* ----------------------------------------------------------------
