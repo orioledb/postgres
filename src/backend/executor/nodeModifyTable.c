@@ -2403,6 +2403,7 @@ ExecOnConflictUpdate(ModifyTableContext *context,
 	ExprState  *onConflictSetWhere = resultRelInfo->ri_onConflict->oc_WhereClause;
 	TupleTableSlot *existing = resultRelInfo->ri_onConflict->oc_Existing;
 	Datum		tupleid;
+	Datum		rowidDatum = (Datum) 0;
 
 	/*
 	 * Parse analysis should have blocked ON CONFLICT for all system
@@ -2415,7 +2416,8 @@ ExecOnConflictUpdate(ModifyTableContext *context,
 	if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID)
 	{
 		bool	isnull;
-		tupleid = slot_getsysattr(existing, RowIdAttributeNumber, &isnull);
+		rowidDatum = slot_getsysattr(existing, RowIdAttributeNumber, &isnull);
+		tupleid = rowidDatum;
 		Assert(!isnull);
 	}
 	else
@@ -2438,6 +2440,10 @@ ExecOnConflictUpdate(ModifyTableContext *context,
 	{
 		ExecClearTuple(existing);	/* see return below */
 		InstrCountFiltered1(&mtstate->ps, 1);
+
+		if (DatumGetPointer(rowidDatum) != NULL)
+			pfree(DatumGetPointer(rowidDatum));
+
 		return true;			/* done with the tuple */
 	}
 
@@ -2488,6 +2494,10 @@ ExecOnConflictUpdate(ModifyTableContext *context,
 	 * query.
 	 */
 	ExecClearTuple(existing);
+
+	if (DatumGetPointer(rowidDatum) != NULL)
+		pfree(DatumGetPointer(rowidDatum));
+
 	return true;
 }
 
