@@ -579,6 +579,16 @@ ExecSupportsBackwardScan(Plan *node, List *rtable)
 					   ((Scan *) node)->scanrelid <= list_length(rtable));
 
 				rte = rt_fetch(((Scan *) node)->scanrelid, rtable);
+				
+				/*
+				 * Subqueries and other non-table RTEs won't have a relid. They
+				 * are already materialized or validated at this point, so
+				 * assume backward scan is allowed and avoid calling
+				 * TableSupportsBackwardScan with InvalidOid.
+				 */
+				if (!OidIsValid(rte->relid))
+					return true;
+
 				return TableSupportsBackwardScan(rte->relid);
 			}
 
@@ -648,7 +658,7 @@ TableSupportsBackwardScan(Oid tableid)
 	Form_pg_class tabrelrec;
 	const TableAmRoutine *amroutine;
 
-	/* Fetch the pg_class tuple of the index relation */
+	/* Fetch the pg_class tuple of the table relation */
 	ht_tabrel = SearchSysCache1(RELOID, ObjectIdGetDatum(tableid));
 	if (!HeapTupleIsValid(ht_tabrel))
 		elog(ERROR, "cache lookup failed for relation %u", tableid);
