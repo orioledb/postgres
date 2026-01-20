@@ -743,6 +743,37 @@ typedef struct TableAmRoutine
 										Snapshot snapshot,
 										struct ValidateIndexState *state);
 
+	/*
+	 * Optional callback for table AMs to provide custom index validation logic.
+	 * If provided, this callback is invoked instead of the default validate_index
+	 * implementation. This allows table AMs (like orioledb) to handle row
+	 * reference types (e.g., ROW_REF_ROWID) that differ from standard TIDs.
+	 * If NULL, the default validate_index logic is used.
+	 */
+	void		(*index_validate) (Relation heap_rel,
+								   Relation index_rel,
+								   Snapshot snapshot);
+								   
+	/*
+	 * Optional callback invoked after swapping index names and dependencies
+	 * during REINDEX CONCURRENTLY. This allows table AMs (like orioledb) to
+	 * update their own internal catalogs to reflect the swap.
+	 * Called from index_concurrently_swap() after catalog updates.
+	 * If NULL, no custom action is taken.
+	 */
+	void		(*index_concurrently_swap) (Oid newIndexId,
+											Oid oldIndexId,
+											Relation heapRel,
+											const char *oldName);
+
+	/*
+	 * Optional callback invoked when an index is being dropped.
+	 * This allows table AMs (like orioledb) to update their own internal
+	 * catalogs to reflect the index removal.
+	 * Called from index_drop() before the actual catalog deletion.
+	 * If NULL, no custom action is taken.
+	 */
+	void		(*index_drop) (Relation heapRel, Relation indexRel);
 
 	/* ------------------------------------------------------------------------
 	 * Miscellaneous functions.
