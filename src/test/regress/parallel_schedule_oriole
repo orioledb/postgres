@@ -43,8 +43,7 @@ test: copy copyselect copydml
 # Note: many of the tests in later groups depend on create_index
 # ----------
 test: create_function_c create_misc create_operator create_procedure create_table create_type create_schema
-test: create_view
-test: create_index_oriole
+test: create_index create_view
 
 # ----------
 # Another group of parallel tests
