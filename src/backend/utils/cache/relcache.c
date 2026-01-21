@@ -2551,9 +2551,7 @@ RelationInvalidateRelation(Relation relation)
 	RelationCloseSmgr(relation);
 
 	/* Free AM cached data, if any */
-	if (relation->rd_amcache)
-		pfree(relation->rd_amcache);
-	relation->rd_amcache = NULL;
+	release_rd_amcache(relation);
 
 	relation->rd_isvalid = false;
 }
