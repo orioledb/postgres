@@ -1,0 +1,20 @@
+#----------------------------------------------------------------------
+#
+# pg_amimpl.dat
+#    Initial contents of the pg_am system catalog.
+#
+# Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
+# Portions Copyright (c) 1994, Regents of the University of California
+#
+# src/include/catalog/pg_amimpl.dat
+#
+#----------------------------------------------------------------------
+
+[
+
+{ oid => '8070', oid_symbol => 'BTREE_IMPL_OID',
+  descr => 'btree AM implementation',
+  implname => 'btree_implementation', amoid => '2',
+  implhandler => 'bthandler' },
+
+]

@@ -57,9 +57,9 @@ CreateAccessMethodImplementation(CreateAmImplStmt *stmt)
 	if (!superuser())
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("permission denied to create access method \"%s\"",
+				 errmsg("permission denied to create access method implementation \"%s\"",
 						stmt->implname),
-				 errhint("Must be superuser to create an access method.")));
+				 errhint("Must be superuser to create an access method implementation.")));
 
 	/* Check if name is used */
 	imploid = GetSysCacheOid1(AMIMPLNAME, Anum_pg_amimpl_oid,
@@ -78,7 +78,7 @@ CreateAccessMethodImplementation(CreateAmImplStmt *stmt)
 	if (!OidIsValid(amoid))
 	{
 		ereport(ERROR,
-				(errcode(ERRCODE_DUPLICATE_OBJECT),
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
 				 errmsg("access method \"%s\" doesn't exist",
 						stmt->amname)));
 	}
@@ -86,7 +86,7 @@ CreateAccessMethodImplementation(CreateAmImplStmt *stmt)
 	/*
 	 * Get the handler function oid, verifying the AM type while at it.
 	 */
-	implhandler = lookup_impl_handler_func(stmt->handler_name);
+	implhandler = lookup_amimpl_handler_func(stmt->handler_name);
 
 	/*
 	 * Insert tuple into pg_am.

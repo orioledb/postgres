@@ -142,7 +142,7 @@ static const ObjectPropertyType ObjectProperty[] =
 		InvalidAttrNumber,
 		InvalidAttrNumber,
 		InvalidAttrNumber,
-		-1,
+		OBJECT_ACCESS_METHOD,
 		true
 	},
 	{
@@ -1058,7 +1058,6 @@ get_object_address(ObjectType objtype, Node *object,
 				break;
 			case OBJECT_AMOP:
 			case OBJECT_AMPROC:
-			case OBJECT_AMIMPL:
 				address = get_object_address_opf_member(objtype, castNode(List, object), missing_ok);
 				break;
 			case OBJECT_LARGEOBJECT:
@@ -1609,7 +1608,7 @@ get_object_address_attrdef(ObjectType objtype, List *object,
 					 errmsg("default value for column \"%s\" of relation \"%s\" does not exist",
 							attname, NameListToString(relname))));
 
-		/address.classId = AttrDefaultRelationId;
+		address.classId = AttrDefaultRelationId;
 		address.objectId = InvalidOid;
 		address.objectSubId = InvalidAttrNumber;
 		relation_close(relation, lockmode);

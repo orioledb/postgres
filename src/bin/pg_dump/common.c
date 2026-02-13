@@ -964,6 +964,25 @@ findAccessMethodByOid(Oid oid)
 }
 
 /*
+ * findAccessMethodImplementationByOid
+ *	  finds the DumpableObject for the access method implementation with the given oid
+ *	  returns NULL if not found
+ */
+AccessMethodInfo *
+findAccessMethodImplementationByOid(Oid oid)
+{
+	CatalogId	catId;
+	DumpableObject *dobj;
+
+	catId.tableoid = AccessMethodImplementationId;
+	catId.oid = oid;
+	dobj = findObjectByCatalogId(catId);
+	Assert(dobj == NULL || dobj->objType == DO_ACCESS_METHOD_IMPLEMENTATION);
+	return (AccessMethodInfo *) dobj;
+}
+
+
+/*
  * findCollationByOid
  *	  finds the DumpableObject for the collation with the given oid
  *	  returns NULL if not found
