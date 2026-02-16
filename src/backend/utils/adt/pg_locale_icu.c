@@ -218,6 +218,40 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 #endif
 }
 
+void
+init_pg_locale_icu(pg_locale_t loc, const char *iculocstr,
+				   const char *icurules, bool deterministic,
+				   MemoryContext context)
+{
+	UCollator  *collator;
+#ifdef USE_ICU
+	if (loc->info.icu.locale)
+		pfree((void *) loc->info.icu.locale);
+	if (loc->info.icu.ucol)
+		ucol_close(loc->info.icu.ucol);
+
+	collator = make_icu_collator(iculocstr, icurules);
+
+	loc->info.icu.locale = MemoryContextStrdup(context, iculocstr);
+	loc->info.icu.ucol = collator;
+	loc->provider = COLLPROVIDER_ICU;
+	loc->deterministic = deterministic;
+	loc->collate_is_c = false;
+	loc->ctype_is_c = false;
+	if (GetDatabaseEncoding() == PG_UTF8)
+		loc->collate = &collate_methods_icu_utf8;
+	else
+		loc->collate = &collate_methods_icu;
+#else
+	/* could get here if a collation was created by a build with ICU */
+	ereport(ERROR,
+			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+			 errmsg("ICU is not supported in this build")));
+
+	return NULL;
+#endif
+}
+
 #ifdef USE_ICU
 
 /*

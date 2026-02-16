@@ -128,7 +128,7 @@ char	   *localized_full_months[12 + 1];
 /* is the databases's LC_CTYPE the C locale? */
 bool		database_ctype_is_c = false;
 
-static pg_locale_t default_locale = NULL;
+pg_locale_t default_locale = NULL;
 
 /* indicates whether locale information cache is valid */
 static bool CurrentLocaleConvValid = false;

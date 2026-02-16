@@ -485,6 +485,35 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 	return result;
 }
 
+void
+init_pg_locale_libc(pg_locale_t loc, const char *collate,
+					const char *ctype)
+{
+	locale_t	collator;
+
+	if (loc->info.lt)
+		freelocale(loc->info.lt);
+
+	collator = make_libc_collator(collate, ctype);
+
+	loc->provider = COLLPROVIDER_LIBC;
+	loc->deterministic = true;
+	loc->collate_is_c = (strcmp(collate, "C") == 0) ||
+		(strcmp(collate, "POSIX") == 0);
+	loc->ctype_is_c = (strcmp(ctype, "C") == 0) ||
+		(strcmp(ctype, "POSIX") == 0);
+	loc->info.lt = collator;
+	if (!loc->collate_is_c)
+	{
+#ifdef WIN32
+		if (GetDatabaseEncoding() == PG_UTF8)
+			result->collate = &collate_methods_libc_win32_utf8;
+		else
+#endif
+			loc->collate = &collate_methods_libc;
+	}
+}
+
 /*
  * Create a locale_t with the given collation and ctype.
  *
