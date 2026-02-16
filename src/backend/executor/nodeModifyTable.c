@@ -2591,6 +2591,7 @@ ExecMergeMatched(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	EPQState   *epqstate = &mtstate->mt_epqstate;
 	ListCell   *l;
 	bool		no_further_action = true;
+	TupleTableSlot *oldSlot = resultRelInfo->ri_oldTupleSlot;
 
 	/*
 	 * If there are no WHEN MATCHED actions, we are done.
@@ -2604,7 +2605,7 @@ ExecMergeMatched(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	 * Again, this target relation's slot is required only in the case of a
 	 * MATCHED tuple and UPDATE/DELETE actions.
 	 */
-	econtext->ecxt_scantuple = resultRelInfo->ri_oldTupleSlot;
+	econtext->ecxt_scantuple = oldSlot;
 	econtext->ecxt_innertuple = context->planSlot;
 	econtext->ecxt_outertuple = NULL;
 
@@ -2646,6 +2647,10 @@ lmerge_matched:
 		CmdType		commandType = relaction->mas_action->commandType;
 		TM_Result	result;
 		UpdateContext updateCxt = {0};
+		int			options = TABLE_MODIFY_WAIT | TABLE_MODIFY_FETCH_OLD_TUPLE;
+
+		if (!IsolationUsesXactSnapshot())
+			options |= TABLE_MODIFY_LOCK_UPDATED;
 
 		/*
 		 * Test condition, if any.
@@ -2674,7 +2679,7 @@ lmerge_matched:
 			ExecWithCheckOptions(commandType == CMD_UPDATE ?
 								 WCO_RLS_MERGE_UPDATE_CHECK : WCO_RLS_MERGE_DELETE_CHECK,
 								 resultRelInfo,
-								 resultRelInfo->ri_oldTupleSlot,
+								 oldSlot,
 								 context->mtstate->ps.state);
 		}
 
@@ -2694,13 +2699,18 @@ lmerge_matched:
 				if (!ExecUpdatePrologue(context, resultRelInfo,
 										tupleid, NULL, newslot, &result))
 				{
+					TupleTableSlot *trigOldSlot = ExecGetTriggerOldSlot(estate, resultRelInfo);
+
 					if (result == TM_Ok)
 						goto out;	/* "do nothing" */
+
+					if (trigOldSlot != oldSlot && result != TM_Deleted)
+						ExecCopySlot(oldSlot, trigOldSlot);
 					break;		/* concurrent update/delete */
 				}
 				result = ExecUpdateAct(context, resultRelInfo, tupleid, NULL,
-									   newslot, canSetTag, TABLE_MODIFY_WAIT,
-									   NULL, &updateCxt);
+									   newslot, canSetTag, options,
+									   oldSlot, &updateCxt);
 
 				/*
 				 * As in ExecUpdate(), if ExecUpdateAct() reports that a
@@ -2719,7 +2729,7 @@ lmerge_matched:
 				{
 					ExecUpdateEpilogue(context, &updateCxt, resultRelInfo,
 									   NULL, newslot,
-									   resultRelInfo->ri_oldTupleSlot);
+									   oldSlot);
 					mtstate->mt_merge_updated += 1;
 				}
 				break;
@@ -2729,16 +2739,22 @@ lmerge_matched:
 				if (!ExecDeletePrologue(context, resultRelInfo, tupleid,
 										NULL, NULL, &result))
 				{
+					TupleTableSlot *trigOldSlot = ExecGetTriggerOldSlot(estate, resultRelInfo);
+
 					if (result == TM_Ok)
 						goto out;	/* "do nothing" */
+
+					if (trigOldSlot != oldSlot && result != TM_Deleted)
+						ExecCopySlot(oldSlot, trigOldSlot);
+
 					break;		/* concurrent update/delete */
 				}
 				result = ExecDeleteAct(context, resultRelInfo, tupleid,
-									   false, TABLE_MODIFY_WAIT, NULL);
+									   false, options, oldSlot);
 				if (result == TM_Ok)
 				{
 					ExecDeleteEpilogue(context, resultRelInfo, NULL,
-									   resultRelInfo->ri_oldTupleSlot, false);
+									   oldSlot, false);
 					mtstate->mt_merge_deleted += 1;
 				}
 				break;
@@ -2815,9 +2831,7 @@ lmerge_matched:
 			case TM_Updated:
 				{
 					Relation	resultRelationDesc;
-					TupleTableSlot *epqslot,
-							   *inputslot;
-					LockTupleMode lockmode;
+					TupleTableSlot *epqslot;
 
 					if (IsolationUsesXactSnapshot())
 						ereport(ERROR,
@@ -2834,132 +2848,94 @@ lmerge_matched:
 					 * starting from the top, and execute the first qualifying
 					 * action.
 					 */
+					if (IsolationUsesXactSnapshot())
+						ereport(ERROR,
+								(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+								 errmsg("could not serialize access due to concurrent update")));
+
+					/*
+					 * If the tuple was updated and migrated to
+					 * another partition concurrently, the current
+					 * MERGE implementation can't follow.  There's
+					 * probably a better way to handle this case, but
+					 * it'd require recognizing the relation to which
+					 * the tuple moved, and setting our current
+					 * resultRelInfo to that.
+					 */
+					if (ItemPointerIndicatesMovedPartitions(&context->tmfd.ctid))
+						ereport(ERROR,
+								(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+								 errmsg("tuple to be merged was already moved to another partition due to concurrent update")));
+
 					resultRelationDesc = resultRelInfo->ri_RelationDesc;
-					lockmode = ExecUpdateLockMode(estate, resultRelInfo);
 
-					inputslot = EvalPlanQualSlot(epqstate, resultRelationDesc,
-												 resultRelInfo->ri_RangeTableIndex);
+					epqslot = EvalPlanQual(epqstate,
+										   resultRelationDesc,
+										   resultRelInfo->ri_RangeTableIndex,
+										   oldSlot);
 
-					result = table_tuple_lock(resultRelationDesc, tupleid,
-											  estate->es_snapshot,
-											  inputslot, estate->es_output_cid,
-											  lockmode, LockWaitBlock,
-											  TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
-											  &context->tmfd);
-					switch (result)
+					/*
+					 * If we got no tuple, or the tuple we get has a
+					 * NULL ctid, go back to caller: this one is not a
+					 * MATCHED tuple anymore, so they can retry with
+					 * NOT MATCHED actions.
+					 */
+					if (TupIsNull(epqslot))
 					{
-						case TM_Ok:
-							epqslot = EvalPlanQual(epqstate,
-												   resultRelationDesc,
-												   resultRelInfo->ri_RangeTableIndex,
-												   inputslot);
-
-							/*
-							 * If we got no tuple, or the tuple we get has a
-							 * NULL ctid, go back to caller: this one is not a
-							 * MATCHED tuple anymore, so they can retry with
-							 * NOT MATCHED actions.
-							 */
-							if (TupIsNull(epqslot))
-							{
-								no_further_action = false;
-								goto out;
-							}
-
-							/*
-							 * Update tupleid to that of the new tuple, for
-							 * the refetch we do at the top.
-							 */
-							 tupleid = ExecGetJunkAttribute(epqslot,
-														resultRelInfo->ri_RowIdAttNo,
-														&isNull);
-							if (isNull)
-							{
-								no_further_action = false;
-								goto out;
-							}
-
-							/*
-							 * When a tuple was updated and migrated to
-							 * another partition concurrently, the current
-							 * MERGE implementation can't follow.  There's
-							 * probably a better way to handle this case, but
-							 * it'd require recognizing the relation to which
-							 * the tuple moved, and setting our current
-							 * resultRelInfo to that.
-							 */
-							if (ItemPointerIndicatesMovedPartitions(&context->tmfd.ctid))
-								ereport(ERROR,
-										(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-										 errmsg("tuple to be deleted was already moved to another partition due to concurrent update")));
-
-							/*
-							 * A non-NULL ctid means that we are still dealing
-							 * with MATCHED case. Restart the loop so that we
-							 * apply all the MATCHED rules again, to ensure
-							 * that the first qualifying WHEN MATCHED action
-							 * is executed.
-							 *
-							 * tupleid has been updated to that of the new
-							 * tuple, as required for the refetch we do at the
-							 * top.
-							 */
-							if (resultRelInfo->ri_needLockTagTuple)
-							{
-								Assert(resultRelInfo->ri_RowRefType == ROW_REF_TID);
-								UnlockTuple(resultRelInfo->ri_RelationDesc,
-											&lockedtid,
-											InplaceUpdateTupleLock);
-								ItemPointerCopy(&context->tmfd.ctid,
-												(ItemPointer) tupleid);
-							}
-							goto lmerge_matched;
-
-						case TM_Deleted:
-
-							/*
-							 * tuple already deleted; tell caller to run NOT
-							 * MATCHED actions
-							 */
-							no_further_action = false;
-							goto out;
-
-						case TM_SelfModified:
-
-							/*
-							 * This can be reached when following an update
-							 * chain from a tuple updated by another session,
-							 * reaching a tuple that was already updated or
-							 * deleted by the current command, or by a later
-							 * command in the current transaction. As above,
-							 * this should always be treated as an error.
-							 */
-							if (context->tmfd.cmax != estate->es_output_cid)
-								ereport(ERROR,
-										(errcode(ERRCODE_TRIGGERED_DATA_CHANGE_VIOLATION),
-										 errmsg("tuple to be updated or deleted was already modified by an operation triggered by the current command"),
-										 errhint("Consider using an AFTER trigger instead of a BEFORE trigger to propagate changes to other rows.")));
-
-							if (TransactionIdIsCurrentTransactionId(context->tmfd.xmax))
-								ereport(ERROR,
-										(errcode(ERRCODE_CARDINALITY_VIOLATION),
-								/* translator: %s is a SQL command name */
-										 errmsg("%s command cannot affect row a second time",
-												"MERGE"),
-										 errhint("Ensure that not more than one source row matches any one target row.")));
-
-							/* This shouldn't happen */
-							elog(ERROR, "attempted to update or delete invisible tuple");
-							no_further_action = false;
-							goto out;
-
-						default:
-							/* see table_tuple_lock call in ExecDelete() */
-							elog(ERROR, "unexpected table_tuple_lock status: %u",
-								 result);
-							no_further_action = false;
-							goto out;
+						no_further_action = false;
+						goto out;
 					}
+
+					/*
+					 * Update tupleid to that of the new tuple, for
+					 * the refetch we do at the top.
+					 */
+					 tupleid = ExecGetJunkAttribute(epqslot,
+													resultRelInfo->ri_RowIdAttNo,
+													&isNull);
+					if (isNull)
+					{
+						no_further_action = false;
+						goto out;
+					}
+
+
+					/*
+					 * When a tuple was updated and migrated to
+					 * another partition concurrently, the current
+					 * MERGE implementation can't follow.  There's
+					 * probably a better way to handle this case, but
+					 * it'd require recognizing the relation to which
+					 * the tuple moved, and setting our current
+					 * resultRelInfo to that.
+					 */
+					if (ItemPointerIndicatesMovedPartitions(&context->tmfd.ctid))
+						ereport(ERROR,
+								(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+								 errmsg("tuple to be deleted was already moved to another partition due to concurrent update")));
+
+					/*
+					 * A non-NULL ctid means that we are still dealing
+					 * with MATCHED case. Restart the loop so that we
+					 * apply all the MATCHED rules again, to ensure
+					 * that the first qualifying WHEN MATCHED action
+					 * is executed.
+					 *
+					 * tupleid has been updated to that of the new
+					 * tuple, as required for the refetch we do at the
+					 * top.
+					 */
+					if (resultRelInfo->ri_needLockTagTuple)
+					{
+						Assert(resultRelInfo->ri_RowRefType == ROW_REF_TID);
+						UnlockTuple(resultRelInfo->ri_RelationDesc,
+									&lockedtid,
+									InplaceUpdateTupleLock);
+						ItemPointerCopy(&context->tmfd.ctid,
+										(ItemPointer) tupleid);
+					}
+					result = TM_Ok;
+					goto lmerge_matched;
 				}
 
 			case TM_Invisible:
