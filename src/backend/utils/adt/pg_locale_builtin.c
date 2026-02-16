@@ -166,6 +166,18 @@ create_pg_locale_builtin(Oid collid, MemoryContext context)
 	return result;
 }
 
+void
+init_pg_locale_builtin(pg_locale_t loc, const char *locale,
+					   MemoryContext context)
+{
+	loc->info.builtin.locale = MemoryContextStrdup(context, locale);
+	loc->info.builtin.casemap_full = (strcmp(locale, "PG_UNICODE_FAST") == 0);
+	loc->provider = COLLPROVIDER_BUILTIN;
+	loc->deterministic = true;
+	loc->collate_is_c = true;
+	loc->ctype_is_c = (strcmp(locale, "C") == 0);
+}
+
 char *
 get_collation_actual_version_builtin(const char *collcollate)
 {
