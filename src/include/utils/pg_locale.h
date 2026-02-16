@@ -140,8 +140,18 @@ struct pg_locale_struct
 	}			info;
 };
 
+extern PGDLLIMPORT pg_locale_t default_locale;
+
 extern void init_database_collation(void);
 extern pg_locale_t pg_newlocale_from_collation(Oid collid);
+
+extern void init_pg_locale_builtin(pg_locale_t loc, const char *locale,
+								   MemoryContext context);
+extern void init_pg_locale_icu(pg_locale_t loc, const char *iculocstr,
+							   const char *icurules, bool deterministic,
+							   MemoryContext context);
+extern void init_pg_locale_libc(pg_locale_t loc, const char *collate,
+								const char *ctype);
 
 typedef bool (*pg_newlocale_from_collation_hook_type)();
 extern pg_newlocale_from_collation_hook_type pg_newlocale_from_collation_hook;
