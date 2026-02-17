@@ -34,6 +34,7 @@
 #include <time.h>
 
 #include "access/htup_details.h"
+#include "access/xlog.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_database.h"
 #include "common/hashfn.h"
@@ -1217,7 +1218,8 @@ pg_newlocale_from_collation(Oid collid)
 	if (!OidIsValid(collid))
 		elog(ERROR, "cache lookup failed for collation %u", collid);
 
-	AssertCouldGetRelation();
+	if (!RecoveryInProgress())
+		AssertCouldGetRelation();
 
 	if (last_collation_cache_oid == collid)
 		return last_collation_cache_locale;
