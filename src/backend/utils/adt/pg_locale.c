@@ -68,6 +68,7 @@
 #include "utils/pg_locale.h"
 #include "utils/relcache.h"
 #include "utils/syscache.h"
+#include "access/xlog.h"
 
 #ifdef USE_ICU
 #include <unicode/ucnv.h>
@@ -1260,7 +1261,8 @@ lookup_collation_cache(Oid collation, bool set_flags)
 	Assert(OidIsValid(collation));
 	Assert(collation != DEFAULT_COLLATION_OID);
 
-	AssertCouldGetRelation();
+	if (!RecoveryInProgress())
+		AssertCouldGetRelation();
 
 	if (collation_cache == NULL)
 	{
