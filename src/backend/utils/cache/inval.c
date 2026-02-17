@@ -1472,8 +1472,6 @@ CacheInvalidateRelcacheByDbidRelid(Oid dbid, Oid relid)
 {
 	SharedInvalidationMessage msg;
 
-	PrepareInvalidationState();
-
 	msg.rc.id = SHAREDINVALRELCACHE_ID;
 	msg.rc.dbId = dbid;
 	msg.rc.relId = relid;
