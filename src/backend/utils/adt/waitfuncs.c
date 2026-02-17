@@ -38,10 +38,11 @@
 Datum
 pg_isolation_test_session_is_blocked(PG_FUNCTION_ARGS)
 {
-	PGPROC     *blocked_proc;
 	int			blocked_pid = PG_GETARG_INT32(0);
 	ArrayType  *interesting_pids_a = PG_GETARG_ARRAYTYPE_P(1);
 	PGPROC	   *proc;
+	uint32		wait_event_info;
+	const char *wait_event_name;
 	const char *wait_event_type;
 	ArrayType  *blocking_pids_a;
 	int32	   *interesting_pids;
@@ -56,9 +57,13 @@ pg_isolation_test_session_is_blocked(PG_FUNCTION_ARGS)
 	proc = BackendPidGetProc(blocked_pid);
 	if (proc == NULL)
 		PG_RETURN_BOOL(false);	/* session gone: definitely unblocked */
+	wait_event_info = UINT32_ACCESS_ONCE(proc->wait_event_info);
 	wait_event_type =
-		pgstat_get_wait_event_type(UINT32_ACCESS_ONCE(proc->wait_event_info));
+		pgstat_get_wait_event_type(wait_event_info);
 	if (wait_event_type && strcmp("InjectionPoint", wait_event_type) == 0)
+		PG_RETURN_BOOL(true);
+	wait_event_name = pgstat_get_wait_event(wait_event_info);
+	if (wait_event_name && strcmp("StopEvent", wait_event_name) == 0)
 		PG_RETURN_BOOL(true);
 
 	/* Validate the passed-in array */
@@ -108,10 +113,6 @@ pg_isolation_test_session_is_blocked(PG_FUNCTION_ARGS)
 	 * buffer and check if the number of safe snapshot blockers is non-zero.
 	 */
 	if (GetSafeSnapshotBlockingPids(blocked_pid, &dummy, 1) > 0)
-		PG_RETURN_BOOL(true);
-
-	blocked_proc = BackendPidGetProc(blocked_pid);
-	if ((blocked_proc->wait_event_info & 0xFF000000) == PG_WAIT_EXTENSION)
 		PG_RETURN_BOOL(true);
 
 	PG_RETURN_BOOL(false);
