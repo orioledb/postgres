@@ -3112,6 +3112,7 @@ lmerge_matched:
 					bool		was_matched;
 					Relation	resultRelationDesc;
 					TupleTableSlot *epqslot;
+					ItemPointer movedPartitionCheckCtid;
 
 					if (IsolationUsesXactSnapshot())
 						ereport(ERROR,
@@ -3142,7 +3143,11 @@ lmerge_matched:
 					 * the tuple moved, and setting our current
 					 * resultRelInfo to that.
 					 */
-					if (ItemPointerIndicatesMovedPartitions(&context->tmfd.ctid))
+					if (resultRelInfo->ri_RowRefType == ROW_REF_TID)
+						movedPartitionCheckCtid = (ItemPointer) tupleid;
+					else
+						movedPartitionCheckCtid = &context->tmfd.ctid;
+					if (ItemPointerIndicatesMovedPartitions(movedPartitionCheckCtid))
 						ereport(ERROR,
 								(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 								 errmsg("tuple to be merged was already moved to another partition due to concurrent update")));
