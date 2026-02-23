@@ -240,6 +240,8 @@ typedef enum
 } WaitEventIO;
 
 
+#define PG_WAIT_EXTENSION_BLOCKED		0x07FFFFFFU
+
 extern const char *pgstat_get_wait_event(uint32 wait_event_info);
 extern const char *pgstat_get_wait_event_type(uint32 wait_event_info);
 static inline void pgstat_report_wait_start(uint32 wait_event_info);

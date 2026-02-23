@@ -602,6 +602,7 @@ pg_safe_snapshot_blocking_pids(PG_FUNCTION_ARGS)
 	PG_RETURN_ARRAYTYPE_P(construct_array_builtin(blocker_datums, num_blockers, INT4OID));
 }
 
+#define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
 
 /*
  * pg_isolation_test_session_is_blocked - support function for isolationtester
@@ -617,9 +618,10 @@ pg_safe_snapshot_blocking_pids(PG_FUNCTION_ARGS)
 Datum
 pg_isolation_test_session_is_blocked(PG_FUNCTION_ARGS)
 {
-	PGPROC     *blocked_proc;
 	int			blocked_pid = PG_GETARG_INT32(0);
 	ArrayType  *interesting_pids_a = PG_GETARG_ARRAYTYPE_P(1);
+	PGPROC	   *proc;
+	uint32	    wait_event_info;
 	ArrayType  *blocking_pids_a;
 	int32	   *interesting_pids;
 	int32	   *blocking_pids;
@@ -628,6 +630,14 @@ pg_isolation_test_session_is_blocked(PG_FUNCTION_ARGS)
 	int			dummy;
 	int			i,
 				j;
+
+	proc = BackendPidGetProc(blocked_pid);
+	if (proc == NULL)
+		PG_RETURN_BOOL(false);	/* session gone: definitely unblocked */
+
+	wait_event_info = UINT32_ACCESS_ONCE(proc->wait_event_info);
+	if (wait_event_info == PG_WAIT_EXTENSION_BLOCKED)
+		PG_RETURN_BOOL(true);
 
 	/* Validate the passed-in array */
 	Assert(ARR_ELEMTYPE(interesting_pids_a) == INT4OID);
@@ -676,10 +686,6 @@ pg_isolation_test_session_is_blocked(PG_FUNCTION_ARGS)
 	 * buffer and check if the number of safe snapshot blockers is non-zero.
 	 */
 	if (GetSafeSnapshotBlockingPids(blocked_pid, &dummy, 1) > 0)
-		PG_RETURN_BOOL(true);
-
-	blocked_proc = BackendPidGetProc(blocked_pid);
-	if ((blocked_proc->wait_event_info & 0xFF000000) == PG_WAIT_EXTENSION)
 		PG_RETURN_BOOL(true);
 
 	PG_RETURN_BOOL(false);
