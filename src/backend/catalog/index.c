@@ -1799,7 +1799,20 @@ index_concurrently_swap(Oid newIndexId, Oid oldIndexId, const char *oldName)
 	table_close(pg_index, RowExclusiveLock);
 	table_close(pg_constraint, RowExclusiveLock);
 	table_close(pg_trigger, RowExclusiveLock);
+	
+	/*
+	 * Call table AM hook if provided to allow it to update its own catalogs.
+	 * We need to get the heap relation for this.
+	 */
+	{
+		Oid			heapId = oldClassRel->rd_index->indrelid;
+		Relation	heapRel = table_open(heapId, NoLock);
 
+		if (heapRel->rd_tableam && heapRel->rd_tableam->index_concurrently_swap)
+			heapRel->rd_tableam->index_concurrently_swap(newIndexId, oldIndexId, heapRel, oldName);
+		table_close(heapRel, NoLock);
+	}
+	
 	/* The lock taken previously is not released until the end of transaction */
 	relation_close(oldClassRel, NoLock);
 	relation_close(newClassRel, NoLock);
@@ -2308,6 +2321,18 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 
 	/* ensure that stats are dropped if transaction commits */
 	pgstat_drop_relation(userIndexRelation);
+
+	/*
+	 * Call the index drop callback for the heap AM, if it has one.
+	 */
+	{
+		Relation heapRel = table_open(heapId, NoLock);
+
+		if (heapRel->rd_tableam && heapRel->rd_tableam->index_drop)
+			heapRel->rd_tableam->index_drop(heapRel, userIndexRelation);
+
+		table_close(heapRel, NoLock);
+	}
 
 	/*
 	 * Close and flush the index's relcache entry, to ensure relcache doesn't

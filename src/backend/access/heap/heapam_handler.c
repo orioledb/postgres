@@ -3024,6 +3024,9 @@ static const TableAmRoutine heapam_methods = {
 	.scan_analyze_next_tuple = heapam_scan_analyze_next_tuple,
 	.index_build_range_scan = heapam_index_build_range_scan,
 	.index_validate_scan = heapam_index_validate_scan,
+	.index_validate = NULL,		/* use default validate_index logic */
+	.index_concurrently_swap = NULL,
+	.index_drop = NULL,
 
 	.relation_size = table_block_relation_size,
 	.relation_needs_toast_table = heapam_relation_needs_toast_table,
