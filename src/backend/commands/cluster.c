@@ -474,7 +474,10 @@ cluster_rel(Oid tableOid, Oid indexOid, ClusterParams *params)
 	TransferPredicateLocksToHeapRelation(OldHeap);
 
 	/* rebuild_relation does all the dirty work */
-	rebuild_relation(OldHeap, indexOid, verbose);
+	if (OldHeap->rd_tableam && OldHeap->rd_tableam->relation_cluster)
+		OldHeap->rd_tableam->relation_cluster(OldHeap, verbose);
+	else
+		rebuild_relation(OldHeap, indexOid, verbose);
 
 	/* NB: rebuild_relation does table_close() on OldHeap */
 
