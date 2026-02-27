@@ -714,7 +714,15 @@ InitCatalogCache(void)
 {
 	int			cacheId;
 
-	Assert(!CacheInitialized);
+	/*
+	 * In single user mode, recovery might set up
+	 * catalog caches before InitPostgres is called.
+	 */
+	Assert(!CacheInitialized || !IsUnderPostmaster);
+
+	/* nothing to do if it's already done */
+	if (CacheInitialized)
+		return;
 
 	SysCacheRelationOidSize = SysCacheSupportingRelOidSize = 0;
 
