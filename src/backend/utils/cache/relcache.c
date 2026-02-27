@@ -133,7 +133,7 @@ typedef struct relidcacheent
 	Relation	reldesc;
 } RelIdCacheEnt;
 
-static HTAB *RelationIdCache;
+static HTAB *RelationIdCache = NULL;
 
 /*
  * This flag is false until we have prepared the critical relcache entries
@@ -4074,6 +4074,12 @@ RelationCacheInitialize(void)
 	 */
 	if (!CacheMemoryContext)
 		CreateCacheMemoryContext();
+
+	/*
+	 * nothing to do if it's already done
+	 */
+	if (RelationIdCache)
+		return;
 
 	/*
 	 * create hashtable that indexes the relcache
