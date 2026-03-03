@@ -19,7 +19,7 @@ jobs:
       CHECK_TYPE: ${{ matrix.check_type }}
     steps:
       - name: Checkout code into workspace directory
-        uses: actions/checkout@v2
+        uses: actions/checkout@v6
       - name: Setup prerequisites
         run: bash ./ci/prerequisites.sh
       - name: Build
