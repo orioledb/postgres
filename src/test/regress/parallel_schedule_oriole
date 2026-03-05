@@ -21,14 +21,14 @@ test: boolean char name varchar text int2 int4 int8 oid float4 float8 bit numeri
 # multirangetypes depends on rangetypes
 # multirangetypes shouldn't run concurrently with type_sanity
 # ----------
-test: md5 numerology point lseg line box path circle date time timetz timestamp timestamptz interval inet macaddr macaddr8 multirangetypes
+test: md5 numerology point lseg line box path polygon circle date time timetz timestamp timestamptz interval inet macaddr macaddr8 multirangetypes
 
 # ----------
 # Another group of parallel tests
 # geometry depends on point, lseg, line, box, path, polygon, circle
 # horology depends on date, time, timetz, timestamp, timestamptz, interval
 # ----------
-test: horology tstypes regex type_sanity misc_sanity comments expressions unicode xid mvcc database
+test: geometry horology tstypes regex type_sanity misc_sanity comments expressions unicode xid mvcc database
 
 # ----------
 # Load huge amounts of data
@@ -36,19 +36,19 @@ test: horology tstypes regex type_sanity misc_sanity comments expressions unicod
 # execute two copy tests in parallel, to check that copy itself
 # is concurrent safe.
 # ----------
-test: copy copyselect copydml
+test: copy copyselect copydml insert insert_conflict
 
 # ----------
 # More groups of parallel tests
 # Note: many of the tests in later groups depend on create_index
 # ----------
 test: create_function_c create_misc create_operator create_procedure create_table create_type create_schema
-test: create_index create_view
+test: create_index create_index_spgist create_view
 
 # ----------
 # Another group of parallel tests
 # ----------
-test: create_aggregate create_function_sql create_cast typed_table drop_if_exists roleattributes hash_func errors infinite_recurse
+test: create_aggregate create_function_sql create_cast constraints select typed_table drop_if_exists roleattributes create_am hash_func errors infinite_recurse
 
 # ----------
 # sanity_check does a vacuum, affecting the sort order of SELECT *
@@ -61,12 +61,12 @@ test: sanity_check
 # aggregates depends on create_aggregate
 # join depends on create_misc
 # ----------
-test: select_into select_implicit select_having random hash_index delete
+test: select_into select_distinct select_implicit select_having subselect case random arrays btree_index hash_index delete
 
 # ----------
 # Another group of parallel tests
 # ----------
-test: gist init_privs security_label collate lock object_address drop_operator password
+test: gin gist spgist init_privs security_label collate lock object_address groupingsets drop_operator password
 
 # ----------
 # Additional BRIN tests
@@ -77,10 +77,14 @@ test: gist init_privs security_label collate lock object_address drop_operator p
 # psql depends on create_am
 # amutils depends on geometry, create_index_spgist, hash_index, brin
 # ----------
+<<<<<<< HEAD
 test: alter_generic alter_operator misc async dbsize sysviews tsrf create_role
+=======
+test: create_table_like alter_generic alter_operator misc async dbsize merge sysviews tsrf collate.utf8 create_role
+>>>>>>> dc43f7c31be (Enable more regress tests for Oriole (2))
 
 # collate.linux.utf8 and collate.icu.utf8 tests cannot be run in parallel with each other
-test: psql_crosstab collate.linux.utf8 collate.windows.win1252
+test: rules psql psql_crosstab collate.linux.utf8 collate.windows.win1252
 
 # ----------
 # Run these alone so they don't run out of parallel workers
@@ -98,12 +102,12 @@ test: subscription
 # Another group of parallel tests
 # select_views depends on create_view
 # ----------
-test: select_views portals_p2 dependency guc bitmapops tsdicts foreign_data xmlmap functional_deps advisory_lock
+test: select_views portals_p2 dependency guc bitmapops tsearch tsdicts foreign_data window xmlmap functional_deps advisory_lock equivclass
 
 # ----------
 # Another group of parallel tests (JSON related)
 # ----------
-test: json json_encoding jsonpath jsonpath_encoding jsonb_jsonpath sqljson
+test: json jsonb json_encoding jsonpath jsonpath_encoding jsonb_jsonpath sqljson
 
 # ----------
 # Another group of parallel tests
@@ -111,7 +115,7 @@ test: json json_encoding jsonpath jsonpath_encoding jsonb_jsonpath sqljson
 # NB: temp.sql does a reconnect which transiently uses 2 connections,
 # so keep this parallel group to at most 19 tests
 # ----------
-test: plancache rangefuncs prepare truncate alter_table sequence polymorphism largeobject xml
+test: plancache copy2 domain rangefuncs prepare conversion truncate alter_table sequence polymorphism rowtypes returning largeobject with xml
 
 # ----------
 # Another group of parallel tests
@@ -119,7 +123,7 @@ test: plancache rangefuncs prepare truncate alter_table sequence polymorphism la
 # The stats test resets stats, so nothing else needing stats access can be in
 # this group.
 # ----------
-test: hash_part partition_aggregate partition_info
+test: partition_prune hash_part partition_aggregate partition_info explain memoize
 
 # event_trigger depends on create_am and cannot run concurrently with
 # any test that runs DDL
