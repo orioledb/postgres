@@ -71,6 +71,9 @@ static const struct size_bytes_unit_alias size_bytes_aliases[] = {
 	{NULL}
 };
 
+/* Hook to calculate extension-custom database size */
+database_size_hook_type database_size_hook = NULL;
+
 /* Return physical size of directory contents, or 0 if dir doesn't exist */
 static int64
 db_dir_size(const char *path)
@@ -162,6 +165,9 @@ calculate_database_size(Oid dbOid)
 	}
 
 	FreeDir(dirdesc);
+
+	if (database_size_hook != NULL)
+		totalsize += database_size_hook(dbOid);
 
 	return totalsize;
 }
