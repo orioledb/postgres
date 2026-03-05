@@ -47,6 +47,14 @@ typedef int (*AcquireSampleRowsFunc) (Relation relation, int elevel,
 									  HeapTuple *rows, int targrows,
 									  double *totalrows,
 									  double *totaldeadrows);
+/*
+ * Hook for adding extension-specific part of database size.
+ * Technically not a part of table AM as database can have tables with different AM's.
+ *
+ * TODO: May consider moving to some other header file
+ */
+typedef int64 (*database_size_hook_type)(Oid dbOid);
+extern database_size_hook_type database_size_hook;
 
 /* in commands/analyze.c */
 extern int acquire_sample_rows(Relation onerel, int elevel,
