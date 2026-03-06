@@ -21,14 +21,14 @@ test: boolean char name varchar text int2 int4 int8 oid float4 float8 bit numeri
 # multirangetypes depends on rangetypes
 # multirangetypes shouldn't run concurrently with type_sanity
 # ----------
-test: md5 numerology point lseg line box path circle date time timetz timestamp timestamptz interval inet macaddr macaddr8 multirangetypes
+test: md5 numerology point lseg line box path polygon circle date time timetz timestamp timestamptz interval inet macaddr macaddr8 multirangetypes
 
 # ----------
 # Another group of parallel tests
 # geometry depends on point, lseg, line, box, path, polygon, circle
 # horology depends on date, time, timetz, timestamp, timestamptz, interval
 # ----------
-test: horology tstypes regex type_sanity misc_sanity comments expressions unicode xid mvcc database
+test: geometry horology tstypes regex type_sanity misc_sanity comments expressions unicode xid mvcc database
 
 # ----------
 # Load huge amounts of data
