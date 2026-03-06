@@ -36,7 +36,7 @@ test: horology tstypes regex type_sanity misc_sanity comments expressions unicod
 # execute two copy tests in parallel, to check that copy itself
 # is concurrent safe.
 # ----------
-test: copy copyselect copydml insert
+test: copy copyselect copydml insert insert_conflict
 
 # ----------
 # More groups of parallel tests
