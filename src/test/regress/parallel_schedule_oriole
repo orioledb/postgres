@@ -48,7 +48,7 @@ test: create_index create_index_spgist create_view
 # ----------
 # Another group of parallel tests
 # ----------
-test: create_aggregate create_function_sql create_cast constraints typed_table drop_if_exists roleattributes hash_func errors infinite_recurse
+test: create_aggregate create_function_sql create_cast constraints typed_table drop_if_exists roleattributes create_am hash_func errors infinite_recurse
 
 # ----------
 # sanity_check does a vacuum, affecting the sort order of SELECT *
@@ -61,7 +61,7 @@ test: sanity_check
 # aggregates depends on create_aggregate
 # join depends on create_misc
 # ----------
-test: select_into select_implicit select_having random hash_index delete
+test: select_into select_distinct select_implicit select_having random hash_index delete
 
 # ----------
 # Another group of parallel tests
