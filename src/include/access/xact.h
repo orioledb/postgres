@@ -533,7 +533,7 @@ extern void EnterParallelMode(void);
 extern void ExitParallelMode(void);
 extern bool IsInParallelMode(void);
 
-typedef void (*xact_redo_hook_type) (TransactionId xid, XLogRecPtr lsn);
+typedef void (*xact_redo_hook_type) (TransactionId xid, XLogRecPtr lsn, bool commit);
 extern xact_redo_hook_type xact_redo_hook;
 
 #endif							/* XACT_H */
