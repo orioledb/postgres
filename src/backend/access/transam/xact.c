@@ -5967,7 +5967,7 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 	TimestampTz commit_time;
 
 	if (xact_redo_hook)
-		xact_redo_hook(xid, lsn);
+		xact_redo_hook(xid, lsn, true);
 
 	Assert(TransactionIdIsValid(xid));
 
@@ -6119,6 +6119,9 @@ xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid,
 				XLogRecPtr lsn, RepOriginId origin_id)
 {
 	TransactionId max_xid;
+
+	if (xact_redo_hook)
+		xact_redo_hook(xid, lsn, false);
 
 	Assert(TransactionIdIsValid(xid));
 
