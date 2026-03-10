@@ -98,7 +98,7 @@ test: subscription
 # Another group of parallel tests
 # select_views depends on create_view
 # ----------
-test: select_views portals_p2 dependency guc bitmapops tsdicts foreign_data xmlmap functional_deps advisory_lock
+test: select_views portals_p2 dependency guc bitmapops tsearch tsdicts foreign_data xmlmap functional_deps advisory_lock
 
 # ----------
 # Another group of parallel tests (JSON related)
