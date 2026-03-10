@@ -103,7 +103,7 @@ test: select_views portals_p2 dependency guc bitmapops tsearch tsdicts foreign_d
 # ----------
 # Another group of parallel tests (JSON related)
 # ----------
-test: json json_encoding jsonpath jsonpath_encoding jsonb_jsonpath sqljson sqljson_queryfuncs sqljson_jsontable
+test: json jsonb json_encoding jsonpath jsonpath_encoding jsonb_jsonpath sqljson sqljson_queryfuncs sqljson_jsontable
 
 # ----------
 # Another group of parallel tests
@@ -111,7 +111,7 @@ test: json json_encoding jsonpath jsonpath_encoding jsonb_jsonpath sqljson sqljs
 # NB: temp.sql does a reconnect which transiently uses 2 connections,
 # so keep this parallel group to at most 19 tests
 # ----------
-test: plancache rangefuncs prepare truncate alter_table sequence polymorphism largeobject xml
+test: plancache rangefuncs prepare conversion truncate alter_table sequence polymorphism returning largeobject xml
 
 # ----------
 # Another group of parallel tests
@@ -119,7 +119,7 @@ test: plancache rangefuncs prepare truncate alter_table sequence polymorphism la
 # The stats test resets stats, so nothing else needing stats access can be in
 # this group.
 # ----------
-test: hash_part partition_aggregate partition_info predicate
+test: hash_part partition_aggregate partition_info explain predicate
 
 # event_trigger depends on create_am and cannot run concurrently with
 # any test that runs DDL
