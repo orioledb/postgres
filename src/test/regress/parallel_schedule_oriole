@@ -66,7 +66,7 @@ test: select_into select_distinct select_implicit select_having case random arra
 # ----------
 # Another group of parallel tests
 # ----------
-test: gist init_privs security_label collate lock object_address drop_operator password
+test: gin gist spgist init_privs security_label collate lock object_address drop_operator password
 
 # ----------
 # Additional BRIN tests
