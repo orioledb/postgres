@@ -66,7 +66,7 @@ test: select_into select_distinct select_implicit select_having case random arra
 # ----------
 # Another group of parallel tests
 # ----------
-test: gin gist spgist init_privs security_label collate lock object_address drop_operator password
+test: gin gist spgist init_privs security_label collate lock object_address groupingsets drop_operator password
 
 # ----------
 # Additional BRIN tests
@@ -77,7 +77,7 @@ test: gin gist spgist init_privs security_label collate lock object_address drop
 # psql depends on create_am
 # amutils depends on geometry, create_index_spgist, hash_index, brin
 # ----------
-test: create_table_like alter_generic alter_operator misc async dbsize sysviews tsrf collate.utf8 create_role
+test: create_table_like alter_generic alter_operator misc async dbsize merge sysviews tsrf collate.utf8 create_role
 
 # collate.linux.utf8 and collate.icu.utf8 tests cannot be run in parallel with each other
 test: rules psql psql_crosstab collate.linux.utf8 collate.windows.win1252
