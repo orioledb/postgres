@@ -77,10 +77,10 @@ test: gin gist spgist init_privs security_label collate lock object_address drop
 # psql depends on create_am
 # amutils depends on geometry, create_index_spgist, hash_index, brin
 # ----------
-test: alter_generic alter_operator misc async dbsize sysviews tsrf collate.utf8 create_role
+test: create_table_like alter_generic alter_operator misc async dbsize sysviews tsrf collate.utf8 create_role
 
 # collate.linux.utf8 and collate.icu.utf8 tests cannot be run in parallel with each other
-test: psql_crosstab collate.linux.utf8 collate.windows.win1252
+test: rules psql psql_crosstab collate.linux.utf8 collate.windows.win1252
 
 # ----------
 # Run these alone so they don't run out of parallel workers
