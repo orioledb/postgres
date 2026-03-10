@@ -61,7 +61,7 @@ test: sanity_check
 # aggregates depends on create_aggregate
 # join depends on create_misc
 # ----------
-test: select_into select_distinct select_implicit select_having random hash_index delete
+test: select_into select_distinct select_implicit select_having case random arrays btree_index hash_index delete
 
 # ----------
 # Another group of parallel tests
