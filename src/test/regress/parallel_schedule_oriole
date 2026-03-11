@@ -119,7 +119,7 @@ test: plancache domain rangefuncs prepare conversion truncate alter_table sequen
 # The stats test resets stats, so nothing else needing stats access can be in
 # this group.
 # ----------
-test: partition_prune hash_part partition_aggregate partition_info explain predicate
+test: partition_prune hash_part partition_aggregate partition_info explain memoize predicate
 
 # event_trigger depends on create_am and cannot run concurrently with
 # any test that runs DDL
