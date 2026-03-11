@@ -111,7 +111,7 @@ test: json jsonb json_encoding jsonpath jsonpath_encoding jsonb_jsonpath sqljson
 # NB: temp.sql does a reconnect which transiently uses 2 connections,
 # so keep this parallel group to at most 19 tests
 # ----------
-test: plancache rangefuncs prepare conversion truncate alter_table sequence polymorphism returning largeobject xml
+test: plancache domain rangefuncs prepare conversion truncate alter_table sequence polymorphism returning largeobject xml
 
 # ----------
 # Another group of parallel tests
