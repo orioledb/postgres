@@ -323,6 +323,7 @@ typedef struct SubXactCallbackItem
 static SubXactCallbackItem *SubXact_callbacks = NULL;
 
 xact_redo_hook_type xact_redo_hook = NULL;
+get_xidless_commit_lsn_hook_type get_xidless_commit_lsn_hook = NULL;
 
 /* local function prototypes */
 static void AssignTransactionId(TransactionState s);
@@ -1324,6 +1325,8 @@ RecordTransactionCommit(void)
 	 */
 	if (!markXidCommitted)
 	{
+		bool		replorigin;
+
 		/*
 		 * We expect that every RelationDropStorage is followed by a catalog
 		 * update, and hence XID assignment, so we shouldn't get here with any
@@ -1354,6 +1357,23 @@ RecordTransactionCommit(void)
 			LogStandbyInvalidations(nmsgs, invalMessages,
 									RelcacheInitFileInval);
 			wrote_xlog = true;	/* not strictly necessary */
+		}
+
+		replorigin = (replorigin_session_origin != InvalidRepOriginId &&
+					  replorigin_session_origin != DoNotReplicateId);
+
+		/*
+		 * Some storage engines can reach commit without a top-level heap XID
+		 * while still having a durable local commit anchor in PG WAL.  Allow
+		 * such engines to surface that LSN here so that replication-origin
+		 * state can still be advanced for xid-less commits.
+		 */
+		if (replorigin && get_xidless_commit_lsn_hook)
+		{
+			XLogRecPtr	local_commit = get_xidless_commit_lsn_hook(&wrote_xlog);
+
+			if (XLogRecPtrIsValid(local_commit))
+				replorigin_session_advance(replorigin_session_origin_lsn, Max(local_commit, XactLastRecEnd));
 		}
 
 		/*
