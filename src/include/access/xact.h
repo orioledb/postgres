@@ -148,6 +148,19 @@ typedef enum
 typedef void (*SubXactCallback) (SubXactEvent event, SubTransactionId mySubid,
 								 SubTransactionId parentSubid, void *arg);
 
+/*
+ * Hook for extensions that can produce a durable local commit LSN for a
+ * top-level transaction without a heap XID.
+ *
+ * The hook is consulted from the xid-less path of RecordTransactionCommit().
+ * It should return a valid WAL LSN representing the extension's durable
+ * local commit anchor for the current transaction, or InvalidXLogRecPtr if
+ * no such anchor exists.
+ */
+typedef XLogRecPtr (*get_xidless_commit_lsn_hook_type) (bool *);
+extern PGDLLIMPORT get_xidless_commit_lsn_hook_type
+	get_xidless_commit_lsn_hook;
+
 /* Data structure for Save/RestoreTransactionCharacteristics */
 typedef struct SavedTransactionCharacteristics
 {
