@@ -300,6 +300,8 @@ static struct USERCACHECALLBACK
 
 static int	usercache_callback_count = 0;
 
+AcceptInvalidationMessagesHookType AcceptInvalidationMessagesHook = NULL;
+
 /* ----------------------------------------------------------------
  *				Invalidation subgroup support functions
  * ----------------------------------------------------------------
@@ -902,6 +904,8 @@ AcceptInvalidationMessages(void)
 	if (IsTransactionState())
 		AssertCouldGetRelation();
 #endif
+	if (AcceptInvalidationMessagesHook)
+		AcceptInvalidationMessagesHook();
 
 	ReceiveSharedInvalidMessages(LocalExecuteInvalidationMessage,
 								 InvalidateSystemCaches);
