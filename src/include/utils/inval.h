@@ -27,6 +27,9 @@ typedef void (*UsercacheCallbackFunction) (Datum arg, Oid arg1, Oid arg2, Oid ar
 
 extern void AcceptInvalidationMessages(void);
 
+typedef void (*AcceptInvalidationMessagesHookType) (void);
+extern AcceptInvalidationMessagesHookType AcceptInvalidationMessagesHook;
+
 extern void AtEOXact_Inval(bool isCommit);
 
 extern void PreInplace_Inval(void);
