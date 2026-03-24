@@ -61,12 +61,12 @@ test: sanity_check
 # aggregates depends on create_aggregate
 # join depends on create_misc
 # ----------
-test: select_into select_distinct select_implicit select_having subselect case random arrays btree_index hash_index delete
+test: select_into select_distinct select_implicit select_having subselect case random arrays btree_index hash_index update delete
 
 # ----------
 # Another group of parallel tests
 # ----------
-test: gin gist spgist init_privs security_label collate lock object_address groupingsets drop_operator password
+test: gin gist spgist init_privs security_label collate lock object_address groupingsets drop_operator password generated
 
 # ----------
 # Additional BRIN tests
@@ -98,7 +98,7 @@ test: subscription
 # Another group of parallel tests
 # select_views depends on create_view
 # ----------
-test: select_views portals_p2 dependency guc bitmapops tsearch tsdicts foreign_data window xmlmap functional_deps advisory_lock equivclass
+test: select_views portals_p2 foreign_key dependency guc bitmapops tsearch tsdicts foreign_data window xmlmap functional_deps advisory_lock equivclass
 
 # ----------
 # Another group of parallel tests (JSON related)
