@@ -1,13 +1,19 @@
 # List of subscription tests to run with OrioleDB
 # Add test files here, one per line
 
+t/002_types.pl
+t/003_constraints.pl
 t/004_sync.pl
 t/005_encoding.pl
 t/006_rewrite.pl
 t/007_ddl.pl
 t/008_diff_schema.pl
+t/009_matviews.pl
 t/010_truncate.pl
 t/011_generated.pl
+t/012_collation.pl
+t/014_binary.pl
 t/020_messages.pl
 t/024_add_drop_pub.pl
 t/026_stats.pl
+t/032_subscribe_use_index.pl
