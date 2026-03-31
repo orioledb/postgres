@@ -21,7 +21,7 @@ test: boolean char name varchar text int2 int4 int8 oid float4 float8 bit numeri
 # multirangetypes depends on rangetypes
 # multirangetypes shouldn't run concurrently with type_sanity
 # ----------
-test: md5 numerology point lseg line box path polygon circle date time timetz timestamp timestamptz interval inet macaddr macaddr8 multirangetypes
+test: strings md5 numerology point lseg line box path polygon circle date time timetz timestamp timestamptz interval inet macaddr macaddr8 multirangetypes
 
 # ----------
 # Another group of parallel tests
@@ -48,8 +48,7 @@ test: create_index create_index_spgist create_view
 # ----------
 # Another group of parallel tests
 # ----------
-test: create_aggregate create_function_sql create_cast constraints select typed_table drop_if_exists roleattributes create_am hash_func errors infinite_recurse
-
+test: create_aggregate create_function_sql create_cast constraints select inherit typed_table drop_if_exists updatable_views roleattributes create_am hash_func errors infinite_recurse
 # ----------
 # sanity_check does a vacuum, affecting the sort order of SELECT *
 # results. So it should not run parallel to other tests.
@@ -61,8 +60,7 @@ test: sanity_check
 # aggregates depends on create_aggregate
 # join depends on create_misc
 # ----------
-test: select_into select_distinct select_implicit select_having subselect case random arrays btree_index hash_index update delete
-
+test: select_into select_distinct select_implicit select_having subselect case aggregates random arrays btree_index hash_index update delete
 # ----------
 # Another group of parallel tests
 # ----------
@@ -77,7 +75,7 @@ test: gin gist spgist init_privs security_label collate lock object_address grou
 # psql depends on create_am
 # amutils depends on geometry, create_index_spgist, hash_index, brin
 # ----------
-test: create_table_like alter_generic alter_operator misc async dbsize merge sysviews tsrf collate.utf8 create_role
+test: create_table_like alter_generic alter_operator misc async dbsize merge misc_functions sysviews tsrf collate.utf8 incremental_sort create_role
 
 # collate.linux.utf8 and collate.icu.utf8 tests cannot be run in parallel with each other
 test: rules psql psql_crosstab collate.linux.utf8 collate.windows.win1252
@@ -86,6 +84,7 @@ test: rules psql psql_crosstab collate.linux.utf8 collate.windows.win1252
 # Run these alone so they don't run out of parallel workers
 # select_parallel depends on create_misc
 # ----------
+test: vacuum_parallel
 
 # Run this alone, because concurrent DROP TABLE would make non-superuser
 # "ANALYZE;" fail with "relation with OID $n does not exist".
@@ -127,6 +126,7 @@ test: partition_prune hash_part partition_aggregate partition_info explain memoi
 test: oidjoins
 
 # this test also uses event triggers, so likewise run it by itself
+test: fast_default
 
 # run tablespace test at the end because it drops the tablespace created during
 # setup that other tests may use.
