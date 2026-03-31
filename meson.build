@@ -153,7 +153,15 @@ cdata.set('PG_VERSION_NUM', pg_version_num)
 # PG_VERSION_STR is built later, it depends on compiler test results
 cdata.set_quoted('CONFIGURE_ARGS', '')
 
-orioledb_patchset_version = '22'
+orioledb_patchset_version = run_command('git', 'describe', '--tags', '--exact-match',
+                                        check: false).stdout().strip()
+
+if orioledb_patchset_version != ''
+  orioledb_patchset_version = orioledb_patchset_version.split('_')[1]
+else
+  orioledb_patchset_version = run_command('git', 'rev-parse', 'HEAD',
+                                          check: false).stdout().strip()
+endif
 
 
 ###############################################################
