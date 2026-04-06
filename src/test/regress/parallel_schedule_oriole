@@ -64,7 +64,7 @@ test: select_into select_distinct select_implicit select_having subselect case a
 # ----------
 # Another group of parallel tests
 # ----------
-test: gin gist spgist init_privs security_label collate lock object_address groupingsets drop_operator password generated
+test: gin gist spgist privileges init_privs security_label collate lock object_address groupingsets drop_operator password generated
 
 # ----------
 # Additional BRIN tests
