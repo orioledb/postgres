@@ -28,7 +28,7 @@ test: strings md5 numerology point lseg line box path polygon circle date time t
 # geometry depends on point, lseg, line, box, path, polygon, circle
 # horology depends on date, time, timetz, timestamp, timestamptz, interval
 # ----------
-test: geometry horology tstypes regex type_sanity misc_sanity comments expressions unicode xid mvcc database
+test: geometry horology tstypes regex type_sanity opr_sanity misc_sanity comments expressions unicode xid mvcc database
 
 # ----------
 # Load huge amounts of data
@@ -60,25 +60,27 @@ test: sanity_check
 # aggregates depends on create_aggregate
 # join depends on create_misc
 # ----------
-test: select_into select_distinct select_implicit select_having subselect case aggregates random arrays btree_index hash_index update delete
+test: select_into select_distinct select_implicit select_having subselect union case aggregates random arrays btree_index hash_index update delete
+
 # ----------
 # Another group of parallel tests
 # ----------
-test: gin gist spgist privileges init_privs security_label collate lock object_address groupingsets drop_operator password generated
+test: gin gist spgist privileges init_privs security_label collate lock object_address groupingsets drop_operator password identity generated join_hash
 
 # ----------
 # Additional BRIN tests
 # ----------
+test: brin_bloom brin_multi
 
 # ----------
 # Another group of parallel tests
 # psql depends on create_am
 # amutils depends on geometry, create_index_spgist, hash_index, brin
 # ----------
-test: create_table_like alter_generic alter_operator misc async dbsize merge misc_functions sysviews tsrf collate.utf8 incremental_sort create_role
+test: create_table_like alter_generic alter_operator misc async dbsize merge misc_functions sysviews tsrf collate.utf8 collate.icu.utf8 incremental_sort create_role
 
 # collate.linux.utf8 and collate.icu.utf8 tests cannot be run in parallel with each other
-test: rules psql psql_crosstab collate.linux.utf8 collate.windows.win1252
+test: rules psql psql_crosstab stats_ext collate.linux.utf8 collate.windows.win1252
 
 # ----------
 # Run these alone so they don't run out of parallel workers
@@ -110,7 +112,7 @@ test: json jsonb json_encoding jsonpath jsonpath_encoding jsonb_jsonpath sqljson
 # NB: temp.sql does a reconnect which transiently uses 2 connections,
 # so keep this parallel group to at most 19 tests
 # ----------
-test: plancache copy2 domain rangefuncs prepare conversion truncate alter_table sequence polymorphism rowtypes returning largeobject with xml
+test: plancache limit copy2 domain rangefuncs prepare conversion truncate alter_table sequence polymorphism rowtypes returning largeobject with xml
 
 # ----------
 # Another group of parallel tests
@@ -118,7 +120,7 @@ test: plancache copy2 domain rangefuncs prepare conversion truncate alter_table 
 # The stats test resets stats, so nothing else needing stats access can be in
 # this group.
 # ----------
-test: partition_prune hash_part partition_aggregate partition_info explain memoize
+test: partition_prune reloptions hash_part partition_aggregate partition_info explain memoize
 
 # event_trigger depends on create_am and cannot run concurrently with
 # any test that runs DDL
