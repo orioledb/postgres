@@ -1,0 +1,70 @@
+diff --git a/src/test/recovery/t/027_stream_regress.pl b/src/test/recovery/t/027_stream_regress.pl
+index 7bd9054a61..4bcf960ba3 100644
+--- a/src/test/recovery/t/027_stream_regress.pl
++++ b/src/test/recovery/t/027_stream_regress.pl
+@@ -21,9 +21,10 @@ $node_primary->append_conf('postgresql.conf',
+ # Enable pg_stat_statements to force tests to do query jumbling.
+ # pg_stat_statements.max should be large enough to hold all the entries
+ # of the regression database.
++my $extra_libs = $ENV{EXTRA_SHARED_PRELOAD_LIBS} ? ",$ENV{EXTRA_SHARED_PRELOAD_LIBS}" : "";
+ $node_primary->append_conf(
+ 	'postgresql.conf',
+-	qq{shared_preload_libraries = 'pg_stat_statements'
++	qq{shared_preload_libraries = 'pg_stat_statements$extra_libs'
+ pg_stat_statements.max = 50000
+ compute_query_id = 'regress'
+ });
+@@ -68,8 +69,7 @@ my $outputdir = $PostgreSQL::Test::Utils::tmp_check;
+ 
+ # Run the regression tests against the primary.
+ my $extra_opts = $ENV{EXTRA_REGRESS_OPTS} || "";
+-my $rc =
+-  system($ENV{PG_REGRESS}
++system($ENV{PG_REGRESS}
+ 	  . " $extra_opts "
+ 	  . "--dlpath=\"$dlpath\" "
+ 	  . "--bindir= "
+@@ -77,10 +77,14 @@ my $rc =
+ 	  . $node_primary->host . " "
+ 	  . "--port="
+ 	  . $node_primary->port . " "
+-	  . "--schedule=../regress/parallel_schedule "
++	  . "--schedule=../regress/parallel_schedule_oriole "
+ 	  . "--max-concurrent-tests=20 "
+ 	  . "--inputdir=../regress "
+ 	  . "--outputdir=\"$outputdir\"");
++system("python3 $ENV{top_builddir}/../orioledb/ci/filter_regression_diff.py"
++	  . " --diff $outputdir/regression.diffs"
++	  . " > \"$outputdir/filtered.out\"");
++my $rc = (-z "$outputdir/filtered.out") ? 0 : 1;
+ if ($rc != 0)
+ {
+ 	# Dump out the regression diffs file, if there is one
+@@ -92,6 +96,11 @@ if ($rc != 0)
+ 		print "=== EOF ===\n";
+ 	}
+ }
++else
++{
++	# Remove the diffs file if filtering shows that all tests passed
++	unlink "$outputdir/regression.diffs";
++}
+ is($rc, 0, 'regression tests pass');
+ 
+ # Clobber all sequences with their next value, so that we don't have
+@@ -118,8 +127,14 @@ command_ok(
+ 		'--no-sync', '-p', $node_standby_1->port
+ 	],
+ 	'dump standby server');
++system("diff -u \"$outputdir/primary.dump\" \"$outputdir/standby.dump\""
++	  . " > \"$outputdir/primary_vs_standby.diff\"");
+ command_ok(
+-	[ 'diff', $outputdir . '/primary.dump', $outputdir . '/standby.dump' ],
++	[
++		'python3',
++		"$ENV{top_builddir}/../orioledb/ci/filter_stream_regress_diff.py",
++		'--diff', "$outputdir/primary_vs_standby.diff"
++	],
+ 	'compare primary and standby dumps');
+ 
+ # Likewise for the catalogs of the regression database, after disabling
