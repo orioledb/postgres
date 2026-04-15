@@ -1,0 +1,36 @@
+# List of recovery tests to run with OrioleDB
+# Add test files here, one per line
+
+t/001_stream_rep.pl
+t/002_archiving.pl
+t/004_timeline_switch.pl
+t/006_logical_decoding.pl
+t/007_sync_rep.pl
+t/008_fsm_truncation.pl
+t/010_logical_decoding_timelines.pl
+t/013_crash_restart.pl
+t/015_promotion_pages.pl
+t/016_min_consistency.pl
+t/017_shm.pl
+t/019_replslot_limit.pl
+t/020_archive_status.pl
+t/022_crash_temp_files.pl
+t/024_archive_recovery.pl
+t/025_stuck_on_old_timeline.pl
+t/026_overwrite_contrecord.pl
+t/027_stream_regress.pl
+t/028_pitr_timelines.pl
+t/029_stats_restart.pl
+t/030_stats_cleanup_replica.pl
+t/033_replay_tsp_drops.pl
+t/034_create_database.pl
+t/036_truncated_dropped.pl
+t/037_invalid_database.pl
+t/038_save_logical_slots_shutdown.pl
+t/039_end_of_wal.pl
+t/041_checkpoint_at_promote.pl
+t/042_low_level_backup.pl
+t/043_no_contrecord_switch.pl
+t/045_archive_restartpoint.pl
+t/046_checkpoint_logical_slot.pl
+t/047_checkpoint_physical_slot.pl
