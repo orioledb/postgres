@@ -54,6 +54,32 @@ typedef bool (*RecoveryStopsBeforeHookType) (XLogReaderState *record,
 											 TransactionId *recordXid,
 											 TimestampTz *recordXtime);
 
+/*
+ * Metadata describing the recovery stop boundary that PostgreSQL has just
+ * reached. This is passed to extensions so they can synchronize or finalize
+ * their own replay state before recovery_target_action is applied.
+ */
+typedef struct RecoveryTargetReachedInfo
+{
+	RecoveryTargetType recoveryTarget;
+	int			recoveryTargetAction;
+	bool		recoveryStopAfter;
+	TransactionId recoveryStopXid;
+	TimestampTz recoveryStopTime;
+	XLogRecPtr	recoveryStopLSN;	/* stop LSN when target type naturally has one */
+	const char *recoveryStopName;	/* restore point name, if applicable */
+	XLogRecPtr	recordPtr;			/* ReadRecPtr of the record at the stop boundary */
+	XLogRecPtr	recordEndPtr;		/* EndRecPtr of the record at the stop boundary */
+} RecoveryTargetReachedInfo;
+
+/*
+ * Hook for extensions to synchronize or finalize custom replay state after
+ * PostgreSQL has reached a recovery target, but before recovery_target_action
+ * is applied. The hook receives explicit metadata describing the stop
+ * boundary that was reached.
+ */
+typedef void (*RecoveryTargetReachedHookType) (const RecoveryTargetReachedInfo *info);
+
 /* User-settable GUC parameters */
 extern PGDLLIMPORT bool recoveryTargetInclusive;
 extern PGDLLIMPORT int recoveryTargetAction;
@@ -86,10 +112,17 @@ extern PGDLLIMPORT bool StandbyMode;
 extern PGDLLIMPORT GetReplayXlogPtrHookType GetReplayXlogPtrHook;
 
 /*
- * Hook for extensions to be able to decides to stop applying the WAL files
+ * Hook for extensions to be able to decide whether to stop applying WAL
  * based on custom WAL records.
  */
 extern PGDLLIMPORT RecoveryStopsBeforeHookType RecoveryStopsBeforeHook;
+
+/*
+ * Hook for extensions to synchronize or finalize custom replay state after
+ * PostgreSQL has reached a recovery target, but before recovery_target_action
+ * is applied.
+ */
+extern PGDLLIMPORT RecoveryTargetReachedHookType RecoveryTargetReachedHook;
 
 extern Size XLogRecoveryShmemSize(void);
 extern void XLogRecoveryShmemInit(void);
