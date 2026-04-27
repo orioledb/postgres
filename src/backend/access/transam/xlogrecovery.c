@@ -1850,8 +1850,6 @@ PerformWalRecovery(void)
 			 * Resource Managers may choose to do permanent corrective actions
 			 * at end of recovery.
 			 */
-			recoveryTargetReachedInfo.recoveryTarget = recoveryTarget;
-			recoveryTargetReachedInfo.recoveryTargetAction = recoveryTargetAction;
 			recoveryTargetReachedInfo.recoveryStopAfter = recoveryStopAfter;
 			recoveryTargetReachedInfo.recoveryStopXid = recoveryStopXid;
 			recoveryTargetReachedInfo.recoveryStopTime = recoveryStopTime;

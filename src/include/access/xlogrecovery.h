@@ -61,8 +61,6 @@ typedef bool (*RecoveryStopsBeforeHookType) (XLogReaderState *record,
  */
 typedef struct RecoveryTargetReachedInfo
 {
-	RecoveryTargetType recoveryTarget;
-	int			recoveryTargetAction;
 	bool		recoveryStopAfter;
 	TransactionId recoveryStopXid;
 	TimestampTz recoveryStopTime;
