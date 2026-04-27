@@ -76,10 +76,6 @@ typedef struct ConflictTupleInfo
 								 * conflicting local row occurred */
 } ConflictTupleInfo;
 
-extern bool GetTupleTransactionInfo(struct TupleTableSlot *localslot,
-									TransactionId *xmin,
-									RepOriginId *localorigin,
-									TimestampTz *localts);
 extern void ReportApplyConflict(struct EState *estate, struct ResultRelInfo *relinfo,
 								int elevel, ConflictType type,
 								struct TupleTableSlot *searchslot,

@@ -538,6 +538,11 @@ typedef struct TableAmRoutine
 											 TupleTableSlot *slot,
 											 Snapshot snapshot);
 
+	bool		(*tuple_get_transaction_info) (TupleTableSlot *slot,
+											 TransactionId *xmin,
+											 RepOriginId *originid,
+											 TimestampTz *ts);
+
 	/* see table_index_delete_tuples() */
 	TransactionId (*index_delete_tuples) (Relation rel,
 										  TM_IndexDeleteOp *delstate);
@@ -1352,6 +1357,21 @@ table_tuple_satisfies_snapshot(Relation rel, TupleTableSlot *slot,
 							   Snapshot snapshot)
 {
 	return rel->rd_tableam->tuple_satisfies_snapshot(rel, slot, snapshot);
+}
+
+/*
+ * Get the xmin and commit timestamp data (origin and timestamp) associated
+ * with the provided local row.
+ *
+ * Return true if the commit timestamp data was found, false otherwise.
+ */
+static inline bool
+table_tuple_get_transaction_info(Relation rel, TupleTableSlot *slot,
+								 TransactionId *xmin, RepOriginId *originid,
+								 TimestampTz *ts)
+{
+	return rel->rd_tableam->tuple_get_transaction_info(slot, xmin,
+													   originid, ts);
 }
 
 /*
