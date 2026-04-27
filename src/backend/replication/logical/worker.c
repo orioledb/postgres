@@ -2691,8 +2691,10 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 		 * Report the conflict if the tuple was modified by a different
 		 * origin.
 		 */
-		if (GetTupleTransactionInfo(localslot, &conflicttuple.xmin,
-									&conflicttuple.origin, &conflicttuple.ts) &&
+		if (table_tuple_get_transaction_info(localrel, localslot,
+											 &conflicttuple.xmin,
+											 &conflicttuple.origin,
+											 &conflicttuple.ts) &&
 			conflicttuple.origin != replorigin_session_origin)
 		{
 			TupleTableSlot *newslot;
@@ -2871,8 +2873,10 @@ apply_handle_delete_internal(ApplyExecutionData *edata,
 		 * Report the conflict if the tuple was modified by a different
 		 * origin.
 		 */
-		if (GetTupleTransactionInfo(localslot, &conflicttuple.xmin,
-									&conflicttuple.origin, &conflicttuple.ts) &&
+		if (table_tuple_get_transaction_info(localrel, localslot,
+											 &conflicttuple.xmin,
+											 &conflicttuple.origin,
+											 &conflicttuple.ts) &&
 			conflicttuple.origin != replorigin_session_origin)
 		{
 			conflicttuple.slot = localslot;
@@ -3091,9 +3095,10 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 				 * Report the conflict if the tuple was modified by a
 				 * different origin.
 				 */
-				if (GetTupleTransactionInfo(localslot, &conflicttuple.xmin,
-											&conflicttuple.origin,
-											&conflicttuple.ts) &&
+				if (table_tuple_get_transaction_info(partrel, localslot,
+													 &conflicttuple.xmin,
+													 &conflicttuple.origin,
+													 &conflicttuple.ts) &&
 					conflicttuple.origin != replorigin_session_origin)
 				{
 					TupleTableSlot *newslot;

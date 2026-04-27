@@ -53,38 +53,6 @@ static char *build_index_value_desc(EState *estate, Relation localrel,
 									TupleTableSlot *slot, Oid indexoid);
 
 /*
- * Get the xmin and commit timestamp data (origin and timestamp) associated
- * with the provided local row.
- *
- * Return true if the commit timestamp data was found, false otherwise.
- */
-bool
-GetTupleTransactionInfo(TupleTableSlot *localslot, TransactionId *xmin,
-						RepOriginId *localorigin, TimestampTz *localts)
-{
-	Datum		xminDatum;
-	bool		isnull;
-
-	xminDatum = slot_getsysattr(localslot, MinTransactionIdAttributeNumber,
-								&isnull);
-	*xmin = DatumGetTransactionId(xminDatum);
-	Assert(!isnull);
-
-	/*
-	 * The commit timestamp data is not available if track_commit_timestamp is
-	 * disabled.
-	 */
-	if (!track_commit_timestamp)
-	{
-		*localorigin = InvalidRepOriginId;
-		*localts = 0;
-		return false;
-	}
-
-	return TransactionIdGetCommitTsData(*xmin, localts, localorigin);
-}
-
-/*
  * This function is used to report a conflict while applying replication
  * changes.
  *
