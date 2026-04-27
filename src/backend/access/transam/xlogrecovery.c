@@ -1838,8 +1838,6 @@ PerformWalRecovery(void)
 
 		if (reachedRecoveryTarget)
 		{
-			RecoveryTargetReachedInfo recoveryTargetReachedInfo;
-
 			if (!reachedConsistency)
 				ereport(FATAL,
 						(errmsg("requested recovery stop point is before consistent recovery point")));
@@ -1850,14 +1848,6 @@ PerformWalRecovery(void)
 			 * Resource Managers may choose to do permanent corrective actions
 			 * at end of recovery.
 			 */
-			recoveryTargetReachedInfo.recoveryStopAfter = recoveryStopAfter;
-			recoveryTargetReachedInfo.recoveryStopXid = recoveryStopXid;
-			recoveryTargetReachedInfo.recoveryStopTime = recoveryStopTime;
-			recoveryTargetReachedInfo.recoveryStopLSN = recoveryStopLSN;
-			recoveryTargetReachedInfo.recoveryStopName =
-				recoveryStopName[0] != '\0' ? recoveryStopName : NULL;
-			recoveryTargetReachedInfo.recordPtr = xlogreader->ReadRecPtr;
-			recoveryTargetReachedInfo.recordEndPtr = xlogreader->EndRecPtr;
 
 			/*
 			 * Pass the exact stop-boundary metadata to extensions so they can
@@ -1865,7 +1855,14 @@ PerformWalRecovery(void)
 			 * recovery to stop.
 			 */
 			if (RecoveryTargetReachedHook != NULL)
+			{
+				RecoveryTargetReachedInfo recoveryTargetReachedInfo;
+
+				recoveryTargetReachedInfo.recordPtr = xlogreader->ReadRecPtr;
+				recoveryTargetReachedInfo.recordEndPtr = xlogreader->EndRecPtr;
+
 				RecoveryTargetReachedHook(&recoveryTargetReachedInfo);
+			}
 
 			switch (recoveryTargetAction)
 			{
