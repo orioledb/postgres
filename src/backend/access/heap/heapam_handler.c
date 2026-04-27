@@ -19,6 +19,7 @@
  */
 #include "postgres.h"
 
+#include "access/commit_ts.h"
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/heaptoast.h"
@@ -263,6 +264,32 @@ heapam_tuple_satisfies_snapshot(Relation rel, TupleTableSlot *slot,
 	LockBuffer(bslot->buffer, BUFFER_LOCK_UNLOCK);
 
 	return res;
+}
+
+static bool
+heapam_tuple_get_transaction_info(TupleTableSlot *slot, TransactionId *xmin,
+								  RepOriginId *originid, TimestampTz *ts)
+{
+	Datum		xminDatum;
+	bool		isnull;
+
+	xminDatum = slot_getsysattr(slot, MinTransactionIdAttributeNumber,
+								&isnull);
+	*xmin = DatumGetTransactionId(xminDatum);
+	Assert(!isnull);
+
+	/*
+	 * The commit timestamp data is not available if track_commit_timestamp is
+	 * disabled.
+	 */
+	if (!track_commit_timestamp)
+	{
+		*originid = InvalidRepOriginId;
+		*ts = 0;
+		return false;
+	}
+
+	return TransactionIdGetCommitTsData(*xmin, ts, originid);
 }
 
 
@@ -3037,6 +3064,7 @@ static const TableAmRoutine heapam_methods = {
 	.tuple_get_latest_tid = heap_get_latest_tid,
 	.tuple_tid_valid = heapam_tuple_tid_valid,
 	.tuple_satisfies_snapshot = heapam_tuple_satisfies_snapshot,
+	.tuple_get_transaction_info = heapam_tuple_get_transaction_info,
 	.index_delete_tuples = heap_index_delete_tuples,
 
 	.relation_set_new_filelocator = heapam_relation_set_new_filelocator,

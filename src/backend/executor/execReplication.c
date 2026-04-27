@@ -572,8 +572,11 @@ CheckAndReportConflict(ResultRelInfo *resultRelInfo, EState *estate,
 			conflicttuple->slot = conflictslot;
 			conflicttuple->indexoid = uniqueidx;
 
-			GetTupleTransactionInfo(conflictslot, &conflicttuple->xmin,
-									&conflicttuple->origin, &conflicttuple->ts);
+			table_tuple_get_transaction_info(resultRelInfo->ri_RelationDesc,
+											 conflictslot,
+											 &conflicttuple->xmin,
+											 &conflicttuple->origin,
+											 &conflicttuple->ts);
 
 			conflicttuples = lappend(conflicttuples, conflicttuple);
 		}
