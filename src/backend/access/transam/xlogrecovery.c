@@ -1808,6 +1808,7 @@ PerformWalRecovery(void)
 			{
 				RecoveryTargetReachedInfo recoveryTargetReachedInfo;
 
+				recoveryTargetReachedInfo.recoveryStopAfter = recoveryStopAfter;
 				recoveryTargetReachedInfo.recordPtr = xlogreader->ReadRecPtr;
 				recoveryTargetReachedInfo.recordEndPtr = xlogreader->EndRecPtr;
 

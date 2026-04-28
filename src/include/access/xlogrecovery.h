@@ -61,6 +61,7 @@ typedef bool (*RecoveryStopsBeforeHookType) (XLogReaderState *record,
  */
 typedef struct RecoveryTargetReachedInfo
 {
+	bool		recoveryStopAfter;
 	XLogRecPtr	recordPtr;			/* ReadRecPtr of the record at the stop boundary */
 	XLogRecPtr	recordEndPtr;		/* EndRecPtr of the record at the stop boundary */
 } RecoveryTargetReachedInfo;
