@@ -608,6 +608,17 @@ typedef struct TableAmRoutine
 							   TM_FailureData *tmfd);
 
 	/*
+	 * Called by the executor after every per-row INSERT / UPDATE / DELETE
+	 * has had its secondary-index modifications applied via
+	 * ExecInsertIndexTuples().  Lets table AMs that track per-row "primary
+	 * index applied, secondary indices still pending" state (e.g. orioledb,
+	 * for crash-recovery PK/SK consistency) clear that marker.
+	 *
+	 * Optional callback.
+	 */
+	void		(*tuple_complete_modification) (Relation rel);
+
+	/*
 	 * Perform operations necessary to complete insertions made via
 	 * tuple_insert and multi_insert with a BulkInsertState specified. In-tree
 	 * access methods ceased to use this.
@@ -1632,6 +1643,19 @@ table_tuple_lock(Relation rel, Datum tupleid, Snapshot snapshot,
 	return rel->rd_tableam->tuple_lock(rel, tupleid, snapshot, slot,
 									   cid, mode, wait_policy,
 									   flags, tmfd);
+}
+
+/*
+ * Notify the table AM that the per-row INSERT/UPDATE/DELETE has had its
+ * secondary-index modifications applied.  Called from the executor right
+ * after ExecInsertIndexTuples() returns for the row.
+ */
+static inline void
+table_tuple_complete_modification(Relation rel)
+{
+	/* optional callback */
+	if (rel->rd_tableam && rel->rd_tableam->tuple_complete_modification)
+		rel->rd_tableam->tuple_complete_modification(rel);
 }
 
 /*
