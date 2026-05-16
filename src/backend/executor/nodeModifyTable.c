@@ -1078,6 +1078,13 @@ ExecInsert(ModifyTableContext *context,
 													   slot, estate, false,
 													   false, NULL, NIL,
 													   false);
+
+			/*
+			 * Let the table AM know the per-row INSERT has propagated to
+			 * its secondary indices (orioledb uses this to clear its
+			 * PK-applied/SK-pending recovery marker).
+			 */
+			table_tuple_complete_modification(resultRelationDesc);
 		}
 	}
 
@@ -1320,6 +1327,13 @@ ExecDeleteEpilogue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	/* delete index entries if necessary */
 	if (resultRelInfo->ri_NumIndices > 0)
 		ExecDeleteIndexTuples(resultRelInfo, slot, context->estate);
+
+	/*
+	 * Let the table AM know the per-row DELETE has propagated to its
+	 * secondary indices (orioledb uses this to clear its
+	 * PK-applied/SK-pending recovery marker).
+	 */
+	table_tuple_complete_modification(resultRelInfo->ri_RelationDesc);
 
 	/*
 	 * If this delete is the result of a partition key update that moved the
@@ -2058,6 +2072,13 @@ ExecUpdateEpilogue(ModifyTableContext *context, UpdateContext *updateCxt,
 											   NULL, NIL,
 											   (updateCxt->updateIndexes == TU_Summarizing));
 	}
+
+	/*
+	 * Let the table AM know the per-row UPDATE has propagated to its
+	 * secondary indices (orioledb uses this to clear its
+	 * PK-applied/SK-pending recovery marker).
+	 */
+	table_tuple_complete_modification(resultRelInfo->ri_RelationDesc);
 
 	/* AFTER ROW UPDATE Triggers */
 	ExecARUpdateTriggers(context->estate, resultRelInfo,
