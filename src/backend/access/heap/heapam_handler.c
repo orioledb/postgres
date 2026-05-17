@@ -3019,6 +3019,7 @@ static const TableAmRoutine heapam_methods = {
 	.relation_nontransactional_truncate = heapam_relation_nontransactional_truncate,
 	.relation_copy_data = heapam_relation_copy_data,
 	.relation_copy_for_cluster = heapam_relation_copy_for_cluster,
+	.relation_cluster = NULL,
 	.relation_vacuum = heap_vacuum_rel,
 	.scan_analyze_next_block = heapam_scan_analyze_next_block,
 	.scan_analyze_next_tuple = heapam_scan_analyze_next_tuple,

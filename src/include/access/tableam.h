@@ -939,6 +939,11 @@ typedef struct TableAmRoutine
 								  BlockNumber *totalpages);
 
 	bytea	   *(*reloptions) (char relkind, Datum reloptions, bool validate);
+	
+	/* hook for relation clustering. */
+	void		(*relation_cluster) (Relation OldTable,
+									 bool verbose);
+									 
 } TableAmRoutine;
 
 
