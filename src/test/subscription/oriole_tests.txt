@@ -17,4 +17,5 @@ t/020_messages.pl
 t/024_add_drop_pub.pl
 t/025_rep_changes_for_schema.pl
 t/026_stats.pl
+t/030_origin.pl
 t/032_subscribe_use_index.pl
