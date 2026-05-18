@@ -64,6 +64,7 @@
 #include "utils/combocid.h"
 #include "utils/guc.h"
 #include "utils/inval.h"
+#include "utils/injection_point.h"
 #include "utils/memutils.h"
 #include "utils/relmapper.h"
 #include "utils/snapmgr.h"
@@ -2312,6 +2313,8 @@ CommitTransaction(void)
 	if (!is_parallel_worker)
 		PreCommit_CheckForSerializationFailure();
 
+	INJECTION_POINT("before-holding-interrupt-in-CommitTransactio");
+
 	/* Prevent cancel/die interrupt while cleaning up */
 	HOLD_INTERRUPTS();
 
@@ -2336,7 +2339,9 @@ CommitTransaction(void)
 		 * We need to mark our XIDs as committed in pg_xact.  This is where we
 		 * durably commit.
 		 */
+		INJECTION_POINT("before-tx-commit");
 		latestXid = RecordTransactionCommit();
+		INJECTION_POINT("after-tx-commit");
 	}
 	else
 	{
@@ -2362,6 +2367,9 @@ CommitTransaction(void)
 	 */
 	MyProc->lastCommittedCSN = s->csn;
 	ProcArrayEndTransaction(MyProc, latestXid);
+#ifdef USE_INJECTION_POINTS
+	INJECTION_POINT("after-proc-array-end-tx");
+#endif
 	s->csn = MyProc->lastCommittedCSN;
 
 	/*
@@ -2382,6 +2390,10 @@ CommitTransaction(void)
 
 	CallXactCallbacks(is_parallel_worker ? XACT_EVENT_PARALLEL_COMMIT
 					  : XACT_EVENT_COMMIT);
+
+	START_CRIT_SECTION();
+	INJECTION_POINT("orioledb-commit-assert");
+	END_CRIT_SECTION();
 
 	CurrentResourceOwner = NULL;
 	ResourceOwnerRelease(TopTransactionResourceOwner,

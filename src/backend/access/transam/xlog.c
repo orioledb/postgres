@@ -2787,7 +2787,6 @@ XLogFlush(XLogRecPtr record)
 	XLogRecPtr	WriteRqstPtr;
 	XLogwrtRqst WriteRqst;
 	TimeLineID	insertTLI = XLogCtl->InsertTimeLineID;
-
 	/*
 	 * During REDO, we are reading not writing WAL.  Therefore, instead of
 	 * trying to flush the WAL, we should update minRecoveryPoint instead. We

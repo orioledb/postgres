@@ -96,6 +96,7 @@
 #include "utils/builtins.h"
 #include "utils/elog.h"
 #include "utils/fmgroids.h"
+#include "utils/injection_point.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -17640,6 +17641,16 @@ PreCommit_on_commit_actions(void)
 	ListCell   *l;
 	List	   *oids_to_truncate = NIL;
 	List	   *oids_to_drop = NIL;
+
+	/*
+	 * Stress-test injection point.  See orioledb test/t/crash/tx_flow.md:102.
+	 * The function comment above explicitly notes that errors may
+	 * be encountered here, and the body issues TRUNCATEs / drops on
+	 * ON COMMIT relations -- a heavy mid-precommit modifier.  The
+	 * abort handler does not call this function, so error-mode
+	 * injection here is single-shot and aborts cleanly.
+	 */
+	INJECTION_POINT("postgres-precommit-on-commit-actions");
 
 	foreach(l, on_commits)
 	{
