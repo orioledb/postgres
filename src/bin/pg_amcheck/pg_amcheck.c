@@ -1924,28 +1924,30 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 		appendPQExpBufferStr(&sql, ") NULL::INTEGER AS pattern_id,");
 	appendPQExpBuffer(&sql,
 					  "\nc.oid, n.nspname, c.relname, c.reltoastrelid, c.relpages, "
-					  "c.relam = %u AS is_heap, "
+					  "am.amtype = 't' AS is_heap, "
 					  "c.relam = %u AS is_btree"
 					  "\nFROM pg_catalog.pg_class c "
 					  "INNER JOIN pg_catalog.pg_namespace n "
-					  "ON c.relnamespace = n.oid",
-					  HEAP_TABLE_AM_OID, BTREE_AM_OID);
+					  "ON c.relnamespace = n.oid "
+					  "LEFT JOIN pg_catalog.pg_am am "
+					  "ON am.oid = c.relam",
+					  BTREE_AM_OID);
 	if (!opts.allrel)
 		appendPQExpBuffer(&sql,
 						  "\nINNER JOIN include_pat ip"
 						  "\nON (n.nspname ~ ip.nsp_regex OR ip.nsp_regex IS NULL)"
 						  "\nAND (c.relname ~ ip.rel_regex OR ip.rel_regex IS NULL)"
-						  "\nAND (c.relam = %u OR NOT ip.heap_only)"
+						  "\nAND (am.amtype = 't' OR NOT ip.heap_only)"
 						  "\nAND (c.relam = %u OR NOT ip.btree_only)",
-						  HEAP_TABLE_AM_OID, BTREE_AM_OID);
+						  BTREE_AM_OID);
 	if (opts.excludetbl || opts.excludeidx || opts.excludensp)
 		appendPQExpBuffer(&sql,
 						  "\nLEFT OUTER JOIN exclude_pat ep"
 						  "\nON (n.nspname ~ ep.nsp_regex OR ep.nsp_regex IS NULL)"
 						  "\nAND (c.relname ~ ep.rel_regex OR ep.rel_regex IS NULL)"
-						  "\nAND (c.relam = %u OR NOT ep.heap_only OR ep.rel_regex IS NULL)"
+						  "\nAND (am.amtype = 't' OR NOT ep.heap_only OR ep.rel_regex IS NULL)"
 						  "\nAND (c.relam = %u OR NOT ep.btree_only OR ep.rel_regex IS NULL)",
-						  HEAP_TABLE_AM_OID, BTREE_AM_OID);
+						  BTREE_AM_OID);
 
 	/*
 	 * Exclude temporary tables and indexes, which must necessarily belong to
@@ -1974,32 +1976,31 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 	 */
 	if (opts.allrel)
 		appendPQExpBuffer(&sql,
-						  " AND c.relam = %u "
+						  " AND am.amtype = 't' "
 						  "AND c.relkind IN ("
 						  CppAsString2(RELKIND_RELATION) ", "
 						  CppAsString2(RELKIND_SEQUENCE) ", "
 						  CppAsString2(RELKIND_MATVIEW) ", "
 						  CppAsString2(RELKIND_TOASTVALUE) ") "
 						  "AND c.relnamespace != %u",
-						  HEAP_TABLE_AM_OID, PG_TOAST_NAMESPACE);
+						  PG_TOAST_NAMESPACE);
 	else
 		appendPQExpBuffer(&sql,
-						  " AND c.relam IN (%u, %u)"
+						  " AND (am.amtype = 't' OR c.relam = %u)"
 						  "AND c.relkind IN ("
 						  CppAsString2(RELKIND_RELATION) ", "
 						  CppAsString2(RELKIND_SEQUENCE) ", "
 						  CppAsString2(RELKIND_MATVIEW) ", "
 						  CppAsString2(RELKIND_TOASTVALUE) ", "
 						  CppAsString2(RELKIND_INDEX) ") "
-						  "AND ((c.relam = %u AND c.relkind IN ("
+						  "AND ((am.amtype = 't' AND c.relkind IN ("
 						  CppAsString2(RELKIND_RELATION) ", "
 						  CppAsString2(RELKIND_SEQUENCE) ", "
 						  CppAsString2(RELKIND_MATVIEW) ", "
 						  CppAsString2(RELKIND_TOASTVALUE) ")) OR "
 						  "(c.relam = %u AND c.relkind = "
 						  CppAsString2(RELKIND_INDEX) "))",
-						  HEAP_TABLE_AM_OID, BTREE_AM_OID,
-						  HEAP_TABLE_AM_OID, BTREE_AM_OID);
+						  BTREE_AM_OID, BTREE_AM_OID);
 
 	appendPQExpBufferStr(&sql,
 						 "\nORDER BY c.oid)");
@@ -2035,15 +2036,18 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 		 * selected above, filtering by exclusion patterns (if any) that match
 		 * btree index names.
 		 */
-		appendPQExpBufferStr(&sql,
+		appendPQExpBuffer(&sql,
 							 ", index (oid, nspname, relname, relpages) AS ("
 							 "\nSELECT c.oid, r.nspname, c.relname, c.relpages "
 							 "FROM relation r"
+							 "\nINNER JOIN pg_catalog.pg_class pc "
+							 "ON pc.oid = r.oid AND pc.relam = %u"
 							 "\nINNER JOIN pg_catalog.pg_index i "
 							 "ON r.oid = i.indrelid "
 							 "INNER JOIN pg_catalog.pg_class c "
 							 "ON i.indexrelid = c.oid "
-							 "AND c.relpersistence != " CppAsString2(RELPERSISTENCE_TEMP));
+							 "AND c.relpersistence != " CppAsString2(RELPERSISTENCE_TEMP),
+							 HEAP_TABLE_AM_OID);
 		if (opts.excludeidx || opts.excludensp)
 			appendPQExpBufferStr(&sql,
 								 "\nINNER JOIN pg_catalog.pg_namespace n "
