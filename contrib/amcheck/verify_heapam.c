@@ -341,24 +341,13 @@ verify_heapam(PG_FUNCTION_ARGS)
 
 	/*
 	 * Sequences always use heap AM, but they don't show that in the catalogs.
-	 * For other relkinds with a non-heap AM, call the AM's verify_tableam
-	 * method if available. All other checks catered to heap are avoided.
+	 * Other relkinds might be using a different AM, so check.
 	 */
 	if (ctx.rel->rd_rel->relkind != RELKIND_SEQUENCE &&
 		ctx.rel->rd_rel->relam != HEAP_TABLE_AM_OID)
-	{
-		const TableAmRoutine *tableam = ctx.rel->rd_tableam;
-
-		if (tableam == NULL || tableam->verify_tableam == NULL)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("table access method does not support amcheck")));
-
-		tableam->verify_tableam(ctx.rel, ctx.tupstore, ctx.tupdesc,
-								on_error_stop, check_toast);
-		relation_close(ctx.rel, AccessShareLock);
-		PG_RETURN_NULL();
-	}
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("only heap AM is supported")));
 
 	/*
 	 * Early exit for unlogged relations during recovery.  These will have no
