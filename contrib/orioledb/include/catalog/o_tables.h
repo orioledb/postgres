@@ -1,0 +1,374 @@
+/*-------------------------------------------------------------------------
+ *
+ * o_tables.h
+ * 		Routines for orioledb tables system tree.
+ *
+ * Copyright (c) 2021-2026, Oriole DB Inc.
+ * Copyright (c) 2025-2026, Supabase Inc.
+ *
+ * IDENTIFICATION
+ *	  contrib/orioledb/include/catalog/o_tables.h
+ *
+ *-------------------------------------------------------------------------
+ */
+#ifndef __O_TABLES_H__
+#define __O_TABLES_H__
+
+#include "btree/btree.h"
+#include "catalog/sys_trees.h"
+
+#include "access/tupdesc.h"
+#include "access/tupdesc_details.h"
+#include "executor/execExpr.h"
+#include "catalog/objectaddress.h"
+#include "nodes/parsenodes.h"
+#include "orioledb.h"
+
+/*
+ * Describes a field of an orioledb table.
+ */
+typedef struct
+{
+	NameData	name;
+	Oid			typid;
+	Oid			collation;
+	int32		typmod BKI_DEFAULT(-1);
+	int32		ndims;
+	bool		byval;
+	bool		droped;
+	bool		notnull;
+	int16		typlen;
+	char		align;
+	char		storage;
+	char		compression;
+	bool		hasmissing;
+	bool		hasdef;
+	char		generated;
+} OTableField;
+
+/*
+ * Describes an index field of an orioledb table.
+ */
+typedef struct
+{
+	int			attnum;
+	Oid			collation;
+	Oid			opclass;
+	SortByDir	ordering;
+	SortByNulls nullsOrdering;
+	Oid			hash_fn_oid;
+} OTableIndexField;
+
+/*
+ * Describes an index of an orioledb table.
+ */
+typedef struct
+{
+	NameData	name;
+	ORelOids	oids;
+	OIndexType	type;
+	OCompress	compress;
+	uint32		version;
+	bool		nulls_not_distinct;
+	uint8		nfields;
+	/* number of index fields */
+	uint8		nkeyfields;
+	uint8		fillfactor;
+	OTableIndexField fields[INDEX_MAX_KEYS];
+	uint8		nexprfields;
+	OTableField *exprfields;
+	List	   *expressions;	/* list of Expr */
+	char	   *predicate_str;
+	List	   *predicate;		/* list of Expr */
+	Oid			tablespace;
+	Oid		   *exclops;
+	bool		immediate;
+	MemoryContext index_mctx;
+} OTableIndex;
+
+/*
+ * Describes an orioledb table.
+ */
+typedef struct
+{
+	ORelOids	oids;
+	ORelOids	toast_oids;
+
+	/*
+	 * Per-table index version counters used for sys-tree visibility (MVCC)
+	 * during recovery and logical decoding.
+	 *
+	 * OrioleDB stores catalog-like metadata in system trees. For some
+	 * operations the "same" logical index (e.g. the table's primary index)
+	 * may be replaced by a new metadata record while keeping stable identity
+	 * attributes (relation OIDs, names, etc.).
+	 *
+	 * To make each incarnation unambiguous, OIndex records are keyed not only
+	 * by (table oids, index type) but also by a monotonically changing
+	 * version. These fields keep the current version for the corresponding
+	 * index kind and are copied into ORelFetchContext.version when we need to
+	 * read the matching OIndex from SYS_TREES.
+	 *
+	 * O_TABLE_INVALID_VERSION means "index does not exist / version is
+	 * unknown".
+	 */
+	uint32		toast_ixversion;	/* TOAST-index version for current table */
+	uint32		primary_ixversion;	/* Primary-index version for current table */
+	uint32		bridge_ixversion;	/* Bridge-index version for current table */
+	ORelOids	bridge_oids;
+	OCompress	default_compress;
+	OCompress	primary_compress;
+	OCompress	toast_compress;
+	bool		index_bridging;
+	uint16		nfields;
+	uint16		primary_init_nfields;
+	uint16		nindices;
+	Oid			tid_btree_ops_oid;	/* have to store it here */
+	Oid			tid_hash_fn_oid;	/* have to store it here */
+	Oid			int2_hash_fn_oid;	/* have to store it here */
+	Oid			int4_hash_fn_oid;	/* have to store it here */
+	bool		has_primary;
+	char		persistence;
+	uint8		fillfactor;
+	uint16		data_version;
+	OTableIndex *indices;
+	OTableField *fields;
+	AttrMissing *missing;		/* missing attributes values, NULL if none */
+	Oid			tablespace;
+	uint32		version;		/* not serialized in serialize_o_table */
+	MemoryContext tbl_mctx;		/* not serialized in serialize_o_table */
+} OTable;
+
+#define OGetTableContext(table) \
+	((table)->tbl_mctx ? \
+	 (table)->tbl_mctx : \
+		((table)->tbl_mctx = AllocSetContextCreate(TopMemoryContext, \
+												   "OTableContext", \
+												   ALLOCSET_DEFAULT_SIZES)))
+
+/*
+ * Maximum number of retries when deserialization fails due to truncated toast
+ * data (missing chunks from a concurrent write race condition).
+ */
+#define O_DESERIALIZE_MAX_RETRIES 100
+
+/* Parameters for a deserialization retry exponential backoff. */
+#define O_DESERIALIZE_RETRY_MIN_DURATION (1000L)
+#define O_DESERIALIZE_RETRY_MAX_DURATION (100000L)
+
+extern void o_table_fill_index(OTable *o_table, OIndexNumber ix_num,
+							   Relation index_rel);
+
+/* Creates and fills OTable. */
+extern OTable *o_table_tableam_create(ORelOids oids, TupleDesc tupdesc,
+									  char relpersistence, uint8 fillfactor,
+									  Oid tablespace, bool bridging);
+
+OTableField *o_tables_get_builtin_field(Oid type);
+extern void o_tables_tupdesc_init_builtin(TupleDesc desc, AttrNumber att_num,
+										  char *name, Oid type);
+
+extern TupleDesc o_table_fields_make_tupdesc(OTableField *fields, int nfields);
+
+/* Returns tuple descriptor of the OTable */
+extern TupleDesc o_table_tupdesc(OTable *o_table);
+
+/* Finds table field by its name */
+extern OTableField *o_table_field_by_name(OTable *table, const char *name);
+
+/* Drops a table by oids from o_tables list */
+extern OTable *o_tables_drop_by_oids(ORelOids oids, OXid oxid, CommitSeqNo csn);
+
+/* Drops all tables from o_tables list */
+extern void o_tables_drop_all(OXid oxid, CommitSeqNo csn, Oid database_id);
+
+/* Drops all columns of a specific type */
+extern void o_tables_drop_columns_by_type(OXid oxid, CommitSeqNo csn, Oid type_oid);
+
+/* Drops all temporary tables that left after crash */
+extern void o_tables_truncate_all_unlogged(void);
+
+/* Adds a new table to o_tables list */
+extern bool o_tables_add(OTable *table, OXid oxid, CommitSeqNo csn);
+
+/* Returns OTable by its oids */
+extern OTable *o_tables_get(ORelOids oids);
+
+/* Returns OTable by its oids, version and snapshot */
+extern OTable *o_tables_get_extended(ORelOids oids, OTableFetchContext ctx);
+
+/* Returns OTable by its index oids */
+extern OTable *o_tables_get_by_tree(ORelOids oids, OIndexType type);
+
+/* Returns number of OrioleDB tables in the database */
+extern int	o_tables_num(Oid datoid);
+
+/* Updates OTable description in o_tables list */
+extern bool o_tables_update(OTable *table, OXid oxid, CommitSeqNo csn);
+
+/* Invalidates descriptors after o_tables_update */
+void		o_tables_after_update(OTable *o_table, OXid oxid, CommitSeqNo csn);
+
+/* Free memory of OTable struct */
+extern void o_table_free(OTable *table);
+
+extern OIndexKey *o_table_make_index_keys(OTable *table, int *num);
+
+/* callback for o_tables_foreach() */
+typedef void (*OTablesCallback) (OTable *descr, void *arg);
+
+/* callback for o_tables_foreach_oids() */
+typedef void (*OTablesOidsCallback) (ORelOids oids, void *arg);
+
+/* Iterates through o_tables list. */
+extern void o_tables_foreach(OTablesCallback callback,
+							 OSnapshot *oSnapshot,
+							 void *arg);
+extern void o_tables_foreach_oids(OTablesOidsCallback callback,
+								  OSnapshot *oSnapshot,
+								  void *arg);
+
+Pointer		serialize_o_table(OTable *o_table, int *size);
+
+OTable	   *deserialize_o_table(Pointer data, Size length);
+
+/*
+ * We can't use relation_open/LockRelationId locks to protect relations that
+ * belong to other database.
+ *
+ * We must use this locks to protect critical code sections interacting with
+ * relations from other databases (workers code, walk_page() for backends).
+ *
+ * TableAM handler functions are already protected by top-level, there are no
+ * need on this locks nested TableAM handler functions.
+ */
+extern bool o_tables_rel_try_lock_extended(ORelOids *oids, int lockmode, bool *nested, bool checkpoint);
+extern void o_tables_rel_lock_extended(ORelOids *oids, int lockmode, bool checkpoint);
+extern void o_tables_rel_lock_extended_no_inval(ORelOids *oids, int lockmode,
+												bool checkpoint);
+extern void o_tables_rel_lock_exclusive_no_inval_no_log(ORelOids *oids);
+extern void o_tables_rel_unlock_extended(ORelOids *oids, int lockmode, bool checkpoint);
+
+/* Deserialize OTable stored in O_TABLES sys tree */
+extern void o_serialize_node(Node *node, StringInfo str);
+extern Node *o_deserialize_node(Pointer *ptr);
+extern bool o_deserialize_node_safe(Pointer *ptr, Pointer data, Size length, Node **out);
+extern void o_serialize_string(char *serialized, StringInfo str);
+extern char *o_deserialize_string(Pointer *ptr);
+extern bool o_deserialize_string_safe(Pointer *ptr, Pointer data, Size length, char **out);
+
+static inline bool
+o_tables_rel_try_lock(ORelOids *oids, int lockmode, bool *nested)
+{
+	return o_tables_rel_try_lock_extended(oids, lockmode, nested, false);
+}
+
+static inline void
+o_tables_rel_lock(ORelOids *oids, int lockmode)
+{
+	o_tables_rel_lock_extended(oids, lockmode, false);
+}
+
+static inline void
+o_tables_rel_unlock(ORelOids *oids, int lockmode)
+{
+	o_tables_rel_unlock_extended(oids, lockmode, false);
+}
+
+extern void o_table_fill_oids(OTable *oTable, Relation rel,
+							  const RelFileNode *newrnode,
+							  bool drop_pkey);
+extern Datum o_eval_default(OTable *o_table, Relation rel,
+							Node *expr, TupleTableSlot *scantuple,
+							bool byval, int16 typlen, bool *isNull);
+extern void o_table_resize_constr(OTable *o_table);
+extern void o_table_fill_constr(OTable *o_table, Relation rel, int fieldnum,
+								OTableField *old_field, OTableField *field);
+extern void o_tupdesc_load_constr(TupleDesc tupdesc, OTable *o_table,
+								  OIndexDescr *descr);
+extern char *o_get_type_name(Oid typid, int32 typmod);
+
+static inline int
+o_table_fieldnum(OTable *table, const char *name)
+{
+	int			i;
+
+	for (i = 0; i < table->nfields; i++)
+	{
+		if (table->fields[i].droped)
+			continue;
+		if (pg_strcasecmp(NameStr(table->fields[i].name), name) == 0)
+			return i;
+	}
+	return i;
+}
+
+extern void orioledb_attr_to_field(OTableField *field, Form_pg_attribute attr);
+
+extern void o_tables_meta_lock(void);
+extern void o_tables_meta_lock_no_wal(void);
+
+static inline void
+o_tables_rel_meta_lock(Relation rel)
+{
+	if (!rel || rel->rd_rel->relpersistence != RELPERSISTENCE_TEMP)
+		o_tables_meta_lock();
+	else
+		o_tables_meta_lock_no_wal();
+}
+static inline void
+o_tables_table_meta_lock(OTable *o_table)
+{
+	if (!o_table || o_table->persistence != RELPERSISTENCE_TEMP)
+		o_tables_meta_lock();
+	else
+		o_tables_meta_lock_no_wal();
+}
+
+extern void o_tables_meta_unlock(ORelOids oids, Oid oldRelnode);
+extern void o_tables_meta_unlock_no_wal(void);
+
+static inline void
+o_tables_rel_meta_unlock(Relation rel, Oid oldRelnode)
+{
+	if (!rel)
+	{
+		ORelOids	tmpOids = {InvalidOid, InvalidOid, InvalidOid};
+
+		o_tables_meta_unlock(tmpOids, oldRelnode);
+	}
+	else if (rel->rd_rel->relpersistence != RELPERSISTENCE_TEMP)
+	{
+		ORelOids	oids;
+
+		ORelOidsSetFromRel(oids, rel);
+		o_tables_meta_unlock(oids, oldRelnode);
+	}
+	else
+	{
+		o_tables_meta_unlock_no_wal();
+	}
+}
+static inline void
+o_tables_table_meta_unlock(OTable *o_table, Oid oldRelnode)
+{
+	if (!o_table)
+	{
+		ORelOids	tmpOids = {InvalidOid, InvalidOid, InvalidOid};
+
+		o_tables_meta_unlock(tmpOids, oldRelnode);
+	}
+	else if (o_table->persistence != RELPERSISTENCE_TEMP)
+	{
+		o_tables_meta_unlock(o_table->oids, oldRelnode);
+	}
+	else
+		o_tables_meta_unlock_no_wal();
+}
+
+extern Oid	o_saved_relrewrite;
+extern List *o_reuse_indices;
+
+extern void redefine_pkey_for_rel(Relation rel);
+
+#endif							/* __O_TABLES_H__ */

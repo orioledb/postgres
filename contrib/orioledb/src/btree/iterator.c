@@ -1,0 +1,1332 @@
+/*-------------------------------------------------------------------------
+ *
+ * iterator.c
+ *		Implementation of orioledb B-tree iterator.
+ *
+ * Copyright (c) 2021-2026, Oriole DB Inc.
+ * Copyright (c) 2025-2026, Supabase Inc.
+ *
+ * IDENTIFICATION
+ *	  contrib/orioledb/src/btree/iterator.c
+ *
+ *-------------------------------------------------------------------------
+ */
+#include "postgres.h"
+
+#include "orioledb.h"
+
+#include "btree/btree.h"
+#include "btree/find.h"
+#include "btree/iterator.h"
+#include "btree/page_chunks.h"
+#include "btree/undo.h"
+#include "catalog/sys_trees.h"
+#include "tableam/descr.h"
+#include "transam/oxid.h"
+#include "transam/undo.h"
+#include "utils/page_pool.h"
+
+#include "access/transam.h"
+#include "miscadmin.h"
+#include "utils/memutils.h"
+#include "utils/resowner.h"
+
+/* Iterates through undo images */
+typedef struct
+{
+	BTreeIterator *it;
+	/* a current page image from undo log */
+	char		image[ORIOLEDB_BLCKSZ];
+	/* a lokey of the image for backward scan */
+	OFixedKey	lokey;
+	/* a base undo location, from the data page header */
+	UndoLocation baseLoc;
+	/* undo location of the `image` in this struct */
+	UndoLocation imageUndoLoc;
+	/* is the image leftmost on the base location */
+	bool		leftmost;
+	/* is the image rightmost on the base location */
+	bool		rightmost;
+} UndoIterator;
+
+struct BTreeIterator
+{
+	OBTreeFindPageContext context;
+	OIndexDescr *oidescr;
+	OSnapshot	oSnapshot;
+	UndoIterator undoIt;
+	/* scan direction of current iterator: forward or backward */
+	ScanDirection scanDir;
+	/* current tuple location in UndoIterator */
+	BTreePageItemLocator undoLoc;
+	/* do we have to combine results from both current and undo pages? */
+	bool		combinedResult;
+	/* do we need to combine results in the current page? */
+	bool		combinedPage;
+	/* memory context for returned tuples */
+	MemoryContext tupleCxt;
+	/* callback for fetching tuple version */
+	TupleFetchCallback fetchCallback;
+	void	   *fetchCallbackArg;
+#ifdef USE_ASSERT_CHECKING
+	/* additional check for iteration order */
+	OFixedTuple prevTuple;
+#endif
+};
+
+static void get_next_combined_location(BTreeIterator *it);
+static void load_page_from_undo(BTreeIterator *it, void *key, BTreeKeyType kind);
+static bool btree_iterator_check_load_next_page(BTreeIterator *it);
+static OTuple o_btree_iterator_fetch_internal(BTreeIterator *it,
+											  CommitSeqNo *tupleCsn);
+static bool o_btree_interator_can_fetch_from_undo(BTreeDescr *desc, BTreeIterator *it);
+static bool can_fetch_from_undo(BTreeIterator *it);
+static void undo_it_create(UndoIterator *undoIt, BTreeIterator *it);
+static void undo_it_init(UndoIterator *undoIt, UndoLocation location, void *key, BTreeKeyType kind);
+static bool undo_it_next_page(BTreeDescr *desc, UndoIterator *undoIt);
+static bool undo_it_switch(BTreeDescr *desc, UndoIterator *undoIt, UndoLocation location);
+static void undo_it_find_internal(UndoIterator *undoIt, void *key, BTreeKeyType kind);
+
+#define IT_IS_BACKWARD(it) ((it)->scanDir == BackwardScanDirection)
+#define IT_IS_FORWARD(it) ((it)->scanDir == ForwardScanDirection)
+
+#define IS_LAST_PAGE(page, it) ((IT_IS_FORWARD((it)) && O_PAGE_IS(page, RIGHTMOST)) \
+								|| (IT_IS_BACKWARD((it)) && O_PAGE_IS(page, LEFTMOST)))
+
+#define IT_NEXT_OFFSET(it, loc) \
+	do { \
+		if (IT_IS_FORWARD(it)) \
+			BTREE_PAGE_LOCATOR_NEXT((it)->context.img, (loc)); \
+		else if (IT_IS_BACKWARD(it)) \
+			BTREE_PAGE_LOCATOR_PREV((it)->context.img, (loc)); \
+	} while (0); \
+
+#define UNDO_IT_NEXT_OFFSET(undoIt, loc) \
+	do { \
+		if (IT_IS_FORWARD(it)) \
+			BTREE_PAGE_LOCATOR_NEXT((undoIt)->image, (loc)); \
+		else if (IT_IS_BACKWARD(it)) \
+			BTREE_PAGE_LOCATOR_PREV((undoIt)->image, (loc)); \
+	} while (0); \
+
+/*
+ * Fetches tuple from the tree with given CSN snapshot.  Tuple is allocated
+ * in the given context.  Leaf page is found using the given hint (if provided).
+ * Given hint is adjusted with relevant leaf page.
+ */
+OTuple
+o_btree_find_tuple_by_key_cb(BTreeDescr *desc, void *key,
+							 BTreeKeyType kind, OSnapshot *read_o_snapshot,
+							 CommitSeqNo *out_csn, MemoryContext mcxt,
+							 BTreeLocationHint *hint,
+							 bool *deleted,
+							 TupleFetchCallback cb,
+							 void *arg)
+{
+	BTreePageItemLocator loc;
+	OBTreeFindPageContext context;
+	char	   *img;
+	BTreePageHeader *header;
+	bool		combinedResult = false;
+	OTuple		result;
+	OFindPageResult findResult PG_USED_FOR_ASSERTS_ONLY;
+
+	/*
+	 * If we need to get the result from given snapshot in the past, and in
+	 * the same time we might have modifications in this tree, then we might
+	 * need to combine results from the data page and the page image in undo
+	 * log.
+	 */
+	if (COMMITSEQNO_IS_NORMAL(read_o_snapshot->csn))
+		combinedResult = have_current_undo(desc->undoType);
+
+	/*
+	 * If we don't need to combine results, then ask find_page() to load the
+	 * relevant page item from undo log for us by passing our snapshot csn.
+	 */
+	init_page_find_context(&context, desc,
+						   combinedResult ? COMMITSEQNO_INPROGRESS : read_o_snapshot->csn,
+						   BTREE_PAGE_FIND_FETCH);
+
+	/* Use page location hint if provided */
+	if (hint && OInMemoryBlknoIsValid(hint->blkno))
+		findResult = refind_page(&context, key, kind, 0, hint->blkno, hint->pageChangeCount);
+	else
+		findResult = find_page(&context, key, kind, 0);
+
+	Assert(findResult == OFindPageResultSuccess);
+
+	loc = context.items[context.index].locator;
+	img = context.img;
+	header = (BTreePageHeader *) img;
+
+	/* Adjust hint if given */
+	if (hint)
+	{
+		hint->blkno = context.items[context.index].blkno;
+		hint->pageChangeCount = context.items[context.index].pageChangeCount;
+	}
+
+	if (combinedResult && header->csn >= read_o_snapshot->csn)
+	{
+		/*
+		 * Have to combine the results.  First look for a matching tuple on
+		 * the data page modified by us.
+		 */
+		if (BTREE_PAGE_LOCATOR_IS_VALID(img, &loc))
+		{
+			BTreeLeafTuphdr *tupHdrPtr;
+			OTuple		curTuple;
+			int			result_size;
+
+			BTREE_PAGE_READ_LEAF_ITEM(tupHdrPtr, curTuple, img, &loc);
+			tupHdrPtr = (BTreeLeafTuphdr *) BTREE_PAGE_LOCATOR_GET_ITEM(img, &loc);
+
+			if (o_btree_cmp(desc, key, kind, &curTuple, BTreeKeyLeafTuple) == 0)
+			{
+				BTreeLeafTuphdr tupHdr = *tupHdrPtr;
+
+				/*
+				 * We found the matching tuple.  Now check if it is modified
+				 * by us.  Even if tuple is modified by us, there might be FOR
+				 * KEY SHARE locks placed by concurrent transactions. Find the
+				 * first non-lock-only undo record in the chain and check if
+				 * it belongs to our transaction.
+				 */
+				(void) find_non_lock_only_undo_record(desc->undoType, &tupHdr);
+
+				if (!XACT_INFO_IS_LOCK_ONLY(tupHdr.xactInfo) &&
+					XACT_INFO_OXID_IS_CURRENT(tupHdr.xactInfo))
+				{
+					/*
+					 * OK, we found the tuple modified by us.  It overrides
+					 * whatever we could have from the undo log page image.
+					 * Return it right away.
+					 */
+					if (out_csn)
+						*out_csn = COMMITSEQNO_INPROGRESS;
+
+					if (deleted)
+						*deleted = (tupHdrPtr->deleted != BTreeLeafTupleNonDeleted);
+
+					if (tupHdrPtr->deleted == BTreeLeafTupleNonDeleted)
+					{
+						result_size = o_btree_len(desc, curTuple, OTupleLength);
+						result.data = (Pointer) MemoryContextAlloc(mcxt, result_size);
+						memcpy(result.data, curTuple.data, result_size);
+						result.formatFlags = curTuple.formatFlags;
+						return result;
+					}
+					else
+					{
+						O_TUPLE_SET_NULL(result);
+						/* cppcheck-suppress uninitvar */
+						return result;
+					}
+				}
+			}
+		}
+
+		/*
+		 * There is no matching tuple modified by us.  So, we have to fetch
+		 * the page image from undo log as we didn't ask find_page() to do
+		 * this for us.
+		 */
+		read_page_from_undo(desc, img, header->undoLocation, read_o_snapshot->csn,
+							key, kind, NULL);
+		btree_page_search(desc, img, key, kind, NULL, &loc);
+		page_locator_find_real_item(img, NULL, &loc);
+	}
+
+	if (BTREE_PAGE_LOCATOR_IS_VALID(img, &loc))
+	{
+		BTreeLeafTuphdr *tupHdr;
+		OTuple		curTuple;
+		int			cmp;
+
+		BTREE_PAGE_READ_LEAF_ITEM(tupHdr, curTuple, img, &loc);
+		cmp = o_btree_cmp(desc, key, kind, &curTuple, BTreeKeyLeafTuple);
+
+		if (deleted)
+			*deleted = (tupHdr->deleted != BTreeLeafTupleNonDeleted);
+
+		if (cmp == 0)
+		{
+			/*
+			 * The matching tuple is found.  Traverse the row-level undo chain
+			 * for the relevant version and return it.
+			 */
+			return o_find_tuple_version(desc, img, &loc, read_o_snapshot,
+										out_csn, mcxt, cb, arg);
+		}
+	}
+
+	/* Tuple isn't found */
+	O_TUPLE_SET_NULL(result);
+	return result;
+}
+
+OTuple
+o_btree_find_tuple_by_key(BTreeDescr *desc, void *key, BTreeKeyType kind,
+						  OSnapshot *read_o_snapshot, CommitSeqNo *out_csn,
+						  MemoryContext mcxt, BTreeLocationHint *hint)
+{
+	return o_btree_find_tuple_by_key_cb(desc, key, kind, read_o_snapshot,
+										out_csn, mcxt, hint, NULL, NULL, NULL);
+}
+
+
+/*
+ * Finds appropriate tuple version by traversing the undo chain.
+ *
+ * Starts with the on-page tuple, then walks historical versions from undo
+ * records.  Visibility is determined by oSnapshot.
+ *
+ * When a TupleFetchCallback (cb) is provided, it is called for each version
+ * to choose among multiple versions that share the same csn/xlogptr.  This is
+ * useful when there are several uncommitted versions within a single
+ * in-progress transaction.  The callback controls the iteration.
+ *
+ * The result's OTuple.data is allocated in mctx and is to be freed by the
+ * caller.
+ *
+ * Note on COMMITSEQNO_NON_DELETED: this CSN is treated as in-progress
+ * (COMMITSEQNO_IS_INPROGRESS returns true for it), so it returns data from
+ * uncommitted transactions just like COMMITSEQNO_INPROGRESS.  The difference
+ * is that NON_DELETED also returns tuples that are marked as deleted but are
+ * still physically present on the page, which is needed when accessing trees
+ * that may be deleted in uncommitted (sub-)transactions — on rollback those
+ * trees become visible again.
+ */
+OTuple
+o_find_tuple_version(BTreeDescr *desc, Page p, BTreePageItemLocator *loc,
+					 OSnapshot *oSnapshot, CommitSeqNo *tupleCsn,
+					 MemoryContext mcxt, TupleFetchCallback cb,
+					 void *arg)
+{
+	BTreeLeafTuphdr tupHdr,
+			   *tupHdrPtr;
+	OTuple		curTuple;
+	OTuple		result;
+	int			result_size;
+	UndoLocation undoLocation = InvalidUndoLocation;
+	bool		curTupleAllocated = false;
+	MemoryContext prevMctx;
+	bool		txIsFinished = false;
+
+	prevMctx = MemoryContextSwitchTo(mcxt);
+
+	BTREE_PAGE_READ_LEAF_ITEM(tupHdrPtr, curTuple, p, loc);
+	tupHdr = *tupHdrPtr;
+	(void) find_non_lock_only_undo_record(desc->undoType, &tupHdr);
+
+	Assert(COMMITSEQNO_IS_NORMAL(oSnapshot->csn) ||
+		   COMMITSEQNO_IS_INPROGRESS(oSnapshot->csn));
+
+	while (true)
+	{
+		OTupleXactInfo xactInfo = tupHdr.xactInfo;
+		CommitSeqNo tupcsn;
+		XLogRecPtr	tupptr = InvalidXLogRecPtr;
+
+		oxid_match_snapshot(XACT_INFO_GET_OXID(xactInfo), oSnapshot, &tupcsn,
+							XLogRecPtrIsInvalid(oSnapshot->xlogptr) ? NULL : &tupptr);
+
+		txIsFinished = COMMITSEQNO_IS_COMMITTED(tupcsn);
+
+		if (tupleCsn)
+		{
+			if (COMMITSEQNO_IS_NORMAL(tupcsn))
+				*tupleCsn = COMMITSEQNO_IS_NORMAL(oSnapshot->csn) ? Max(oSnapshot->csn, tupcsn + 1) : COMMITSEQNO_MAX_NORMAL - 1;
+			else if (COMMITSEQNO_IS_FROZEN(tupcsn))
+				*tupleCsn = COMMITSEQNO_IS_NORMAL(oSnapshot->csn) ? oSnapshot->csn : COMMITSEQNO_MAX_NORMAL - 1;
+			else
+				*tupleCsn = COMMITSEQNO_INPROGRESS;
+		}
+
+		if (cb)
+		{
+			TupleFetchCallbackResult cbResult;
+
+			/*
+			 * Fetch from undo chain if txn is in progress OR historical
+			 * version
+			 */
+			OXid		tupOxid = XACT_INFO_GET_OXID(xactInfo);
+
+			cbResult = cb(curTuple, tupOxid, oSnapshot, arg, txIsFinished);
+
+			if (cbResult == OTupleFetchMatch)
+				break;
+			if (cbResult == OTupleFetchNotMatch)
+			{
+				if (curTupleAllocated)
+					pfree(curTuple.data);
+				O_TUPLE_SET_NULL(result);
+				MemoryContextSwitchTo(prevMctx);
+				return result;
+			}
+		}
+
+		if (!txIsFinished)
+		{
+			if (!cb)
+			{
+				if (COMMITSEQNO_IS_INPROGRESS(oSnapshot->csn))
+					break;
+
+				/*
+				 * We see the changes made by our transaction.  Exception are
+				 * changes made by current command unless we're dealing with
+				 * system tree.
+				 */
+				if (!XACT_INFO_IS_LOCK_ONLY(xactInfo) &&
+					XACT_INFO_OXID_IS_CURRENT(xactInfo) &&
+					oSnapshot->csn != COMMITSEQNO_MAX_NORMAL)
+				{
+					CommandId	tupleCid;
+
+					if (IS_SYS_TREE_OIDS(desc->oids))
+						break;
+
+					/*
+					 * Use cached UndoLocation if we have undo records in this
+					 * command or below.  MaxUndoLocation means there are no
+					 * undo records yet, so we need to recheck.
+					 */
+					tupleCid = undo_location_get_command(UndoLocationGetValue(tupHdr.undoLocation));
+
+					if (tupleCid < oSnapshot->cid)
+						break;
+				}
+			}
+		}
+		else
+		{
+			if (COMMITSEQNO_IS_INPROGRESS(oSnapshot->csn))
+				break;
+		}
+
+		if (!COMMITSEQNO_IS_INPROGRESS(tupcsn) &&
+			!COMMITSEQNO_IS_ABORTED(tupcsn))
+		{
+			if (COMMITSEQNO_IS_INPROGRESS(oSnapshot->csn))
+			{
+				Assert(XLogRecPtrIsInvalid(oSnapshot->xlogptr));
+				break;
+			}
+
+			if (XLogRecPtrIsInvalid(oSnapshot->xlogptr))
+			{
+				if (tupcsn < oSnapshot->csn)
+					break;
+			}
+			else
+			{
+				if (tupptr <= oSnapshot->xlogptr)
+					break;
+			}
+		}
+
+		undoLocation = tupHdr.undoLocation;
+
+		if (!UndoLocationIsValid(undoLocation))
+		{
+			if (curTupleAllocated)
+				pfree(curTuple.data);
+			O_TUPLE_SET_NULL(result);
+			MemoryContextSwitchTo(prevMctx);
+			return result;
+		}
+
+		if (tupHdr.deleted != BTreeLeafTupleNonDeleted ||
+			XACT_INFO_IS_LOCK_ONLY(tupHdr.xactInfo))
+		{
+			get_prev_leaf_header_from_undo(desc->undoType, &tupHdr, true);
+		}
+		else
+		{
+			if (curTupleAllocated)
+				pfree(curTuple.data);
+			get_prev_leaf_header_and_tuple_from_undo(desc->undoType, &tupHdr,
+													 &curTuple, 0);
+			curTupleAllocated = true;
+		}
+
+		Assert(UNDO_REC_EXISTS(desc->undoType, undoLocation));
+	}
+
+	if (COMMITSEQNO_IS_NON_DELETED(oSnapshot->csn))
+	{
+		if (tupHdr.deleted != BTreeLeafTupleNonDeleted &&
+			txIsFinished)
+		{
+			if (curTupleAllocated)
+				pfree(curTuple.data);
+			O_TUPLE_SET_NULL(result);
+			MemoryContextSwitchTo(prevMctx);
+			return result;
+		}
+	}
+	else if (tupHdr.deleted != BTreeLeafTupleNonDeleted && !cb)
+	{
+		if (curTupleAllocated)
+			pfree(curTuple.data);
+		O_TUPLE_SET_NULL(result);
+		MemoryContextSwitchTo(prevMctx);
+		return result;
+	}
+
+	if (!curTupleAllocated)
+	{
+		result_size = o_btree_len(desc, curTuple, OTupleLength);
+		/* TODO: check result tuple size */
+		result.data = (Pointer) MemoryContextAlloc(mcxt, result_size);
+		memcpy(result.data, curTuple.data, result_size);
+		result.formatFlags = curTuple.formatFlags;
+	}
+	else
+	{
+		result = curTuple;
+	}
+
+	Assert(!UndoLocationIsValid(undoLocation) || UNDO_REC_EXISTS(desc->undoType, undoLocation));
+	MemoryContextSwitchTo(prevMctx);
+	return result;
+}
+
+BTreeIterator *
+o_btree_iterator_create(BTreeDescr *desc, void *key, BTreeKeyType kind,
+						OSnapshot *o_snapshot, ScanDirection scanDir)
+{
+	BTreeIterator *it;
+	uint16		findFlags = BTREE_PAGE_FIND_IMAGE;
+	OFindPageResult findResult PG_USED_FOR_ASSERTS_ONLY;
+
+	it = (BTreeIterator *) palloc(sizeof(BTreeIterator));
+
+	if (!IS_SYS_TREE_OIDS(desc->oids))
+	{
+		it->oidescr = (OIndexDescr *) desc->arg;
+		ResourceOwnerRememberOIndexDescr(CurrentResourceOwner, it->oidescr);
+	}
+	else
+		it->oidescr = NULL;
+
+	it->combinedResult = have_current_undo(desc->undoType) && COMMITSEQNO_IS_NORMAL(o_snapshot->csn);
+	it->oSnapshot = *o_snapshot;
+	it->scanDir = scanDir;
+	it->tupleCxt = CurrentMemoryContext;
+	it->fetchCallback = NULL;
+	it->fetchCallbackArg = NULL;
+	BTREE_PAGE_LOCATOR_SET_INVALID(&it->undoLoc);
+#ifdef USE_ASSERT_CHECKING
+	O_TUPLE_SET_NULL(it->prevTuple.tuple);
+#endif
+
+	undo_it_create(&it->undoIt, it);
+
+	if (IT_IS_BACKWARD(it))
+		findFlags |= BTREE_PAGE_FIND_KEEP_LOKEY;
+
+	init_page_find_context(&it->context, desc,
+						   it->combinedResult ? COMMITSEQNO_INPROGRESS : o_snapshot->csn, findFlags);
+
+	if (key == NULL)
+	{
+		if (IT_IS_FORWARD(it))
+			kind = BTreeKeyNone;
+		else
+			kind = BTreeKeyRightmost;
+	}
+
+	findResult = find_page(&it->context, key, kind, 0);
+	Assert(findResult == OFindPageResultSuccess);
+
+	if (key != NULL && IT_IS_BACKWARD(it))
+	{
+		BTreePageItemLocator *loc = &it->context.items[it->context.index].locator;
+		bool		make_dec = false;
+
+		/*
+		 * From btree_page_binary_search(): "When nextkey is false (this
+		 * case), we are looking for the first item >= scankey."
+		 *
+		 * If it's next item than decrement item offset. In case item ==
+		 * search key no need to do this.
+		 */
+		Assert(BTREE_PAGE_LOCATOR_GET_OFFSET(it->context.img, loc) <= BTREE_PAGE_ITEMS_COUNT(it->context.img));
+
+		if (BTREE_PAGE_LOCATOR_GET_OFFSET(it->context.img, loc) == BTREE_PAGE_ITEMS_COUNT(it->context.img))
+			make_dec = true;
+		else
+		{
+			OTuple		tup;
+
+			BTREE_PAGE_READ_TUPLE(tup, it->context.img, loc);
+			if (o_btree_cmp(desc, key, kind, &tup, BTreeKeyLeafTuple) < 0)
+				make_dec = true;
+		}
+
+		if (make_dec)
+			BTREE_PAGE_LOCATOR_PREV(it->context.img, loc);
+	}
+
+	load_page_from_undo(it, key,
+						kind != BTreeKeyRightmost ? kind : BTreeKeyNone);
+
+	return it;
+}
+
+void
+o_btree_iterator_set_tuple_ctx(BTreeIterator *it, MemoryContext tupleCxt)
+{
+	it->tupleCxt = tupleCxt;
+}
+
+void
+o_btree_iterator_set_callback(BTreeIterator *it,
+							  TupleFetchCallback callback,
+							  void *arg)
+{
+	it->fetchCallback = callback;
+	it->fetchCallbackArg = arg;
+}
+
+/*
+ * Fetches tha next tuple from the iterator.  Returns null tuple when there
+ * are no more tuples before the end boundary (defined by `end`, `endType`,
+ * and `endIsIncluded`).
+ *
+ * The result's OTuple.data is allocated in it->tupleCxt memory context.  It's
+ * the caller's responsibility to free this memory.
+ */
+OTuple
+o_btree_iterator_fetch(BTreeIterator *it, CommitSeqNo *tupleCsn,
+					   void *end, BTreeKeyType endType,
+					   bool endIsIncluded, BTreeLocationHint *hint)
+{
+	BTreeDescr *desc = it->context.desc;
+	OTuple		result;
+
+	ASAN_UNPOISON_MEMORY_REGION(&result, sizeof(result));
+
+	result = o_btree_iterator_fetch_internal(it, tupleCsn);
+
+	if (!O_TUPLE_IS_NULL(result) && end != NULL)
+	{
+		int			cmp = o_btree_cmp(desc, &result, BTreeKeyLeafTuple, end, endType);
+
+		if (IT_IS_BACKWARD(it))
+			cmp *= -1;
+
+		if (cmp >= (endIsIncluded ? 1 : 0))
+		{
+			pfree(result.data);
+			O_TUPLE_SET_NULL(result);
+			return result;
+		}
+	}
+
+#ifdef USE_ASSERT_CHECKING
+	if (!O_TUPLE_IS_NULL(result))
+	{
+		if (!O_TUPLE_IS_NULL(it->prevTuple.tuple))
+		{
+			int			cmp;
+
+			cmp = o_btree_cmp(desc, &it->prevTuple.tuple, BTreeKeyLeafTuple,
+							  &result, BTreeKeyLeafTuple);
+
+			Assert((IT_IS_FORWARD(it) && cmp < 0) || cmp > 0);
+		}
+		copy_fixed_tuple(desc, &it->prevTuple, result);
+	}
+#endif
+
+	if (hint)
+	{
+		hint->blkno = it->context.items[it->context.index].blkno;
+		hint->pageChangeCount = it->context.items[it->context.index].pageChangeCount;
+	}
+
+	return result;
+}
+
+/*
+ * Free resouces associated with iterator.
+ */
+void
+btree_iterator_free(BTreeIterator *it)
+{
+	if (it->oidescr)
+		ResourceOwnerForgetOIndexDescr(CurrentResourceOwner, it->oidescr);
+	pfree(it);
+}
+
+/*
+ * Load page from undo for combined result.
+ */
+static void
+load_page_from_undo(BTreeIterator *it, void *key, BTreeKeyType kind)
+{
+	OBTreeFindPageContext *context = &it->context;
+	BTreePageHeader *header = (BTreePageHeader *) context->img;
+	BTreeDescr *desc = context->desc;
+
+	if (it->combinedResult && header->csn >= it->oSnapshot.csn)
+	{
+		undo_it_init(&it->undoIt, header->undoLocation, key, kind);
+
+		if (key)
+		{
+			btree_page_search(desc,
+							  it->undoIt.image,
+							  key, kind, NULL,
+							  &it->undoLoc);
+			page_locator_find_real_item(it->undoIt.image, NULL,
+										&it->undoLoc);
+
+			if (IT_IS_BACKWARD(it))
+			{
+				OTuple		founded;
+				OffsetNumber undoOffset;
+
+				BTREE_PAGE_READ_TUPLE(founded, it->undoIt.image, &it->undoLoc);
+
+				/*
+				 * From btree_page_binary_search(): "When nextkey is false
+				 * (this case), we are looking for the first item >= scankey."
+				 *
+				 * If it's next item than decrement item offset. In case item
+				 * == key bound no need to do this.
+				 */
+				undoOffset = BTREE_PAGE_LOCATOR_GET_OFFSET(it->undoIt.image, &it->undoLoc);
+				Assert(undoOffset <= BTREE_PAGE_ITEMS_COUNT(it->undoIt.image));
+				if (undoOffset == BTREE_PAGE_ITEMS_COUNT(it->undoIt.image) ||
+					o_btree_cmp(desc, key, kind, &founded, BTreeKeyLeafTuple))
+					BTREE_PAGE_LOCATOR_PREV(it->undoIt.image, &it->undoLoc);
+			}
+
+		}
+		else if (IT_IS_FORWARD(it))
+		{
+			BTREE_PAGE_LOCATOR_FIRST(it->undoIt.image, &it->undoLoc);
+		}
+		else
+		{
+			BTREE_PAGE_LOCATOR_LAST(it->undoIt.image, &it->undoLoc);
+		}
+
+		it->combinedPage = true;
+		get_next_combined_location(it);
+	}
+	else
+	{
+		it->combinedPage = false;
+	}
+}
+
+/*
+ * Find the next tuple location for result combination.  It should have
+ * current oxid.
+ */
+static void
+get_next_combined_location(BTreeIterator *it)
+{
+	OBTreeFindPageContext *context = &it->context;
+	OXid		oxid = get_current_oxid_if_any();
+	BTreePageItemLocator *loc = &context->items[context->index].locator;
+	Page		img = context->img;
+
+	if (!BTREE_PAGE_LOCATOR_IS_VALID(img, loc))
+		return;
+
+	while (BTREE_PAGE_LOCATOR_IS_VALID(img, loc))
+	{
+		BTreeLeafTuphdr *tupHdr;
+
+		tupHdr = (BTreeLeafTuphdr *) BTREE_PAGE_LOCATOR_GET_ITEM(img, loc);
+
+		if (XACT_INFO_OXID_EQ(tupHdr->xactInfo, oxid))
+			break;
+
+		IT_NEXT_OFFSET(it, loc);
+	}
+}
+
+/*
+ * Fetch next tuple without checking for end condition.
+ */
+static OTuple
+o_btree_iterator_fetch_internal(BTreeIterator *it, CommitSeqNo *tupleCsn)
+{
+	BTreeDescr *desc = it->context.desc;
+	OBTreeFindPageContext *context = &it->context;
+	OBtreePageFindItem *leaf_item;
+	Page		img = context->img,
+				hImg = it->undoIt.image;
+	OTuple		result,
+				itup,
+				htup;
+	int			cmp;
+
+	while (true)
+	{
+		if (!btree_iterator_check_load_next_page(it))
+		{
+			O_TUPLE_SET_NULL(result);
+			return result;
+		}
+
+		leaf_item = &context->items[context->index];
+
+		if (it->combinedPage)
+		{
+			if (!BTREE_PAGE_LOCATOR_IS_VALID(hImg, &it->undoLoc))
+				cmp = -1;
+			else if (!BTREE_PAGE_LOCATOR_IS_VALID(img, &leaf_item->locator))
+				cmp = 1;
+			else
+			{
+				BTREE_PAGE_READ_LEAF_TUPLE(itup, img, &leaf_item->locator);
+				BTREE_PAGE_READ_LEAF_TUPLE(htup, hImg, &it->undoLoc);
+				cmp = o_btree_cmp(desc, &itup, BTreeKeyLeafTuple, &htup, BTreeKeyLeafTuple);
+				if (IT_IS_BACKWARD(it))
+					cmp *= -1;	/* mirror compare logic */
+			}
+
+			if (cmp <= 0)
+			{
+				result = o_find_tuple_version(desc, img,
+											  &leaf_item->locator,
+											  &it->oSnapshot, tupleCsn,
+											  it->tupleCxt,
+											  it->fetchCallback,
+											  it->fetchCallbackArg);
+
+				IT_NEXT_OFFSET(it, &leaf_item->locator);
+
+				get_next_combined_location(it);
+
+				if (cmp == 0)
+					UNDO_IT_NEXT_OFFSET(&it->undoIt, &it->undoLoc);
+
+				if (!O_TUPLE_IS_NULL(result))
+					return result;
+			}
+			else
+			{
+				result = o_find_tuple_version(desc, hImg,
+											  &it->undoLoc,
+											  &it->oSnapshot, tupleCsn,
+											  it->tupleCxt,
+											  it->fetchCallback,
+											  it->fetchCallbackArg);
+
+				UNDO_IT_NEXT_OFFSET(&it->undoIt, &it->undoLoc);
+
+				if (!O_TUPLE_IS_NULL(result))
+					return result;
+			}
+		}
+		else
+		{
+			result = o_find_tuple_version(desc, context->img,
+										  &leaf_item->locator,
+										  &it->oSnapshot, tupleCsn,
+										  it->tupleCxt,
+										  it->fetchCallback,
+										  it->fetchCallbackArg);
+
+			IT_NEXT_OFFSET(it, &leaf_item->locator);
+
+			if (!O_TUPLE_IS_NULL(result))
+				return result;
+		}
+	}
+
+	O_TUPLE_SET_NULL(result);
+	return result;				/* unreachable */
+}
+
+/*
+ * Check and load the next tree page if needed.  Works with both normal and undo
+ * pages.  Return true on success.  False means there is nothing more to read.
+ */
+static bool
+btree_iterator_check_load_next_page(BTreeIterator *it)
+{
+	OBTreeFindPageContext *context = &it->context;
+	Page		img = context->img,
+				hImg = it->undoIt.image;
+	BTreeDescr *desc = context->desc;
+	OFixedKey	key_buf;
+
+	if (o_btree_interator_can_fetch_from_undo(context->desc, it))
+		return true;
+
+	while (!BTREE_PAGE_LOCATOR_IS_VALID(img, &context->items[context->index].locator))
+	{
+		bool		step_result;
+		BTreePageHeader *header;
+
+		if (IS_LAST_PAGE(img, it))
+			return false;
+
+		if (IT_IS_FORWARD(it))
+			step_result = find_right_page(context, &key_buf);
+		else
+			step_result = find_left_page(context, &key_buf);
+
+		if (!step_result)
+			return false;
+
+		header = (BTreePageHeader *) context->img;
+
+		if (it->combinedResult && header->csn >= it->oSnapshot.csn)
+		{
+			bool		reload = true;
+
+			if (it->combinedPage)
+				reload = !o_btree_interator_can_fetch_from_undo(context->desc, it);
+
+			if (reload)
+			{
+				/*
+				 * We can not to use current undo images iterator.
+				 */
+
+				/* finds a tuple to resume */
+				undo_it_init(&it->undoIt,
+							 header->undoLocation,
+							 &key_buf,
+							 (IT_IS_FORWARD(it) ? BTreeKeyNonLeafKey : BTreeKeyPageHiKey));
+
+				btree_page_search(desc, hImg, (Pointer) &key_buf.tuple,
+								  BTreeKeyNonLeafKey, NULL,
+								  &it->undoLoc);
+				page_locator_find_real_item(hImg, NULL,
+											&it->undoLoc);
+
+				if (IT_IS_BACKWARD(it))
+					BTREE_PAGE_LOCATOR_PREV(hImg, &it->undoLoc);
+			}
+			get_next_combined_location(it);
+			it->combinedPage = true;
+		}
+		else
+		{
+			it->combinedPage = false;
+		}
+
+		if (can_fetch_from_undo(it))
+			break;
+	}
+
+	return true;
+}
+
+/*
+ * Can we fetch more pages form undo page image?
+ */
+static bool
+o_btree_interator_can_fetch_from_undo(BTreeDescr *desc, BTreeIterator *it)
+{
+	Page		hImg = it->undoIt.image,
+				img = it->context.img;
+	BTreePageHeader *header = (BTreePageHeader *) img;
+
+	/*
+	 * Nothing to do if we're not on the combined page.  All the undo items
+	 * corresponding to the data page key range must happen while we're on
+	 * that data page.
+	 */
+	if (!it->combinedPage)
+		return false;
+
+	Assert(it->combinedResult && header->csn >= it->oSnapshot.csn);
+
+	while (!BTREE_PAGE_LOCATOR_IS_VALID(hImg, &it->undoLoc))
+	{
+		/* switch to next history page if we can */
+		if (undo_it_next_page(it->context.desc, &it->undoIt) ||
+			undo_it_switch(desc, &it->undoIt, header->undoLocation))
+		{
+			if (IT_IS_FORWARD(it))
+				BTREE_PAGE_LOCATOR_FIRST(hImg, &it->undoLoc);
+			else
+				BTREE_PAGE_LOCATOR_LAST(hImg, &it->undoLoc);
+		}
+		else
+		{
+			break;
+		}
+	}
+
+	return can_fetch_from_undo(it);
+}
+
+/*
+ * Check if `historicalImg` still contains more tuples corresponding to
+ * the `img` key range.
+ */
+static bool
+can_fetch_from_undo(BTreeIterator *it)
+{
+	BTreeDescr *desc = it->context.desc;
+	OBTreeFindPageContext *context = &it->context;
+	OTuple		htup;
+	int			cmp;
+
+	/* False if no tuples to fetch */
+	if (!BTREE_PAGE_LOCATOR_IS_VALID(it->undoIt.image, &it->undoLoc))
+		return false;
+
+	/* True if `img` key range is inifity in the required direction */
+	if (IS_LAST_PAGE(context->img, it))
+		return true;
+
+	/* Compare the next tuple with corresponding key range bound */
+	BTREE_PAGE_READ_LEAF_TUPLE(htup, it->undoIt.image, &it->undoLoc);
+	if (IT_IS_FORWARD(it))
+	{
+		OTuple		hikey;
+
+		BTREE_PAGE_GET_HIKEY(hikey, context->img);
+		cmp = o_btree_cmp(desc, &hikey, BTreeKeyNonLeafKey, &htup, BTreeKeyLeafTuple);
+		return cmp > 0;
+	}
+	else						/* backward iterator case */
+	{
+		OTuple		lokey = btree_find_context_lokey(context);
+
+		cmp = o_btree_cmp(desc, &lokey, BTreeKeyNonLeafKey, &htup, BTreeKeyLeafTuple);
+		return cmp <= 0;
+	}
+}
+
+static OTuple
+btree_iterate_raw_internal(BTreeIterator *it, void *end, BTreeKeyType endKind,
+						   bool endInclude, bool *scanEnd,
+						   BTreeLocationHint *hint, bool deleted_as_null,
+						   BTreeLeafTuphdr **tupHdr)
+{
+	BTreeLeafTuphdr *localTupHdr;
+	OBTreeFindPageContext *context = &it->context;
+	Page		img = context->img;
+	OTuple		result;
+	OFixedKey	key_buf;
+
+	if (!tupHdr)
+		tupHdr = &localTupHdr;
+
+	*scanEnd = false;
+
+	while (true)
+	{
+		BTreePageItemLocator *loc = &context->items[context->index].locator;
+
+		if (BTREE_PAGE_LOCATOR_IS_VALID(img, loc))
+		{
+			BTREE_PAGE_READ_LEAF_ITEM(*tupHdr, result, context->img, loc);
+			IT_NEXT_OFFSET(it, loc);
+
+			if (end != NULL && endKind != BTreeKeyNone)
+			{
+				BTreeDescr *desc = it->context.desc;
+				int			cmp;
+
+				cmp = o_btree_cmp(desc, &result, BTreeKeyLeafTuple, end, endKind);
+				if (cmp > 0 || (cmp == 0 && !endInclude))
+				{
+					*scanEnd = true;
+					O_TUPLE_SET_NULL(result);
+					return result;
+				}
+			}
+
+			if (!deleted_as_null ||
+				(*tupHdr)->deleted == BTreeLeafTupleNonDeleted)
+			{
+				if (hint)
+				{
+					hint->blkno = it->context.items[it->context.index].blkno;
+					hint->pageChangeCount = it->context.items[it->context.index].pageChangeCount;
+				}
+				return result;
+			}
+			else
+			{
+				O_TUPLE_SET_NULL(result);
+				return result;
+			}
+		}
+
+		if (IS_LAST_PAGE(img, it))
+		{
+			*scanEnd = true;
+			O_TUPLE_SET_NULL(result);
+			return result;
+		}
+
+		if (IT_IS_FORWARD(it))
+		{
+			if (!find_right_page(context, &key_buf))
+			{
+				O_TUPLE_SET_NULL(result);
+				return result;
+			}
+		}
+		else
+		{
+			if (!find_left_page(context, &key_buf))
+			{
+				O_TUPLE_SET_NULL(result);
+				return result;
+			}
+		}
+	}
+	O_TUPLE_SET_NULL(result);
+	return result;				/* unreachable */
+}
+
+/*
+ * Iterate over leaf page tuples without considering undo log.  Deleted tuples
+ * are reported as NULLs.  So, the separate `*end` flag indicates finish of
+ * iterations.
+ */
+OTuple
+btree_iterate_raw(BTreeIterator *it, void *end, BTreeKeyType endKind,
+				  bool endInclude, bool *scanEnd, BTreeLocationHint *hint)
+{
+	return btree_iterate_raw_internal(it, end, endKind, endInclude, scanEnd,
+									  hint, true, NULL);
+}
+
+/*
+ * Iterate over leaf page tuples without considering undo log. Deleted tuples
+ * also returned.
+ */
+OTuple
+btree_iterate_all(BTreeIterator *it, void *end, BTreeKeyType endKind,
+				  bool endInclude, bool *scanEnd, BTreeLocationHint *hint,
+				  BTreeLeafTuphdr **tupHdr)
+{
+	return btree_iterate_raw_internal(it, end, endKind, endInclude, scanEnd,
+									  hint, false, tupHdr);
+}
+
+/*
+ * Fills basic fields of undo iterator
+ */
+static void
+undo_it_create(UndoIterator *undoIt, BTreeIterator *it)
+{
+	Assert(it->scanDir != NoMovementScanDirection);
+
+	undoIt->it = it;
+	undoIt->rightmost = true;
+	undoIt->leftmost = true;
+	undoIt->baseLoc = InvalidUndoLocation;
+	undoIt->imageUndoLoc = InvalidUndoLocation;
+}
+
+/*
+ * Initializes the undo iterator
+ */
+static void
+undo_it_init(UndoIterator *undoIt, UndoLocation location, void *key, BTreeKeyType kind)
+{
+	undoIt->baseLoc = location;
+	undo_it_find_internal(undoIt, key, kind);
+}
+
+/*
+ * Tries to switch to next undo page from the same baseLoc
+ */
+static bool
+undo_it_next_page(BTreeDescr *desc, UndoIterator *undoIt)
+{
+	BTreeKeyType kind;
+	OFixedKey	key;
+	UndoLocation prevLoc;
+
+	if (!UndoLocationIsValid(undoIt->baseLoc))
+		return false;
+
+	/* Get bound key from the current undo page */
+	if (IT_IS_FORWARD(undoIt->it))
+	{
+		if (undoIt->rightmost)
+			return false;		/* no more pages */
+		copy_fixed_hikey(desc, &key, undoIt->image);
+		kind = BTreeKeyNonLeafKey;
+	}
+	else
+	{
+		if (undoIt->leftmost)
+			return false;		/* no more pages */
+		copy_fixed_key(desc, &key, undoIt->lokey.tuple);
+		kind = BTreeKeyPageHiKey;
+	}
+
+	Assert(!IS_LAST_PAGE(undoIt->image, undoIt->it));
+
+	prevLoc = undoIt->imageUndoLoc;
+
+	/* Find undo page corresponding to the key from the undoIt->baseLoc */
+	undo_it_find_internal(undoIt, &key.tuple, kind);
+
+	/* Did we manage to find another page? */
+	if (prevLoc != undoIt->imageUndoLoc)
+	{
+		return true;
+	}
+	else
+	{
+		Assert(undoIt->rightmost || undoIt->leftmost);
+		return false;
+	}
+}
+
+/*
+ * Tries to switch to the next baseLoc
+ */
+static bool
+undo_it_switch(BTreeDescr *desc, UndoIterator *undoIt, UndoLocation location)
+{
+	bool		is_forward = IT_IS_FORWARD(undoIt->it);
+
+	if (!UndoLocationIsValid(location) || undoIt->baseLoc == location)
+		return false;
+
+	if (!UndoLocationIsValid(undoIt->baseLoc))
+	{
+		BTreeKeyType kind = is_forward ? BTreeKeyNone : BTreeKeyRightmost;
+
+		/* load of full undo */
+		undoIt->baseLoc = location;
+		undo_it_find_internal(undoIt, NULL, kind);
+		return true;
+	}
+	/* else we must find next page in undo */
+
+	undoIt->baseLoc = location;
+	if (IS_LAST_PAGE(undoIt->image, undoIt->it))
+	{
+		/* there is no more pages expected */
+		return false;
+	}
+	else
+	{
+		/*
+		 * We need to find the page, which hikey moves to the required
+		 * direction in comparison with previous undo page.
+		 */
+		if (O_PAGE_IS(undoIt->image, RIGHTMOST))
+		{
+			Assert(!is_forward);
+
+			undo_it_find_internal(undoIt, NULL, BTreeKeyRightmost);
+
+			if (O_PAGE_IS(undoIt->image, RIGHTMOST))
+			{
+				/*
+				 * we expect that a loaded rightmost page is equal to the
+				 * previous
+				 */
+				return undo_it_next_page(desc, undoIt);
+			}
+			return true;
+		}
+		else
+		{
+			OFixedKey	prev_hikey;
+			int			cmp;
+
+			/* copy the previous page hikey */
+			copy_fixed_hikey(desc, &prev_hikey, undoIt->image);
+			undo_it_find_internal(undoIt, &prev_hikey.tuple, BTreeKeyPageHiKey);
+
+			if (O_PAGE_IS(undoIt->image, RIGHTMOST))
+			{
+				cmp = 1;
+			}
+			else
+			{
+				OTuple		image_hikey;
+
+				BTREE_PAGE_GET_HIKEY(image_hikey, undoIt->image);
+				cmp = o_btree_cmp(desc, &image_hikey, BTreeKeyNonLeafKey,
+								  &prev_hikey.tuple, BTreeKeyNonLeafKey);
+			}
+
+			if (cmp == 0)
+				return undo_it_next_page(desc, undoIt);
+
+			/* in forward case we must load next page */
+			Assert(!is_forward || cmp > 0);
+			/* in backward case we must load previous page */
+			Assert(is_forward || cmp < 0);
+
+			return true;
+		}
+	}
+}
+
+/*
+ * Find in undo log page corresponding to the given key.
+ */
+static void
+undo_it_find_internal(UndoIterator *undoIt, void *key, BTreeKeyType kind)
+{
+	BTreePageHeader *header;
+	CommitSeqNo rec_csn;
+	BTreeDescr *desc = undoIt->it->context.desc;
+	UndoLogType undoType PG_USED_FOR_ASSERTS_ONLY = GET_PAGE_LEVEL_UNDO_TYPE(desc->undoType);
+	UndoLocation rec_undo_loc,
+				undoLocation;
+	bool		left,
+				right;
+
+	undoLocation = undoIt->baseLoc;
+	undoIt->leftmost = true;
+	undoIt->rightmost = true;
+
+	while (true)
+	{
+		/* Load the next page item from page-level undo item */
+		if (undoIt->it->scanDir == ForwardScanDirection)
+			get_page_from_undo(desc, undoLocation, key, kind,
+							   undoIt->image, &left, &right, NULL, NULL, NULL);
+		else
+			get_page_from_undo(desc, undoLocation, key, kind,
+							   undoIt->image, &left, &right, &undoIt->lokey, NULL, NULL);
+
+		undoIt->rightmost = (undoIt->rightmost && right) || O_PAGE_IS(undoIt->image, RIGHTMOST);
+		undoIt->leftmost = (undoIt->leftmost && left) || O_PAGE_IS(undoIt->image, LEFTMOST);
+		undoIt->imageUndoLoc = O_UNDO_GET_IMAGE_LOCATION(undoLocation, left);
+		Assert(UNDO_REC_EXISTS(undoType, undoLocation));
+
+		header = (BTreePageHeader *) undoIt->image;
+		rec_csn = header->csn;
+		rec_undo_loc = header->undoLocation;
+
+		/* Check if we need to visit next page-level undo item */
+		if (COMMITSEQNO_IS_NORMAL(rec_csn) && rec_csn >= undoIt->it->oSnapshot.csn)
+		{
+			undoLocation = rec_undo_loc;
+			continue;
+		}
+		else
+		{
+			break;
+		}
+	}
+
+	/* if O_PAGE_IS(undoIt->image, RIGHTMOST) then undoIt->righmost == true */
+	Assert(!O_PAGE_IS(undoIt->image, RIGHTMOST) || undoIt->rightmost);
+	/* if O_PAGE_IS(undoIt->image, LEFTMOST) then undoIt->leftmost == true */
+	Assert(!O_PAGE_IS(undoIt->image, LEFTMOST) || undoIt->leftmost);
+}

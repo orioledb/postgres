@@ -49,7 +49,8 @@ SUBDIRS = \
 		tsm_system_rows \
 		tsm_system_time \
 		unaccent	\
-		vacuumlo
+		vacuumlo        \
+		orioledb
 
 ifeq ($(with_ssl),openssl)
 SUBDIRS += pgcrypto sslinfo

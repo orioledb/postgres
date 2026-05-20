@@ -1,0 +1,2320 @@
+/*-------------------------------------------------------------------------
+ *
+ * orioledb.c
+ *		Main file: setup shared memory, hooks and other general-purpose
+ *		routines.
+ *
+ * Copyright (c) 2021-2026, Oriole DB Inc.
+ * Copyright (c) 2025-2026, Supabase Inc.
+ *
+ * IDENTIFICATION
+ *	  contrib/orioledb/src/orioledb.c
+ *
+ *-------------------------------------------------------------------------
+ */
+#include "postgres.h"
+
+#include "orioledb.h"
+
+#include "btree/find.h"
+#include "btree/io.h"
+#include "btree/scan.h"
+#include "catalog/o_tables.h"
+#include "catalog/o_sys_cache.h"
+#include "catalog/sys_trees.h"
+#include "checkpoint/checkpoint.h"
+#include "indexam/handler.h"
+#include "recovery/logical.h"
+#include "recovery/recovery.h"
+#include "recovery/wal.h"
+#include "recovery/wal_reader.h"
+#include "replication/snapbuild.h"
+#include "s3/control.h"
+#include "s3/headers.h"
+#include "s3/queue.h"
+#include "s3/requests.h"
+#include "s3/worker.h"
+#include "storage/standby.h"
+#include "tableam/handler.h"
+#include "tableam/scan.h"
+#include "tableam/toast.h"
+#include "transam/oxid.h"
+#include "transam/undo.h"
+#include "tuple/toast.h"
+#include "utils/compress.h"
+#include "utils/dsa.h"
+#include "utils/guc.h"
+#include "utils/memdebug.h"
+#include "utils/page_pool.h"
+#include "utils/stopevent.h"
+#include "utils/ucm.h"
+#include "workers/bgwriter.h"
+#include "rewind/rewind.h"
+
+#include "access/heapam.h"
+#include "access/table.h"
+#include "access/xlog_internal.h"
+#include "catalog/pg_enum.h"
+#include "executor/execExpr.h"
+#include "funcapi.h"
+#include "libpq/auth.h"
+#include "miscadmin.h"
+#include "optimizer/optimizer.h"
+#include "optimizer/plancat.h"
+#include "postmaster/autovacuum.h"
+#include "postmaster/bgwriter.h"
+#include "postmaster/postmaster.h"
+#include "postmaster/startup.h"
+#include "replication/message.h"
+#include "replication/walsender.h"
+#include "storage/ipc.h"
+#include "storage/lwlock.h"
+#include "storage/proclist.h"
+#include "utils/builtins.h"
+#include "utils/pg_lsn.h"
+#include "utils/inval.h"
+#include "utils/rangetypes.h"
+#include "utils/pg_locale.h"
+#include "utils/snapmgr.h"
+#include "utils/syscache.h"
+
+#include <dirent.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+
+PG_MODULE_MAGIC;
+
+void		_PG_init(void);
+
+static bool debug_disable_pools_limit = false;
+static Pointer shared_segment = NULL;
+static bool shared_segment_initialized = false;
+static int	free_tree_buffers_guc;
+static Size free_tree_buffers_count;
+static int	catalog_buffers_guc;
+static Size catalog_buffers_count;
+static Size main_buffers_offset;
+
+Pointer		o_shared_buffers = NULL;
+OrioleDBPageDesc *page_descs = NULL;
+Page	   *local_ppool_pages = NULL;
+OrioleDBPageDesc *local_ppool_page_descs = NULL;
+
+/* Custom GUC variables */
+int			orioledb_serializable_mode = O_SERIALIZABLE_TABLE_LOCK;
+
+static const struct config_enum_entry serializable_mode_options[] = {
+	{"table_lock", O_SERIALIZABLE_TABLE_LOCK, false},
+	{"error", O_SERIALIZABLE_ERROR, false},
+	{"repeatable_read", O_SERIALIZABLE_REPEATABLE_READ, false},
+	{NULL, 0, false}
+};
+
+static int	main_buffers_guc;
+static int	undo_buffers_guc;
+static int	xid_buffers_guc;
+static int	rewind_buffers_guc;
+static int	temp_buffers_guc;
+int			max_procs;
+Size		orioledb_buffers_size;
+Size		orioledb_buffers_count;
+Size		orioledb_temp_buffers_count;
+Size		page_descs_size;
+Size		undo_circular_buffer_size;
+uint32		undo_buffers_count;
+double		regular_block_undo_circular_buffer_fraction;
+double		system_undo_circular_buffer_fraction;
+Size		xid_circular_buffer_size;
+uint32		xid_buffers_count;
+Size		rewind_circular_buffer_size;
+uint32		rewind_buffers_count;
+bool		remove_old_checkpoint_files = true;
+bool		skip_unmodified_trees = true;
+bool		debug_disable_bgwriter = false;
+bool		use_mmap = false;
+bool		use_device = false;
+bool		orioledb_use_sparse_files = false;
+char	   *device_filename = NULL;
+Pointer		mmap_data = NULL;
+int			device_fd;
+int			device_length_guc = 0;
+Size		device_length = 0;
+double		o_checkpoint_completion_ratio;
+int			bgwriter_num_workers = 1;
+int			max_io_concurrency = 0;
+ODBProcData *oProcData;
+int			default_compress = InvalidOCompress;
+int			default_primary_compress = InvalidOCompress;
+int			default_toast_compress = InvalidOCompress;
+bool		orioledb_table_description_compress = false;
+char	   *max_bridge_ctid_string = NULL;
+BlockNumber max_bridge_ctid_blkno = 0;
+bool		orioledb_s3_mode = false;
+int			s3_num_workers = 3;
+int			s3_desired_size = 10000;
+int			s3_queue_size_guc;
+char	   *s3_host = NULL;
+bool		s3_use_https = true;
+char	   *s3_region = NULL;
+char	   *s3_prefix = NULL;
+char	   *s3_accesskey = NULL;
+char	   *s3_secretkey = NULL;
+char	   *s3_cainfo = NULL;
+bool		enable_rewind = false;
+int			rewind_max_time = 0;
+int			rewind_max_transactions = 0;
+int			logical_xid_buffers_guc = 64;
+bool		orioledb_strict_mode = false;
+XLogRecPtr	replay_until_lsn = InvalidXLogRecPtr;
+char	   *replay_until_lsn_string;
+
+/* For page eviction/read checkpoint test only */
+uint32		min_read_page_checkpoint = UINT32_MAX;
+uint32		max_read_page_checkpoint = 0;
+
+/* Previous values of hooks to chain call them */
+static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
+static void (*prev_shmem_request_hook) (void) = NULL;
+static base_init_startup_hook_type prev_base_init_startup_hook = NULL;
+static get_relation_info_hook_type prev_get_relation_info_hook = NULL;
+static skip_tree_height_hook_type prev_skip_tree_height_hook = NULL;
+database_size_hook_type prev_database_size_hook = NULL;
+static AcceptInvalidationMessagesHookType prev_AcceptInvalidationMessagesHook = NULL;
+
+CheckPoint_hook_type next_CheckPoint_hook = NULL;
+static bool o_newlocale_from_collation(void);
+
+/*
+ * Temporary memory context for BTree operations. Helps us to avoid
+ * excessive code complexity.
+ */
+MemoryContext btree_insert_context = NULL;
+
+/*
+ * Memory context for btree sequential scans.  Scans needs to survive till
+ * seq_scans_cleanup().
+ */
+MemoryContext btree_seqscan_context = NULL;
+
+OPagePool	page_pools[OPagePoolTypesCount];
+LocalPagePool local_ppool;
+
+static size_t page_pools_size[OPagePoolTypesCount];
+
+static void o_base_init_startup_hook(void);
+static Size o_proc_shmem_needs(void);
+static void o_proc_shmem_init(Pointer ptr, bool found);
+static Size ppools_shmem_needs(void);
+static void ppools_shmem_init(Pointer ptr, bool found);
+
+typedef struct
+{
+	Size		(*shmem_size) (void);
+	void		(*shmem_init) (Pointer ptr, bool found);
+} ShmemItem;
+
+/*
+ * checkpoint_shmem_init() should be before recovery_shmem_init().
+ * See recovery_shmem_init() for description.
+ */
+static ShmemItem shmemItems[] = {
+	{btree_io_shmem_needs, btree_io_shmem_init},
+	{page_state_shmem_needs, page_state_shmem_init},
+	{oxid_shmem_needs, oxid_init_shmem},
+	{sys_trees_shmem_needs, sys_trees_shmem_init},
+	{StopEventShmemSize, StopEventShmemInit},
+	{undo_shmem_needs, undo_shmem_init},
+	{checkpoint_shmem_size, checkpoint_shmem_init},
+	{recovery_shmem_needs, recovery_shmem_init},
+	{o_proc_shmem_needs, o_proc_shmem_init},
+	{ppools_shmem_needs, ppools_shmem_init},
+	{btree_scan_shmem_needs, btree_scan_init_shmem},
+	{s3_queue_shmem_needs, s3_queue_init_shmem},
+	{s3_workers_shmem_needs, s3_workers_init_shmem},
+	{s3_headers_shmem_needs, s3_headers_shmem_init},
+	{rewind_shmem_needs, rewind_init_shmem}
+};
+
+
+static Size orioledb_memsize(void);
+static void orioledb_shmem_request(void);
+static void orioledb_shmem_startup(void);
+static void orioledb_AcceptInvalidationMessagesHook(void);
+static void orioledb_usercache_hook(Datum arg, Oid arg1, Oid arg2, Oid arg3);
+static void orioledb_error_cleanup_hook(void);
+static void orioledb_get_relation_info_hook(PlannerInfo *root,
+											Oid relationObjectId,
+											bool inhparent,
+											RelOptInfo *rel);
+static bool orioledb_skip_tree_height_hook(Relation indexRelation);
+static void orioledb_get_running_transactions_extension(RunningTransactionsExtension *extension);
+static void orioledb_wait_snapshot(RunningTransactionsExtension *extension);
+
+static bool check_debug_max_bridge_ctid(char **newval, void **extra, GucSource source);
+static void assign_debug_max_bridge_ctid(const char *newval, void *extra);
+
+PG_FUNCTION_INFO_V1(orioledb_page_stats);
+PG_FUNCTION_INFO_V1(orioledb_print_pool_pages);
+PG_FUNCTION_INFO_V1(orioledb_version);
+PG_FUNCTION_INFO_V1(orioledb_commit_hash);
+PG_FUNCTION_INFO_V1(orioledb_ucm_check);
+PG_FUNCTION_INFO_V1(orioledb_parallel_debug_start);
+PG_FUNCTION_INFO_V1(orioledb_parallel_debug_stop);
+
+#ifdef IS_DEV
+typedef struct WalDescCtx
+{
+	StringInfo	buf;
+
+}			WalDescCtx;
+
+static WalParseResult
+wal_desc_check_version(const WalReaderState *r)
+{
+	Assert(r);
+
+	if (r->container.version > ORIOLEDB_WAL_VERSION)
+	{
+		/* WAL from future version */
+		return WALPARSE_BAD_VERSION;
+	}
+
+	return WALPARSE_OK;
+}
+
+static WalParseResult
+wal_desc_on_record(WalReaderState *r, WalRecord *rec)
+{
+	WalDescCtx *ctx = (WalDescCtx *) r->ctx;
+
+	Assert(ctx);
+	Assert(rec);
+
+	appendStringInfo(ctx->buf, " %s", wal_type_name(rec->type));
+
+	switch (rec->type)
+	{
+		case WAL_REC_XID:
+			appendStringInfo(ctx->buf, " (%lu %u %u);", rec->oxid, rec->logicalXid, rec->heapXid);
+			break;
+		case WAL_REC_COMMIT:
+		case WAL_REC_ROLLBACK:
+			appendStringInfo(ctx->buf, " (%lu %u %u - xmin %lu csn %lu);",
+							 rec->oxid, rec->logicalXid, rec->heapXid,
+							 rec->u.finish.xmin, rec->u.finish.csn);
+			break;
+		case WAL_REC_RELATION:
+			appendStringInfo(ctx->buf, " ([ %u %u %u ] treeType %u);",
+							 rec->oids.datoid, rec->oids.reloid, rec->oids.relnode,
+							 rec->u.relation.treeType);
+			break;
+		case WAL_REC_INSERT:
+		case WAL_REC_UPDATE:
+		case WAL_REC_DELETE:
+		case WAL_REC_REINSERT:
+			appendStringInfo(ctx->buf, " ([ %u %u %u ]);",
+							 rec->oids.datoid, rec->oids.reloid, rec->oids.relnode);
+			break;
+		case WAL_REC_SAVEPOINT:
+			appendStringInfo(ctx->buf, " (lxid %u parent lxid %u subid %u);",
+							 rec->logicalXid, rec->u.savepoint.parentLogicalXid, rec->u.savepoint.parentSubid);
+			break;
+		case WAL_REC_ROLLBACK_TO_SAVEPOINT:
+			appendStringInfo(ctx->buf, " (lxid %u parent subid %u xmin %lu csn %lu);",
+							 rec->logicalXid, rec->u.rb_to_sp.parentSubid, rec->u.rb_to_sp.xmin, rec->u.rb_to_sp.csn);
+			break;
+		case WAL_REC_JOINT_COMMIT:
+			appendStringInfo(ctx->buf, " (xmin %lu xid %u csn %lu);",
+							 rec->u.joint_commit.xmin, rec->u.joint_commit.xid, rec->u.joint_commit.csn);
+			break;
+		case WAL_REC_TRUNCATE:
+			appendStringInfo(ctx->buf, " ([ %u %u %u ]);",
+							 rec->u.truncate.oids.datoid, rec->u.truncate.oids.reloid, rec->u.truncate.oids.relnode);
+			break;
+		case WAL_REC_SWITCH_LOGICAL_XID:
+			appendStringInfo(ctx->buf, " (%u %u);", rec->u.swxid.topXid, rec->u.swxid.subXid);
+			break;
+		default:
+			appendStringInfo(ctx->buf, ";");
+			break;
+	}
+	return WALPARSE_OK;
+}
+#endif
+
+static void
+orioledb_rm_desc(StringInfo buf, XLogReaderState *record)
+{
+#ifdef IS_DEV
+	Pointer		startPtr = (Pointer) XLogRecGetData(record);
+	Pointer		endPtr = startPtr + XLogRecGetDataLen(record);
+
+	WalDescCtx	dctx = {
+		.buf = buf
+	};
+
+	WalReaderState r = {
+		.start = startPtr,
+		.end = endPtr,
+		.ptr = startPtr,
+		/* Consumer */
+		.ctx = &dctx,
+		.check_version = wal_desc_check_version,
+		.on_container = NULL,
+		.on_record = wal_desc_on_record
+	};
+
+	WalParseResult st = wal_parse_container(&r, false);
+
+	if (st != WALPARSE_OK)
+		appendStringInfo(buf, " [PARSE ERROR %d]", (int) st);
+#endif
+}
+
+static const char *
+orioledb_rm_identify(uint8 info)
+{
+	return "OrioleDB WAL container";
+}
+
+static void
+o_recovery_shutdown_hook(void)
+{
+	o_recovery_finish_hook(false);
+}
+
+static void
+o_recovery_cleanup(void)
+{
+	o_recovery_finish_hook(true);
+}
+
+static RmgrData rmgr =
+{
+	.rm_name = "OrioleDB resource manager",
+	.rm_startup = o_recovery_start_hook,
+	.rm_cleanup = o_recovery_cleanup,
+	.rm_redo = orioledb_redo,
+	.rm_desc = orioledb_rm_desc,
+	.rm_identify = orioledb_rm_identify,
+	.rm_mask = NULL,
+	.rm_decode = orioledb_decode
+};
+
+/*
+ * We currently do not support restarting PG instance from within the extension
+ * on certain systems. Refuse to enable rewind on those systems.
+ */
+static bool
+orioledb_enable_rewind_check_hook(bool *newval, void **extra, GucSource source)
+{
+#if defined(WIN32)
+	if (*newval)
+	{
+		GUC_check_errcode(ERRCODE_FEATURE_NOT_SUPPORTED);
+		GUC_check_errdetail("Rewind is not supported on Windows.");
+		return false;
+	}
+#elif !defined(HAVE_SETSID)
+	if (*newval)
+	{
+		GUC_check_errcode(ERRCODE_FEATURE_NOT_SUPPORTED);
+		GUC_check_errdetail("Rewind is not supported on systems without setsid(2).");
+		return false;
+	}
+#endif
+	/* Supported system or newval == false */
+	return true;
+}
+
+
+/*
+ * GUC check_hook for orioledb.replay_until_lsn
+ */
+static bool
+orioledb_replay_until_lsn_check_hook(char **newval, void **extra, GucSource source)
+{
+	if (strcmp(*newval, "") != 0)
+	{
+		XLogRecPtr	lsn;
+		XLogRecPtr *myextra;
+		bool		have_error = false;
+
+		lsn = pg_lsn_in_internal(*newval, &have_error);
+		if (have_error)
+			return false;
+
+		myextra = (XLogRecPtr *) guc_malloc(ERROR, sizeof(XLogRecPtr));
+		*myextra = lsn;
+		*extra = (void *) myextra;
+	}
+	return true;
+}
+
+static void
+orioledb_replay_until_lsn_assign_hook(const char *newval, void *extra)
+{
+	if (newval && strcmp(newval, "") != 0)
+		replay_until_lsn = *((XLogRecPtr *) extra);
+}
+
+void
+_PG_init(void)
+{
+	Size		main_buffers_count;
+	int			i;
+	int			min_pool_size;
+
+	if (!process_shared_preload_libraries_in_progress)
+		return;
+
+	o_verify_dir_exists_or_create(pstrdup(ORIOLEDB_DATA_DIR), NULL, NULL);
+	o_verify_dir_exists_or_create(pstrdup(ORIOLEDB_UNDO_DIR), NULL, NULL);
+	o_verify_dir_exists_or_create(psprintf("%s/1", ORIOLEDB_DATA_DIR), NULL, NULL);
+
+	/* See InitializeMaxBackends(), InitProcGlobal() */
+#if PG_VERSION_NUM >= 170000
+	max_procs = MaxConnections + autovacuum_max_workers + 1 +
+		max_worker_processes + max_wal_senders + NUM_SPECIAL_WORKER_PROCS + NUM_AUXILIARY_PROCS;
+#else
+	max_procs = MaxConnections + autovacuum_max_workers + 2 +
+		max_worker_processes + max_wal_senders + NUM_AUXILIARY_PROCS;
+#endif
+
+	min_pool_size = Max(PPOOL_MIN_SIZE_BLCKS, max_procs * 4);
+
+	DefineCustomBoolVariable("orioledb.debug_disable_pools_limit",
+							 "Disables pools minimal limit for debug.",
+							 NULL,
+							 &debug_disable_pools_limit,
+							 false,
+							 PGC_POSTMASTER,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomEnumVariable("orioledb.serializable",
+							 "How OrioleDB handles SERIALIZABLE isolation.",
+							 "table_lock acquires a coarse ExclusiveLock per touched relation; "
+							 "error rejects SERIALIZABLE transactions; "
+							 "repeatable_read silently downgrades them to REPEATABLE READ.",
+							 &orioledb_serializable_mode,
+							 O_SERIALIZABLE_TABLE_LOCK,
+							 serializable_mode_options,
+							 PGC_USERSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomIntVariable("orioledb.main_buffers",
+							"Size of orioledb engine shared buffers for main data.",
+							NULL,
+							&main_buffers_guc,
+							Max(8192, min_pool_size),
+							debug_disable_pools_limit ? 1 : min_pool_size,
+							INT_MAX,
+							PGC_POSTMASTER,
+							GUC_UNIT_BLOCKS,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("orioledb.free_tree_buffers",
+							"Size of orioledb engine shared buffers for free extents BTrees.",
+							NULL,
+							&free_tree_buffers_guc,
+							min_pool_size,
+							debug_disable_pools_limit ? 1 : min_pool_size,
+							INT_MAX,
+							PGC_POSTMASTER,
+							GUC_UNIT_BLOCKS,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("orioledb.catalog_buffers",
+							"Size of orioledb engine shared buffers for free extents BTrees.",
+							NULL,
+							&catalog_buffers_guc,
+							min_pool_size,
+							debug_disable_pools_limit ? 1 : min_pool_size,
+							INT_MAX,
+							PGC_POSTMASTER,
+							GUC_UNIT_BLOCKS,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("orioledb.undo_buffers",
+							"Size of orioledb engine undo log buffers.",
+							NULL,
+							&undo_buffers_guc,
+							Max(128, 16 * max_procs),
+							16 * max_procs,
+							INT_MAX,
+							PGC_POSTMASTER,
+							GUC_UNIT_BLOCKS,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("orioledb.temp_buffers",
+							"Size of orioledb engine buffers for temporary tables.",
+							NULL,
+							&temp_buffers_guc,
+							PPOOL_MIN_SIZE * 8,
+							debug_disable_pools_limit ? 1 : PPOOL_MIN_SIZE,
+							INT_MAX,
+							PGC_POSTMASTER,
+							GUC_UNIT_BLOCKS,
+							NULL,
+							NULL,
+							NULL);
+
+
+	DefineCustomRealVariable("orioledb.regular_block_undo_circular_buffer_fraction",
+							 "Fraction of cirucular buffer for block-level undo of regular tables.",
+							 NULL,
+							 &regular_block_undo_circular_buffer_fraction,
+							 0.45,
+							 0.05,
+							 0.95,
+							 PGC_POSTMASTER,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomRealVariable("orioledb.system_undo_circular_buffer_fraction",
+							 "Fraction of cirucular buffer for undo of system trees.",
+							 NULL,
+							 &system_undo_circular_buffer_fraction,
+							 0.10,
+							 0.05,
+							 0.95,
+							 PGC_POSTMASTER,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomIntVariable("orioledb.xid_buffers",
+							"Size of orioledb engine xid buffers.",
+							NULL,
+							&xid_buffers_guc,
+							128,
+							128,
+							INT_MAX,
+							PGC_POSTMASTER,
+							GUC_UNIT_BLOCKS,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("orioledb.rewind_buffers",
+							"Size of orioledb engine rewind buffers.",
+							NULL,
+							&rewind_buffers_guc,
+							128,
+							6,
+							INT_MAX,
+							PGC_POSTMASTER,
+							GUC_UNIT_BLOCKS,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomBoolVariable("orioledb.enable_stopevents",
+							 "Enable stop events.",
+							 NULL,
+							 &enable_stopevents,
+							 false,
+							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomBoolVariable("orioledb.trace_stopevents",
+							 "Trace all the stop events to the system log.",
+							 NULL,
+							 &trace_stopevents,
+							 false,
+							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomBoolVariable("orioledb.remove_old_checkpoint_files",
+							 "Remove temporary *.tmp and *.map files after checkpoint.",
+							 NULL,
+							 &remove_old_checkpoint_files,
+							 true,
+							 PGC_POSTMASTER,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomBoolVariable("orioledb.skip_unmodified_trees",
+							 "Skip reading of unmodified trees during checkpointing.",
+							 NULL,
+							 &skip_unmodified_trees,
+							 true,
+							 PGC_POSTMASTER,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomBoolVariable("orioledb.debug_disable_bgwriter",
+							 "Disables bgwriter for debug.",
+							 NULL,
+							 &debug_disable_bgwriter,
+							 false,
+							 PGC_POSTMASTER,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomIntVariable("orioledb.recovery_queue_size",
+							"Size of orioledb recovery queue per worker.",
+							NULL,
+							&recovery_queue_size_guc,
+							1024,
+							512,
+							MAX_KILOBYTES,
+							PGC_POSTMASTER,
+							GUC_UNIT_KB,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("orioledb.recovery_pool_size",
+							"Sets the number of recovery workers.",
+							NULL,
+							&recovery_pool_size_guc,
+							3,
+							1,
+							128,
+							PGC_POSTMASTER,
+							0,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("orioledb.recovery_idx_pool_size",
+							"Sets the number of recovery index build workers.",
+							NULL,
+							&recovery_idx_pool_size_guc,
+							3,
+							1,
+							128,
+							PGC_POSTMASTER,
+							0,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("orioledb.logical_xid_buffers",
+							"Size of shared memory buffers for subtransaction logical XIDs.",
+							NULL,
+							&logical_xid_buffers_guc,
+							64,
+							1,
+							1024,
+							PGC_POSTMASTER,
+							GUC_UNIT_BLOCKS,
+							NULL,
+							NULL,
+							NULL);
+
+	/*
+	 * This variable added because we need values less than minimum value of
+	 * checkpoint_timeout(30s) for tests.
+	 */
+	DefineCustomIntVariable("orioledb.debug_checkpoint_timeout",
+							"Sets the maximum time between automatic WAL checkpoints.",
+							NULL,
+							&CheckPointTimeout,
+							CheckPointTimeout,
+							1,
+							86400,
+							PGC_POSTMASTER,
+							GUC_UNIT_S,
+							NULL,
+							NULL,
+							NULL);
+
+	/*
+	 * How much time orioledb checkpoint can take relative to PostgreSQL
+	 * checkpoint.
+	 */
+	DefineCustomRealVariable("orioledb.checkpoint_completion_ratio",
+							 "ratio of orioledb checkpoint to postgres checkpoint.",
+							 NULL,
+							 &o_checkpoint_completion_ratio,
+							 0.5,
+							 0.0,
+							 1.0,
+							 PGC_POSTMASTER,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomIntVariable("orioledb.bgwriter_num_workers",
+							"Number of background writers.",
+							NULL,
+							&bgwriter_num_workers,
+							1,
+							1,
+							MAX_BACKENDS,
+							PGC_POSTMASTER,
+							0,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("orioledb.max_io_concurrency",
+							"Number of maximum concurrent IO operations.",
+							NULL,
+							&max_io_concurrency,
+							0,
+							0,
+							INT_MAX,
+							PGC_POSTMASTER,
+							0,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomBoolVariable("orioledb.use_mmap",
+							 "Store data in the mmap'ed file.",
+							 NULL,
+							 &use_mmap,
+							 false,
+							 PGC_POSTMASTER,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomStringVariable("orioledb.device_filename",
+							   "Data file for mmap.",
+							   NULL,
+							   &device_filename,
+							   NULL,
+							   PGC_POSTMASTER,
+							   0,
+							   NULL,
+							   NULL,
+							   NULL);
+
+	DefineCustomIntVariable("orioledb.device_length",
+							"Size of mmap.",
+							NULL,
+							&device_length_guc,
+							0,
+							0,
+							INT_MAX,
+							PGC_POSTMASTER,
+							GUC_UNIT_BLOCKS,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("orioledb.default_compress",
+							"Default compression level.",
+							NULL,
+							&default_compress,
+							-1,
+							-1,
+							o_compress_max_lvl(),
+							PGC_USERSET,
+							0,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("orioledb.default_primary_compress",
+							"Default compression level of primary index.",
+							NULL,
+							&default_primary_compress,
+							-1,
+							-1,
+							o_compress_max_lvl(),
+							PGC_USERSET,
+							0,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("orioledb.default_toast_compress",
+							"Default compression level of TOAST.",
+							NULL,
+							&default_toast_compress,
+							-1,
+							-1,
+							o_compress_max_lvl(),
+							PGC_USERSET,
+							0,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomBoolVariable("orioledb.table_description_compress",
+							 "Display compression column in "
+							 "orioledb_table_description",
+							 NULL,
+							 &orioledb_table_description_compress,
+							 false,
+							 PGC_USERSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomBoolVariable("orioledb.use_sparse_files",
+							 "Punch sparse file holes for free blocks",
+							 NULL,
+							 &orioledb_use_sparse_files,
+							 false,
+							 PGC_POSTMASTER,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+	DefineCustomStringVariable("orioledb.debug_max_bridge_ctid_blkno",
+							   "Sets maximum value for bridge ctid for its overflow testing",
+							   NULL,
+							   &max_bridge_ctid_string,
+							   "",
+							   PGC_POSTMASTER,
+							   0,
+							   check_debug_max_bridge_ctid,
+							   assign_debug_max_bridge_ctid,
+							   NULL);
+
+	DefineCustomBoolVariable("orioledb.s3_mode",
+							 "The OrioleDB function mode on top of S3 storage",
+							 NULL,
+							 &orioledb_s3_mode,
+							 false,
+							 PGC_POSTMASTER,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomIntVariable("orioledb.s3_queue_size",
+							"The size of queue for S3 tasks",
+							NULL,
+							&s3_queue_size_guc,
+							1024,
+							128,
+							MAX_KILOBYTES,
+							PGC_POSTMASTER,
+							GUC_UNIT_KB,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("orioledb.s3_headers_buffers",
+							"The size of buffers for S3 meta-information",
+							NULL,
+							&s3_headers_buffers_size,
+							1024,
+							128,
+							MAX_KILOBYTES,
+							PGC_POSTMASTER,
+							GUC_UNIT_KB,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("orioledb.s3_num_workers",
+							"The number of workers to make S3 requests",
+							NULL,
+							&s3_num_workers,
+							3,
+							1,
+							MAX_BACKENDS,
+							PGC_POSTMASTER,
+							GUC_UNIT_KB,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("orioledb.s3_desired_size",
+							"The desired size of local OrioleDB data.",
+							NULL,
+							&s3_desired_size,
+							10000,
+							1,
+							INT_MAX,
+							PGC_SIGHUP,
+							GUC_UNIT_MB,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomStringVariable("orioledb.s3_host",
+							   "S3 host",
+							   NULL,
+							   &s3_host,
+							   NULL,
+							   PGC_POSTMASTER,
+							   0,
+							   NULL,
+							   NULL,
+							   NULL);
+
+	DefineCustomStringVariable("orioledb.s3_region",
+							   "S3 region",
+							   NULL,
+							   &s3_region,
+							   NULL,
+							   PGC_POSTMASTER,
+							   0,
+							   NULL,
+							   NULL,
+							   NULL);
+
+	DefineCustomStringVariable("orioledb.s3_prefix",
+							   "Prefix to prepend to S3 object name",
+							   NULL,
+							   &s3_prefix,
+							   NULL,
+							   PGC_POSTMASTER,
+							   0,
+							   NULL,
+							   NULL,
+							   NULL);
+
+	DefineCustomBoolVariable("orioledb.s3_use_https",
+							 "Use https for S3 connections (or http otherwise)",
+							 NULL,
+							 &s3_use_https,
+							 true,
+							 PGC_POSTMASTER,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomStringVariable("orioledb.s3_accesskey",
+							   "S3 access key",
+							   NULL,
+							   &s3_accesskey,
+							   NULL,
+							   PGC_POSTMASTER,
+							   0,
+							   NULL,
+							   NULL,
+							   NULL);
+
+	DefineCustomStringVariable("orioledb.s3_secretkey",
+							   "S3 secret key",
+							   NULL,
+							   &s3_secretkey,
+							   NULL,
+							   PGC_POSTMASTER,
+							   0,
+							   NULL,
+							   NULL,
+							   NULL);
+
+	DefineCustomStringVariable("orioledb.s3_cainfo",
+							   "S3 CApath or CAfile path used to validate "
+							   "the peer certificate. For tests only!",
+							   NULL,
+							   &s3_cainfo,
+							   NULL,
+							   PGC_POSTMASTER,
+							   0,
+							   NULL,
+							   NULL,
+							   NULL);
+
+	DefineCustomBoolVariable("orioledb.enable_rewind",
+							 "Enable rewind for OrioleDB tables",
+							 NULL,
+							 &enable_rewind,
+							 false,
+							 PGC_POSTMASTER,
+							 0,
+							 orioledb_enable_rewind_check_hook,
+							 NULL,
+							 NULL);
+
+	DefineCustomIntVariable("orioledb.rewind_max_time",
+							"Sets the maximum time to hold information for OrioleDB rewind.",
+							NULL,
+							&rewind_max_time,
+							500,
+							1,
+							86400,
+							PGC_POSTMASTER,
+							GUC_UNIT_S,
+							NULL,
+							NULL,
+							NULL);
+	DefineCustomIntVariable("orioledb.rewind_max_transactions",
+							"Maximum number of xacts (Orioledb + heap) retained for orioledb rewind.",
+							NULL,
+							&rewind_max_transactions,
+							84600,
+							1,
+							INT_MAX,
+							PGC_POSTMASTER,
+							0,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomBoolVariable("orioledb.strict_mode",
+							 "Always throw an explicit error when a feature is not supported.",
+							 NULL,
+							 &orioledb_strict_mode,
+							 false,
+							 PGC_POSTMASTER,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomStringVariable("orioledb.replay_until_lsn",
+							   "Sets the LSN of the write-ahead log location up"
+							   " to which OrioleDB recovery will proceed.",
+							   "Danger: use only as a last resort",
+							   &replay_until_lsn_string,
+							   "",
+							   PGC_POSTMASTER,
+							   0,
+							   orioledb_replay_until_lsn_check_hook,
+							   orioledb_replay_until_lsn_assign_hook,
+							   NULL);
+
+	if (orioledb_s3_mode)
+	{
+		if (!s3_host || !s3_region || !s3_accesskey || !s3_secretkey)
+		{
+			ereport(FATAL, (errcode(ERRCODE_CONFIG_FILE_ERROR),
+							errmsg("missing options for S3 connection"),
+							errdetail("For OrioleDB S3 mode you need to specify "
+									  "orioledb.s3_host, orioledb.s3_region, "
+									  "orioledb.s3_accesskey and "
+									  "orioledb.s3_secretkey.")));
+		}
+	}
+
+	main_buffers_count = ((Size) main_buffers_guc * (Size) BLCKSZ) / ORIOLEDB_BLCKSZ;
+	free_tree_buffers_count = ((Size) free_tree_buffers_guc * (Size) BLCKSZ) / ORIOLEDB_BLCKSZ;
+	catalog_buffers_count = ((Size) catalog_buffers_guc * (Size) BLCKSZ) / ORIOLEDB_BLCKSZ;
+	orioledb_temp_buffers_count = ((Size) temp_buffers_guc * (Size) BLCKSZ) / ORIOLEDB_BLCKSZ;
+
+	main_buffers_offset = free_tree_buffers_count + catalog_buffers_count;
+
+	orioledb_buffers_count = main_buffers_count + free_tree_buffers_count + catalog_buffers_count;
+	orioledb_buffers_size = mul_size(orioledb_buffers_count, ORIOLEDB_BLCKSZ);
+
+	undo_circular_buffer_size = ((Size) undo_buffers_guc * BLCKSZ) / 2;
+	undo_circular_buffer_size /= ORIOLEDB_BLCKSZ;
+	undo_buffers_count = (uint32) undo_circular_buffer_size;
+	undo_circular_buffer_size *= ORIOLEDB_BLCKSZ;
+
+	xid_circular_buffer_size = ((Size) xid_buffers_guc * BLCKSZ) / 2;
+	xid_circular_buffer_size /= ORIOLEDB_BLCKSZ;
+	xid_buffers_count = (uint32) xid_circular_buffer_size;
+	xid_circular_buffer_size *= ORIOLEDB_BLCKSZ / sizeof(OXidMapItem);
+
+	if (enable_rewind)
+	{
+		rewind_circular_buffer_size = ((Size) rewind_buffers_guc * BLCKSZ) / 2;
+		rewind_circular_buffer_size /= ORIOLEDB_BLCKSZ;
+		rewind_buffers_count = (uint32) rewind_circular_buffer_size;
+		rewind_circular_buffer_size *= ORIOLEDB_BLCKSZ / sizeof(RewindItem);
+	}
+
+	page_descs_size = CACHELINEALIGN(mul_size(orioledb_buffers_count, sizeof(OrioleDBPageDesc)));
+
+	EmitWarningsOnPlaceholders("pg_stat_statements");
+
+	memset(page_pools, 0, OPagePoolTypesCount * sizeof(OPagePool));
+	page_pools_size[OPagePoolFreeTree] = o_ppool_estimate_space(&page_pools[OPagePoolFreeTree],
+																0,
+																free_tree_buffers_count,
+																debug_disable_pools_limit);
+
+	page_pools_size[OPagePoolCatalog] = o_ppool_estimate_space(&page_pools[OPagePoolCatalog],
+															   free_tree_buffers_count,
+															   catalog_buffers_count,
+															   debug_disable_pools_limit);
+
+	page_pools_size[OPagePoolMain] = o_ppool_estimate_space(&page_pools[OPagePoolMain],
+															main_buffers_offset,
+															main_buffers_count,
+															debug_disable_pools_limit);
+
+	for (i = 0; i < OPagePoolTypesCount; i++)
+		page_pools_size[i] = CACHELINEALIGN(page_pools_size[i]);
+
+	local_ppool_init(&local_ppool);
+
+	if (device_filename)
+	{
+		device_fd = BasicOpenFile(device_filename, O_RDWR);
+		device_length = (Size) device_length_guc * BLCKSZ;
+		if (device_fd < 0)
+		{
+			elog(LOG, "can't open device file %s", device_filename);
+		}
+		else if (use_mmap)
+		{
+			mmap_data = mmap(NULL,
+							 device_length,
+							 PROT_READ | PROT_WRITE,
+							 MAP_FILE | MAP_SHARED,
+							 device_fd,
+							 0);
+			if (!mmap_data)
+				elog(LOG, "can't map device file %s", device_filename);
+
+		}
+		if (device_fd >= 0)
+			use_device = true;
+		if (!mmap_data)
+			use_mmap = false;
+	}
+	else
+	{
+		use_mmap = false;
+		use_device = false;
+	}
+
+	/* Register background writers */
+	for (i = 0; i < bgwriter_num_workers; i++)
+		register_bgwriter(i);
+
+	if (enable_rewind)
+		register_rewind_worker();
+
+	if (orioledb_s3_mode)
+	{
+		const char *check_errmsg = NULL;
+		const char *check_errdetail = NULL;
+
+		s3_put_lock_file();
+		if (!s3_check_control(&check_errmsg, &check_errdetail))
+		{
+			s3_delete_lock_file();
+
+			ereport(FATAL,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("%s", check_errmsg),
+					 errdetail("%s", check_errdetail)));
+		}
+	}
+
+	/* Register S3 workers */
+	for (i = 0; orioledb_s3_mode && (i < s3_num_workers); i++)
+		register_s3worker(i);
+
+	/* Register custom deTOAST function */
+	register_o_detoast_func(o_detoast);
+
+	o_tableam_descr_init();
+	o_compress_init();
+	o_sys_caches_init();
+	RegisterCustomScanMethods(&o_scan_methods);
+
+	btree_insert_context = AllocSetContextCreate(TopMemoryContext,
+												 "orioledb B-tree insert context",
+												 ALLOCSET_DEFAULT_SIZES);
+
+	btree_seqscan_context = AllocSetContextCreate(TopMemoryContext,
+												  "orioledb B-tree seqential scans context",
+												  ALLOCSET_DEFAULT_SIZES);
+
+	/* Setup the required hooks. */
+	prev_shmem_request_hook = shmem_request_hook;
+	shmem_request_hook = orioledb_shmem_request;
+	prev_shmem_startup_hook = shmem_startup_hook;
+	shmem_startup_hook = orioledb_shmem_startup;
+	next_CheckPoint_hook = CheckPoint_hook;
+	old_set_rel_pathlist_hook = set_rel_pathlist_hook;
+	prev_AcceptInvalidationMessagesHook = AcceptInvalidationMessagesHook;
+	AcceptInvalidationMessagesHook = orioledb_AcceptInvalidationMessagesHook;
+	set_rel_pathlist_hook = orioledb_set_rel_pathlist_hook;
+	set_plain_rel_pathlist_hook = orioledb_set_plain_rel_pathlist_hook;
+	RegisterXactCallback(undo_xact_callback, NULL);
+	RegisterSubXactCallback(undo_subxact_callback, NULL);
+	get_xidless_commit_lsn_hook = orioledb_get_xidless_commit_lsn;
+	CacheRegisterUsercacheCallback(orioledb_usercache_hook, PointerGetDatum(NULL));
+	CheckPoint_hook = o_perform_checkpoint;
+	after_checkpoint_cleanup_hook = o_after_checkpoint_cleanup_hook;
+
+	RegisterCustomRmgr(ORIOLEDB_RMGR_ID, &rmgr);
+	RedoShutdownHook = o_recovery_shutdown_hook;
+	snapshot_hook = orioledb_snapshot_hook;
+	CustomErrorCleanupHook = orioledb_error_cleanup_hook;
+	snapshot_register_hook = undo_snapshot_register_hook;
+	snapshot_deregister_hook = undo_snapshot_deregister_hook;
+	reset_xmin_hook = orioledb_reset_xmin_hook;
+	prev_get_relation_info_hook = get_relation_info_hook;
+	get_relation_info_hook = orioledb_get_relation_info_hook;
+	prev_skip_tree_height_hook = skip_tree_height_hook;
+	skip_tree_height_hook = orioledb_skip_tree_height_hook;
+	xact_redo_hook = o_xact_redo_hook;
+	pg_newlocale_from_collation_hook = o_newlocale_from_collation;
+	prev_base_init_startup_hook = base_init_startup_hook;
+	base_init_startup_hook = o_base_init_startup_hook;
+	IndexAMRoutineHook = orioledb_indexam_routine_hook;
+	getRunningTransactionsExtension = orioledb_get_running_transactions_extension;
+	waitSnapshotHook = orioledb_wait_snapshot;
+	GetReplayXlogPtrHook = recovery_get_effective_replay_ptr;
+
+	prev_database_size_hook = database_size_hook;
+	database_size_hook = orioledb_calculate_database_size;
+	RecoveryStopsBeforeHook = orioledb_recovery_stops_before_hook;
+
+	if (enable_rewind)
+		VacuumHorizonHook = orioledb_vacuum_horizon_hook;
+	orioledb_setup_ddl_hooks();
+	stopevents_make_cxt();
+}
+
+static void
+o_base_init_startup_hook(void)
+{
+	if (MyBackendType == B_STARTUP)
+	{
+		if (remove_old_checkpoint_files)
+		{
+			elog(LOG, "Cleanup of old files at startup. Checkpoint %d",
+				 checkpoint_state->lastCheckpointNumber);
+			recovery_cleanup_old_files(checkpoint_state->lastCheckpointNumber,
+									   true);
+			recovery_cleanup_old_files(checkpoint_state->lastCheckpointNumber,
+									   false);
+		}
+	}
+
+	if (prev_base_init_startup_hook)
+		prev_base_init_startup_hook();
+}
+
+static Size
+o_proc_shmem_needs(void)
+{
+	return mul_size(max_procs, sizeof(ODBProcData));
+}
+
+static void
+o_proc_shmem_init(Pointer ptr, bool found)
+{
+	oProcData = (ODBProcData *) ptr;
+	if (!found)
+	{
+		int			i;
+
+		for (i = 0; i < max_procs; i++)
+		{
+			int			j,
+						k;
+
+			for (j = 0; j < (int) UndoLogsCount; j++)
+			{
+				pg_atomic_init_u64(&oProcData[i].undoRetainLocations[j].reservedUndoLocation, InvalidUndoLocation);
+				pg_atomic_init_u64(&oProcData[i].undoRetainLocations[j].snapshotRetainUndoLocation, InvalidUndoLocation);
+				pg_atomic_init_u64(&oProcData[i].undoRetainLocations[j].transactionUndoRetainLocation, InvalidUndoLocation);
+			}
+			pg_atomic_init_u64(&oProcData[i].commitInProgressXlogLocation, OWalInvalidCommitPos);
+			pg_atomic_init_u64(&oProcData[i].xmin, InvalidOXid);
+			pg_atomic_init_u64(&oProcData[i].pendingSkUndoLoc, InvalidUndoLocation);
+			oProcData[i].autonomousNestingLevel = 0;
+			memset(&oProcData[i].vxids, 0, sizeof(oProcData[i].vxids));
+			LWLockInitialize(&oProcData[i].undoStackLocationsFlushLock,
+							 get_undo_meta_by_type(UndoLogRegular)->undoStackLocationsFlushLockTrancheId);
+			oProcData[i].flushUndoLocations = false;
+			for (j = 0; j < PROC_XID_ARRAY_SIZE; j++)
+			{
+				for (k = 0; k < (int) UndoLogsCount; k++)
+				{
+					pg_atomic_init_u64(&oProcData[i].undoStackLocations[j][k].location, InvalidUndoLocation);
+					pg_atomic_init_u64(&oProcData[i].undoStackLocations[j][k].branchLocation, InvalidUndoLocation);
+					pg_atomic_init_u64(&oProcData[i].undoStackLocations[j][k].subxactLocation, InvalidUndoLocation);
+					pg_atomic_init_u64(&oProcData[i].undoStackLocations[j][k].onCommitLocation, InvalidUndoLocation);
+				}
+				oProcData[i].vxids[j].oxid = InvalidOXid;
+			}
+		}
+	}
+}
+
+static Size
+ppools_shmem_needs(void)
+{
+	Size		size = 0;
+	int			i;
+
+	for (i = 0; i < OPagePoolTypesCount; i++)
+		size = add_size(size, page_pools_size[i]);
+	size = add_size(size, orioledb_buffers_size);
+	size = add_size(size, page_descs_size);
+	return size;
+}
+
+static void
+ppools_shmem_init(Pointer ptr, bool found)
+{
+	int64		i;
+	Pointer		page_pools_ptr[OPagePoolTypesCount];
+
+	for (i = 0; i < OPagePoolTypesCount; i++)
+	{
+		page_pools_ptr[i] = ptr;
+		ptr += page_pools_size[i];
+	}
+	o_shared_buffers = ptr;
+	ptr += orioledb_buffers_size;
+	page_descs = (OrioleDBPageDesc *) ptr;
+
+	for (i = 0; i < OPagePoolTypesCount; i++)
+		o_ppool_shmem_init(&page_pools[i], page_pools_ptr[i], found);
+
+	if (!found)
+	{
+		for (i = 0; i < orioledb_buffers_count; i++)
+		{
+			Page		p = O_GET_IN_MEMORY_PAGE(i);
+			OrioleDBPageHeader *header = (OrioleDBPageHeader *) p;
+
+			pg_atomic_init_u64(&(O_PAGE_HEADER(p)->state), O_PAGE_STATE_SET_USAGE_COUNT(PAGE_STATE_INVALID_PROCNO, UCM_FREE_PAGES_LEVEL));
+			header->pageChangeCount = 0;
+		}
+
+		for (i = 0; i < page_descs_size / sizeof(OrioleDBPageDesc); i++)
+		{
+			o_page_desc_init(&page_descs[i]);
+		}
+	}
+}
+
+/*
+ * Estimate amount of shared memory required by OrioleDB extension.
+ */
+static Size
+orioledb_memsize(void)
+{
+	Size		size = 0;
+	int			i,
+				count = sizeof(shmemItems) / sizeof(shmemItems[0]);
+
+	for (i = 0; i < count; i++)
+		size = add_size(size, CACHELINEALIGN(shmemItems[i].shmem_size()));
+
+	return size;
+}
+
+static void
+orioledb_on_shmem_exit(int code, Datum arg)
+{
+	if (MyProc)
+		pg_atomic_write_u64(&oProcData[MYPROCNUMBER].xmin, InvalidOXid);
+
+	if (orioledb_s3_mode)
+		s3_delete_lock_file();
+}
+
+/*
+ * Request for shared memory and lwlocks
+ */
+static void
+orioledb_shmem_request(void)
+{
+	if (prev_shmem_request_hook)
+		prev_shmem_request_hook();
+
+	RequestAddinShmemSpace(orioledb_memsize());
+	request_btree_io_lwlocks();
+	RequestNamedLWLockTranche("orioledb_unique_locks", max_procs * 4);
+}
+
+/*
+ * Initialize OrioleDB's shared memory.  Called on database instanse start
+ * or restart.
+ */
+static void
+orioledb_shmem_startup(void)
+{
+	Pointer		ptr;
+	bool		found;
+	int			i,
+				count = sizeof(shmemItems) / sizeof(shmemItems[0]);
+
+	if (prev_shmem_startup_hook)
+		prev_shmem_startup_hook();
+	shared_segment = NULL;
+
+	/*
+	 * We must hold AddinShmemInitLock while initilization of our shared
+	 * memory.
+	 */
+	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
+
+	shared_segment = ShmemInitStruct("orioledb_enigne",
+									 orioledb_memsize(),
+									 &found);
+	ptr = shared_segment;
+
+	for (i = 0; i < count; i++)
+	{
+		shmemItems[i].shmem_init(ptr, found);
+		ptr += CACHELINEALIGN(shmemItems[i].shmem_size());
+	}
+
+	init_btree_io_lwlocks();
+	o_btree_init_unique_lwlocks();
+
+	before_shmem_exit(orioledb_on_shmem_exit, (Datum) 0);
+
+	LWLockRelease(AddinShmemInitLock);
+
+	shared_segment_initialized = true;
+}
+
+void
+o_page_desc_init(OrioleDBPageDesc *desc)
+{
+	desc->fileExtent.len = InvalidFileExtentLen;
+	desc->fileExtent.off = InvalidFileExtentOff;
+	ORelOidsSetInvalid(desc->oids);
+	desc->ionum = -1;
+	desc->type = 0;
+	desc->flags = 0;
+}
+
+uint64
+orioledb_device_alloc(struct BTreeDescr *descr, uint32 size)
+{
+	uint64		result;
+
+	result = pg_atomic_fetch_add_u64(&checkpoint_state->mmapDataLength, size);
+
+	if (result + size > device_length)
+		elog(ERROR, "device file overflow");
+
+	return result;
+}
+
+void
+orioledb_check_shmem(void)
+{
+	if (!shared_segment_initialized)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("orioledb must be loaded via shared_preload_libraries")));
+}
+
+/*
+ * Test to see if a directory exists.
+ *
+ * Returns:
+ *		0 if nonexistent
+ *		1 if exists
+ *		-1 if trouble accessing directory (errno reflects the error)
+ */
+static int
+o_check_dir(const char *dir)
+{
+	DIR		   *chkdir;
+
+	chkdir = opendir(dir);
+	if (chkdir == NULL)
+		return (errno == ENOENT) ? 0 : -1;
+
+	if (closedir(chkdir))
+		return -1;				/* error executing closedir */
+
+	return 1;
+}
+
+/*
+ * Verify that the given directory exists. If it does not exist, it is created.
+ */
+/* TODO: Add some kind of caching for calling mkdir */
+void
+o_verify_dir_exists_or_create(char *dirname, bool *created, bool *found)
+{
+	const char *errstr;
+
+	switch (o_check_dir(dirname))
+	{
+		case 0:
+
+			/*
+			 * Does not exist, so create
+			 */
+			if (pg_mkdir_p(dirname, S_IRWXU) == -1)
+			{
+				if (errno == EEXIST)
+				{
+					if (found)
+						*found = true;
+					return;
+				}
+				errstr = strerror(errno);
+				elog(ERROR, "could not access directory \"%s\": %s",
+					 dirname, errstr);
+			}
+			if (created)
+				*created = true;
+			return;
+		case 1:
+
+			/*
+			 * Exists
+			 */
+			if (found)
+				*found = true;
+			return;
+		case -1:
+
+			/*
+			 * Access problem
+			 */
+			errstr = strerror(errno);
+			elog(ERROR, "could not access directory \"%s\": %s",
+				 dirname, errstr);
+			return;
+	}
+	return;						/* keep compiler quiet */
+}
+
+/*
+ * pg_mkdir_p --- create a directory and, if necessary, parent directories
+ *
+ * This is equivalent to "mkdir -p" except we don't complain if the target
+ * directory already exists.
+ *
+ * We assume the path is in canonical form, i.e., uses / as the separator.
+ *
+ * omode is the file permissions bits for the target directory.  Note that any
+ * parent directories that have to be created get permissions according to the
+ * prevailing umask, but with u+wx forced on to ensure we can create there.
+ * (We declare omode as int, not mode_t, to minimize dependencies for port.h.)
+ *
+ * Returns 0 on success, -1 (with errno set) on failure.
+ *
+ * Note that on failure, the path arg has been modified to show the particular
+ * directory level we had problems with.
+ */
+int
+pg_mkdir_p(char *path, int omode)
+{
+	struct stat sb;
+	mode_t		numask,
+				oumask;
+	int			last,
+				retval;
+	char	   *p;
+
+	retval = 0;
+	p = path;
+
+#ifdef WIN32
+	/* skip network and drive specifiers for win32 */
+	if (strlen(p) >= 2)
+	{
+		if (p[0] == '/' && p[1] == '/')
+		{
+			/* network drive */
+			p = strstr(p + 2, "/");
+			if (p == NULL)
+			{
+				errno = EINVAL;
+				return -1;
+			}
+		}
+		else if (p[1] == ':' &&
+				 ((p[0] >= 'a' && p[0] <= 'z') ||
+				  (p[0] >= 'A' && p[0] <= 'Z')))
+		{
+			/* local drive */
+			p += 2;
+		}
+	}
+#endif
+
+	/*
+	 * POSIX 1003.2: For each dir operand that does not name an existing
+	 * directory, effects equivalent to those caused by the following command
+	 * shall occur:
+	 *
+	 * mkdir -p -m $(umask -S),u+wx $(dirname dir) && mkdir [-m mode] dir
+	 *
+	 * We change the user's umask and then restore it, instead of doing
+	 * chmod's.  Note we assume umask() can't change errno.
+	 */
+	oumask = umask(0);
+	numask = oumask & ~(S_IWUSR | S_IXUSR);
+	(void) umask(numask);
+
+	if (p[0] == '/')			/* Skip leading '/'. */
+		++p;
+	for (last = 0; !last; ++p)
+	{
+		if (p[0] == '\0')
+			last = 1;
+		else if (p[0] != '/')
+			continue;
+		*p = '\0';
+		if (!last && p[1] == '\0')
+			last = 1;
+
+		if (last)
+			(void) umask(oumask);
+
+		/* check for pre-existing directory */
+		if (stat(path, &sb) == 0)
+		{
+			if (!S_ISDIR(sb.st_mode))
+			{
+				if (last)
+					errno = EEXIST;
+				else
+					errno = ENOTDIR;
+				retval = -1;
+				break;
+			}
+		}
+		else if (mkdir(path, last ? omode : S_IRWXU | S_IRWXG | S_IRWXO) < 0)
+		{
+			retval = -1;
+			break;
+		}
+		if (!last)
+			*p = '/';
+	}
+
+	/* ensure we restored umask */
+	(void) umask(oumask);
+
+	return retval;
+}
+
+Datum
+orioledb_page_stats(PG_FUNCTION_ARGS)
+{
+	Datum		values[5];
+	bool		nulls[5];
+	int			i;
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+
+	orioledb_check_shmem();
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	/*
+	 * Build and return the tuple
+	 */
+	MemSet(nulls, 0, sizeof(nulls));
+	for (i = 0; i < OPagePoolTypesCount; i++)
+	{
+		int64		num_free_pages,
+					total_num_pages;
+
+		total_num_pages = (int64) page_pools[i].size;
+
+		if (i == OPagePoolMain)
+			values[0] = PointerGetDatum(cstring_to_text("main"));
+		else if (i == OPagePoolFreeTree)
+			values[0] = PointerGetDatum(cstring_to_text("free_tree"));
+		else if (i == OPagePoolCatalog)
+			values[0] = PointerGetDatum(cstring_to_text("catalog"));
+		num_free_pages = (int64) (*page_pools[i].base.ops->free_pages_count) ((PagePool *) &page_pools[i]);
+		values[1] = Int64GetDatum(total_num_pages - num_free_pages);
+		values[2] = Int64GetDatum(num_free_pages);
+		values[3] = Int64GetDatum((int64) (*page_pools[i].base.ops->dirty_pages_count) ((PagePool *) &page_pools[i]));
+		values[4] = Int64GetDatum(total_num_pages);
+		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+	}
+
+	return (Datum) 0;
+}
+
+Datum
+orioledb_print_pool_pages(PG_FUNCTION_ARGS)
+{
+	OInMemoryBlkno blkno,
+				start_blkno,
+				end_blkno;
+	Datum		values[7];
+	bool		nulls[7];
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	int32		ppool_arg = OPagePoolMain;
+	OPagePoolType ppool_type;
+
+	/* optional first argument: page pool type (int) */
+	if (PG_NARGS() > 0 && !PG_ARGISNULL(0))
+		ppool_arg = PG_GETARG_INT32(0);
+
+	if (ppool_arg < 0 || ppool_arg >= OPagePoolTypesCount)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid page pool type: %d", ppool_arg)));
+
+	ppool_type = (OPagePoolType) ppool_arg;
+
+	orioledb_check_shmem();
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	/* compute start and end blkno for requested pool */
+	switch (ppool_type)
+	{
+		case OPagePoolFreeTree:
+			start_blkno = 0;
+			end_blkno = page_pools[OPagePoolFreeTree].size;
+			break;
+		case OPagePoolCatalog:
+			start_blkno = (OInMemoryBlkno) free_tree_buffers_count;
+			end_blkno = start_blkno + page_pools[OPagePoolCatalog].size;
+			break;
+		case OPagePoolMain:
+			start_blkno = (OInMemoryBlkno) main_buffers_offset;
+			end_blkno = start_blkno + page_pools[OPagePoolMain].size;
+			break;
+		default:
+			/* defensive fallback */
+			start_blkno = 0;
+			end_blkno = 0;
+			break;
+	}
+
+	for (blkno = start_blkno; blkno < end_blkno; blkno++)
+	{
+		OrioleDBPageDesc *page_desc = O_GET_IN_MEMORY_PAGEDESC(blkno);
+		OrioleDBPageHeader *header = (OrioleDBPageHeader *) O_GET_IN_MEMORY_PAGE(blkno);
+		uint64		state;
+
+		MemSet(nulls, 0, sizeof(nulls));
+
+		values[0] = Int64GetDatum(blkno);
+		if (IS_SYS_TREE_OIDS(page_desc->oids))
+		{
+			values[1] = PointerGetDatum(cstring_to_text("sys tree"));
+		}
+		else if (ORelOidsIsValid(page_desc->oids))
+		{
+			Relation	rel = try_relation_open(page_desc->oids.reloid, AccessShareLock);
+
+			if (rel)
+			{
+				char	   *relname = RelationGetRelationName(rel);
+
+				values[1] = PointerGetDatum(cstring_to_text(relname));
+				relation_close(rel, AccessShareLock);
+			}
+			else
+			{
+				values[1] = PointerGetDatum(cstring_to_text("unknown"));
+			}
+		}
+		else if (page_desc->type == oIndexInvalid)
+		{
+			values[1] = PointerGetDatum(cstring_to_text("seq buffer"));
+		}
+		else
+		{
+			values[1] = PointerGetDatum(cstring_to_text("unknown"));
+		}
+		values[2] = Int64GetDatum(page_desc->oids.datoid);
+		values[3] = Int64GetDatum(page_desc->oids.reloid);
+		values[4] = Int64GetDatum(page_desc->oids.relnode);
+
+		switch (page_desc->type)
+		{
+			case oIndexInvalid:
+				values[5] = PointerGetDatum(cstring_to_text("invalid"));
+				break;
+			case oIndexToast:
+				values[5] = PointerGetDatum(cstring_to_text("toast"));
+				break;
+			case oIndexPrimary:
+				values[5] = PointerGetDatum(cstring_to_text("primary"));
+				break;
+			case oIndexUnique:
+				values[5] = PointerGetDatum(cstring_to_text("unique"));
+				break;
+			case oIndexRegular:
+				values[5] = PointerGetDatum(cstring_to_text("regular"));
+				break;
+			case oIndexBridge:
+				values[5] = PointerGetDatum(cstring_to_text("bridge"));
+				break;
+			case oIndexExclusion:
+				values[5] = PointerGetDatum(cstring_to_text("exclusion"));
+				break;
+			default:
+				values[5] = PointerGetDatum(cstring_to_text("unknown"));
+				break;
+		}
+
+		state = pg_atomic_read_u64(&header->state);
+		values[6] = Int64GetDatum(O_PAGE_STATE_GET_USAGE_COUNT(state));
+
+		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+	}
+
+	return (Datum) 0;
+}
+
+Datum
+orioledb_ucm_check(PG_FUNCTION_ARGS)
+{
+	bool		result = true;
+	int			i;
+
+	for (i = 0; i < OPagePoolTypesCount && result; i++)
+		result = ucm_check_map(&page_pools[i].ucm);
+
+	PG_RETURN_BOOL(result);
+}
+
+static void
+orioledb_AcceptInvalidationMessagesHook(void)
+{
+	if (prev_AcceptInvalidationMessagesHook)
+		prev_AcceptInvalidationMessagesHook();
+
+	o_replay_saved_inval_messages();
+}
+
+static void
+orioledb_usercache_hook(Datum arg, Oid arg1, Oid arg2, Oid arg3)
+{
+	o_invalidate_descrs(arg1, arg2, arg3);
+}
+
+void
+o_invalidate_oids(ORelOids oids)
+{
+	SharedInvalidationMessage msg;
+
+	Assert(ORelOidsIsValid(oids));
+
+	msg.usr.id = SHAREDINVALUSERCACHE_ID;
+	msg.usr.arg1 = oids.datoid;
+	msg.usr.arg2 = oids.reloid;
+	msg.usr.arg3 = oids.relnode;
+
+	/* check AddCatcacheInvalidationMessage() for an explanation */
+	VALGRIND_MAKE_MEM_DEFINED(&msg, sizeof(msg));
+
+	SendSharedInvalidMessages(&msg, 1);
+}
+
+Datum
+orioledb_version(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_TEXT_P(cstring_to_text(ORIOLEDB_VERSION));
+}
+
+#define COMMIT_HASH_STRING #COMMIT_HASH
+
+#define STRINGIZE2(s) #s
+#define STRINGIZE(s) STRINGIZE2(s)
+
+Datum
+orioledb_commit_hash(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_TEXT_P(cstring_to_text(STRINGIZE(COMMIT_HASH)));
+}
+
+/*
+ * Returns a page pool by the type.
+ */
+PagePool *
+get_ppool(OPagePoolType type)
+{
+	Assert((int) type < OPagePoolTypesCount);
+	return (PagePool *) &page_pools[type];
+}
+
+/*
+ * Returns a page pool for the page number.
+ */
+PagePool *
+get_ppool_by_blkno(OInMemoryBlkno blkno)
+{
+	if (O_PAGE_IS_LOCAL(blkno))
+		return (PagePool *) &local_ppool;
+
+	Assert(blkno < orioledb_buffers_count);
+
+	if (blkno >= main_buffers_offset)
+		return (PagePool *) &page_pools[OPagePoolMain];
+
+	if (blkno < free_tree_buffers_count)
+		return (PagePool *) &page_pools[OPagePoolFreeTree];
+
+	return (PagePool *) &page_pools[OPagePoolCatalog];
+}
+
+/*
+ * Returns count of all dirty pages (sum of dirty pages for all page pools).
+ */
+OInMemoryBlkno
+get_dirty_pages_count_sum(void)
+{
+	OInMemoryBlkno result = 0;
+	int			i;
+
+	for (i = 0; i < OPagePoolTypesCount; i++)
+		result += ppool_dirty_pages_count((PagePool *) &page_pools[i]);
+
+	return result;
+}
+
+void
+jsonb_push_key(JsonbParseState **state, char *key)
+{
+	JsonbValue	jval;
+
+	memset(&jval, 0, sizeof(jval));
+	ASAN_UNPOISON_MEMORY_REGION(&jval, sizeof(jval));
+	jval.type = jbvString;
+	jval.val.string.len = strlen(key);
+	jval.val.string.val = key;
+	(void) pushJsonbValue(state, WJB_KEY, &jval);
+}
+
+void
+jsonb_push_int8_key(JsonbParseState **state, char *key, int64 value)
+{
+	JsonbValue	jval;
+
+	ASAN_UNPOISON_MEMORY_REGION(&jval, sizeof(jval));
+
+	jsonb_push_key(state, key);
+
+	jval.type = jbvNumeric;
+	jval.val.numeric = DatumGetNumeric(DirectFunctionCall1(int8_numeric, Int64GetDatum(value)));
+	(void) pushJsonbValue(state, WJB_VALUE, &jval);
+
+}
+
+void
+jsonb_push_null_key(JsonbParseState **state, char *key)
+{
+	JsonbValue	jval;
+
+	jsonb_push_key(state, key);
+
+	jval.type = jbvNull;
+	(void) pushJsonbValue(state, WJB_VALUE, &jval);
+
+}
+
+void
+jsonb_push_bool_key(JsonbParseState **state, char *key, bool value)
+{
+	JsonbValue	jval;
+
+	jsonb_push_key(state, key);
+
+	ASAN_UNPOISON_MEMORY_REGION(&jval, sizeof(jval));
+
+	jval.type = jbvBool;
+	jval.val.boolean = value;
+	(void) pushJsonbValue(state, WJB_VALUE, &jval);
+
+}
+
+void
+jsonb_push_string_key(JsonbParseState **state, const char *key,
+					  const char *value)
+{
+	JsonbValue	jval;
+
+	jsonb_push_key(state, (char *) key);
+
+	ASAN_UNPOISON_MEMORY_REGION(&jval, sizeof(jval));
+	jval.type = jbvString;
+	jval.val.string.len = strlen(value);
+	jval.val.string.val = (char *) value;
+	(void) pushJsonbValue(state, WJB_VALUE, &jval);
+}
+
+static void
+orioledb_error_cleanup_hook(void)
+{
+	int			i;
+
+	GET_CUR_PROCDATA()->waitingForOxid = false;
+	pg_atomic_write_u64(&GET_CUR_PROCDATA()->pendingSkUndoLoc,
+						InvalidUndoLocation);
+	release_all_page_locks();
+	ppool_release_all_pages();
+	for (i = 0; i < (int) UndoLogsCount; i++)
+		release_undo_size((UndoLogType) i);
+	btree_mark_incomplete_splits();
+	skip_ucm = false;
+	ppool_run_clock_depth = 0;
+	btree_io_error_cleanup();
+	o_reset_syscache_hooks();
+	o_ddl_cleanup();
+	if (orioledb_s3_mode)
+		s3_headers_error_cleanup();
+	in_nontransactional_truncate = false;
+	reset_saving_inval_messages();
+}
+
+static void
+orioledb_get_relation_info_hook(PlannerInfo *root,
+								Oid relationObjectId,
+								bool inhparent,
+								RelOptInfo *rel)
+{
+	Relation	relation;
+
+	relation = table_open(relationObjectId, NoLock);
+
+	if (is_orioledb_rel(relation))
+	{
+		/* Evade parallel scan of OrioleDB's tables */
+		rel->rel_parallel_workers = RelationGetParallelWorkers(relation, -1);
+		if (rel->rel_parallel_workers > 0)
+			elog(DEBUG3, "Rel parallel workers = %d", rel->rel_parallel_workers);
+
+		if (relation->rd_rel->relhasindex)
+		{
+			int			i;
+			ListCell   *lc;
+			OTableDescr *descr = relation_get_descr(relation);
+			OIndexDescr *primary;
+
+			if (descr)
+			{
+				primary = GET_PRIMARY(descr);
+
+				foreach(lc, rel->indexlist)
+				{
+					IndexOptInfo *info = lfirst_node(IndexOptInfo, lc);
+					bool		hasbitmap;
+					OIndexNumber ix_num;
+					OIndexDescr *index_descr = NULL;
+					OInMemoryBlkno rootPageBlkno;
+					Page		root_page;
+					Relation	index;
+					OBTOptions *options;
+
+					index = index_open(info->indexoid, AccessShareLock);
+
+					options = (OBTOptions *) index->rd_options;
+
+					/*
+					 * TODO: Remove when parallel index scan will be
+					 * implemented
+					 */
+					info->amcanparallel = false;
+					hasbitmap = info->indexoid != primary->oids.reloid &&
+						primary->nFields <= 1;
+					for (i = 0;
+						 hasbitmap && i < primary->nFields; i++)
+					{
+						Oid			typeoid = primary->fields[i].inputtype;
+						bool		valid = typeoid == INT4OID ||
+							typeoid == INT8OID ||
+							typeoid == TIDOID;
+
+						hasbitmap = hasbitmap && valid;
+					}
+					info->amhasgetbitmap = hasbitmap;
+
+					if (index->rd_rel->relam != BTREE_AM_OID || (options && !options->orioledb_index))
+					{
+						index_close(index, AccessShareLock);
+						continue;
+					}
+
+					index_close(index, AccessShareLock);
+
+					for (ix_num = 0; ix_num < descr->nIndices; ix_num++)
+					{
+						index_descr = descr->indices[ix_num];
+						if (index_descr->oids.reloid == info->indexoid)
+							break;
+					}
+					Assert(ix_num < descr->nIndices);
+					Assert(index_descr);
+					o_btree_load_shmem(&index_descr->desc);
+					rootPageBlkno = index_descr->desc.rootInfo.rootPageBlkno;
+					root_page = O_GET_IN_MEMORY_PAGE(rootPageBlkno);
+					info->tree_height = PAGE_GET_LEVEL(root_page);
+					info->pages = TREE_NUM_LEAF_PAGES(&index_descr->desc);
+				}
+			}
+		}
+	}
+
+	table_close(relation, NoLock);
+}
+
+static bool
+orioledb_skip_tree_height_hook(Relation indexRelation)
+{
+	bool		result = false;
+	Relation	tbl;
+
+	tbl = table_open(indexRelation->rd_index->indrelid, NoLock);
+
+	if (is_orioledb_rel(tbl))
+		result = true;
+
+	table_close(tbl, NoLock);
+	return result;
+}
+
+static void
+orioledb_get_running_transactions_extension(RunningTransactionsExtension *extension)
+{
+	extension->csn = pg_atomic_read_u64(&TRANSAM_VARIABLES->nextCommitSeqNo);
+	extension->runXmin = pg_atomic_read_u64(&xid_meta->runXmin);
+
+	pg_read_barrier();
+
+	extension->nextXid = pg_atomic_read_u64(&xid_meta->nextXid);
+}
+
+static void
+orioledb_wait_snapshot(RunningTransactionsExtension *extension)
+{
+	OXid		oxid;
+
+	oxid = pg_atomic_read_u64(&xid_meta->runXmin);
+	while (oxid < extension->nextXid)
+	{
+		while (!wait_for_oxid(oxid, true));
+		oxid++;
+	}
+}
+
+Datum
+orioledb_parallel_debug_start(PG_FUNCTION_ARGS)
+{
+	debug_parallel_query = DEBUG_PARALLEL_REGRESS;
+	PG_RETURN_VOID();
+}
+
+Datum
+orioledb_parallel_debug_stop(PG_FUNCTION_ARGS)
+{
+	debug_parallel_query = DEBUG_PARALLEL_OFF;
+	PG_RETURN_VOID();
+}
+
+static bool
+o_newlocale_from_collation()
+{
+	return shared_segment_initialized;
+}
+
+bool
+is_bump_memory_context(MemoryContext mcxt)
+{
+#if PG_VERSION_NUM >= 170000
+	return IsA(mcxt, BumpContext);
+#else
+	return false;
+#endif
+}
+
+bool
+check_debug_max_bridge_ctid(char **newval, void **extra, GucSource source)
+{
+	if (strcmp(*newval, "") != 0)
+	{
+		BlockNumber *myextra;
+		BlockNumber blockNumber;
+		char	   *badp;
+		unsigned long cvt;
+
+		errno = 0;
+		cvt = strtoul(*newval, &badp, 10);
+		if (errno)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+					 errmsg("invalid input syntax for block number: \"%s\"",
+							*newval)));
+		blockNumber = (BlockNumber) cvt;
+
+		/*
+		 * Cope with possibility that unsigned long is wider than BlockNumber,
+		 * in which case strtoul will not raise an error for some values that
+		 * are out of the range of BlockNumber.  (See similar code in
+		 * oidin().)
+		 */
+#if SIZEOF_LONG > 4
+		if (cvt != (unsigned long) blockNumber &&
+			cvt != (unsigned long) ((int32) blockNumber))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+					 errmsg("invalid input syntax for block number: \"%s\"",
+							*newval)));
+#endif
+
+		myextra = (BlockNumber *) guc_malloc(ERROR, sizeof(BlockNumber));
+		*myextra = blockNumber;
+		*extra = (void *) myextra;
+	}
+	return true;
+}
+
+void
+assign_debug_max_bridge_ctid(const char *newval, void *extra)
+{
+	if (newval && strcmp(newval, "") != 0)
+		max_bridge_ctid_blkno = *((BlockNumber *) extra);
+	else
+		max_bridge_ctid_blkno = InvalidBlockNumber;
+}

@@ -1,0 +1,2895 @@
+#!/usr/bin/env python3
+# coding: utf-8
+
+import os
+import random
+import time
+
+from .base_test import BaseTest
+from .base_test import DM_LOG_WRITES_ENABLED
+from .base_test import ThreadQueryExecutor
+from .base_test import generate_string
+from .base_test import wait_stopevent
+from .base_test import wait_checkpointer_stopevent
+
+from testgres.enums import NodeStatus
+
+
+class RecoveryTest(BaseTest):
+
+	def setUp(self):
+		super().setUp()
+		if DM_LOG_WRITES_ENABLED:
+			# Crash recovery is only meaningful if WAL actually reaches the
+			# block device; testgres defaults fsync=off for speed.
+			self.node.append_conf('postgresql.conf',
+			                      'log_min_messages = notice\nfsync = on\n')
+			# Appends above go to the page cache — flush them to the block
+			# device so replay-to-mark after a crash still sees the config
+			# the test was running with.
+			os.sync()
+		else:
+			self.node.append_conf('postgresql.conf',
+			                      "log_min_messages = notice\n")
+
+	def checkpoint_simple_base(self, compressed):
+		node = self.node
+		node.start()  # start PostgreSQL
+		node.safe_psql(
+		    'postgres', """
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+			CREATE TABLE IF NOT EXISTS o_test (
+				id integer NOT NULL,
+				val text,
+				PRIMARY KEY (id) %s
+			) USING orioledb;
+			INSERT INTO o_test
+				(SELECT id, id || 'val' FROM generate_series(1, 10000, 1) id);
+			""" % ("WITH (compress)" if compressed else ""))
+		node.safe_psql('postgres', "CHECKPOINT;")
+		self.assertTrue(
+		    node.execute("SELECT orioledb_tbl_check('o_test'::regclass);")[0]
+		    [0])
+		node.safe_psql('postgres',
+		               "UPDATE o_test SET val = 'xxx' WHERE id % 1000 = 0;")
+		node.safe_psql('postgres', "CHECKPOINT;")
+		self.assertTrue(
+		    node.execute("SELECT orioledb_tbl_check('o_test'::regclass);")[0]
+		    [0])
+		node.safe_psql('postgres', "CHECKPOINT;")
+		self.assertTrue(
+		    node.execute("SELECT orioledb_tbl_check('o_test'::regclass);")[0]
+		    [0])
+		node.stop()  # stop PostgreSQL
+
+	def test_checkpoint_simple(self):
+		self.checkpoint_simple_base(False)
+
+	def test_checkpoint_compress_simple(self):
+		self.checkpoint_simple_base(True)
+
+	def checkpoint_multiple_base(self, compressed):
+		node = self.node
+		node.append_conf('postgresql.conf',
+		                 "shared_preload_libraries = orioledb\n")
+		node.start()  # start PostgreSQL
+		node.safe_psql(
+		    'postgres', """
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+			CREATE TABLE IF NOT EXISTS o_test (
+				key int NOT NULL,
+				value int NOT NULL,
+				PRIMARY KEY (key)
+			) USING orioledb %s;
+			INSERT INTO o_test
+				(SELECT i, i + 1 FROM generate_series(1, 10000, 1) i);
+			""" % ("WITH (primary_compress)" if compressed else ""))
+		node.safe_psql('postgres', "CHECKPOINT;")
+		node.safe_psql(
+		    'postgres',
+		    "UPDATE o_test SET value = value + 1 WHERE key % 10 = 0;")
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		node.safe_psql('postgres', "CHECKPOINT;")
+		self.assertEqual(
+		    node.execute(
+		        'postgres',
+		        "SELECT orioledb_tbl_check('o_test'::regclass);")[0][0], True)
+		node.safe_psql(
+		    'postgres',
+		    "UPDATE o_test SET value = value + 1 WHERE key % 10 = 0;")
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		node.safe_psql('postgres', "CHECKPOINT;")
+		self.assertEqual(
+		    node.execute(
+		        'postgres',
+		        "SELECT orioledb_tbl_check('o_test'::regclass);")[0][0], True)
+		node.safe_psql(
+		    'postgres',
+		    "UPDATE o_test SET value = value + 1 WHERE key % 10 = 0;")
+		self.assertEqual(
+		    node.execute('postgres',
+		                 "SELECT value FROM o_test WHERE key = 10;")[0][0], 14)
+		self.assertEqual(
+		    node.execute(
+		        'postgres',
+		        "SELECT orioledb_tbl_check('o_test'::regclass);")[0][0], True)
+		node.safe_psql(
+		    'postgres',
+		    "UPDATE o_test SET value = value + 1 WHERE key % 10 = 0;")
+		node.safe_psql('postgres', "CHECKPOINT;")
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(
+		    node.execute('postgres',
+		                 "SELECT value FROM o_test WHERE key = 10;")[0][0], 15)
+		self.assertEqual(
+		    node.execute(
+		        'postgres',
+		        "SELECT orioledb_tbl_check('o_test'::regclass);")[0][0], True)
+		node.stop()
+
+	def test_checkpoint_multiple(self):
+		self.checkpoint_multiple_base(False)
+
+	def test_checkpoint_compress_multiple(self):
+		self.checkpoint_multiple_base(True)
+
+	def test_checkpoint_simple_in_progress(self):
+		node = self.node
+		node.start()  # start PostgreSQL
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "	id integer NOT NULL,\n"
+		    "	val text\n"
+		    ") USING orioledb;\n"
+		    "INSERT INTO o_test\n"
+		    "	(SELECT id, id || 'val' FROM generate_series(1, 100, 1) id);\n")
+		con1 = node.connect()
+		con1.execute(
+		    "INSERT INTO o_test (SELECT id, id || 'val' FROM generate_series(101, 200, 1) id);"
+		)
+
+		node.safe_psql('postgres', "CHECKPOINT;")
+
+		con1.close()
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(
+		    node.execute('postgres', 'SELECT count(*) FROM o_test;')[0][0],
+		    100)
+		node.stop()
+
+	def test_primary_xip_secondary_tuples_insert(self):
+		node = self.node
+		node.append_conf(
+		    'postgresql.conf', "checkpoint_timeout = 1d\n"
+		    "orioledb.enable_stopevents = true\n")
+		node.start()
+		node.safe_psql(
+		    'postgres', """
+					   CREATE EXTENSION IF NOT EXISTS orioledb;
+					   CREATE TABLE IF NOT EXISTS o_test (
+						   id integer NOT NULL,
+						   id2 integer NOT NULL,
+						   id3 integer NOT NULL,
+						   PRIMARY KEY (id)
+					   ) USING orioledb;
+					   CREATE UNIQUE INDEX o_test_ix1 ON o_test (id2);
+					   CREATE INDEX o_test_ix2 ON o_test (id3);
+					   """)
+		con1 = node.connect()
+		con2 = node.connect()
+		con1.begin()
+		con1.execute(
+		    "INSERT INTO o_test (SELECT id, id + 1, id + 3 FROM generate_series(1, 100, 1) id);"
+		)
+
+		con1.execute(
+		    "SELECT pg_stopevent_set('checkpoint_index_start', '$.treeName == \"o_test_ix1\"');"
+		)
+		t1 = ThreadQueryExecutor(con2, "CHECKPOINT;")
+		t1.start()
+		wait_checkpointer_stopevent(node)
+		con1.commit()
+		con1.execute("SELECT pg_stopevent_reset('checkpoint_index_start');")
+
+		t1.join()
+		con1.close()
+		con2.close()
+		self.crash_with_os_buffer_loss()
+		node.start()
+		self.assertEqual(100,
+		                 node.execute("SELECT COUNT(*) FROM o_test;")[0][0])
+		self.assertEqual(
+		    100,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id2) t;")
+		    [0][0])
+		self.assertEqual(
+		    100,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id3) t;")
+		    [0][0])
+		node.execute("DELETE FROM o_test;")
+		self.assertEqual(0, node.execute("SELECT COUNT(*) FROM o_test;")[0][0])
+		self.assertEqual(
+		    0,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id2) t;")
+		    [0][0])
+		self.assertEqual(
+		    0,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id3) t;")
+		    [0][0])
+		node.stop()
+
+	def test_primary_xip_secondary_tuples_delete(self):
+		node = self.node
+		node.append_conf(
+		    'postgresql.conf', "checkpoint_timeout = 1d\n"
+		    "orioledb.enable_stopevents = true\n")
+		node.start()
+		node.safe_psql(
+		    'postgres', """
+					   CREATE EXTENSION IF NOT EXISTS orioledb;
+					   CREATE TABLE IF NOT EXISTS o_test (
+						   id integer NOT NULL,
+						   id2 integer NOT NULL,
+						   id3 integer NOT NULL,
+						   PRIMARY KEY (id)
+					   ) USING orioledb;
+					   CREATE UNIQUE INDEX o_test_ix1 ON o_test (id2);
+					   CREATE INDEX o_test_ix2 ON o_test (id3);
+					   """)
+		con1 = node.connect()
+		con2 = node.connect()
+		con1.begin()
+		con1.execute(
+		    "INSERT INTO o_test (SELECT id, id + 1, id + 3 FROM generate_series(1, 100, 1) id);"
+		)
+		con1.commit()
+		con1.begin()
+		con1.execute("DELETE FROM o_test WHERE mod(id, 5) = 0;")
+
+		con1.execute(
+		    "SELECT pg_stopevent_set('checkpoint_index_start', '$.treeName == \"o_test_ix1\"');"
+		)
+		t1 = ThreadQueryExecutor(con2, "CHECKPOINT;")
+		t1.start()
+		wait_checkpointer_stopevent(node)
+		con1.commit()
+		con1.execute("SELECT pg_stopevent_reset('checkpoint_index_start');")
+
+		t1.join()
+		con1.close()
+		con2.close()
+		self.crash_with_os_buffer_loss()
+		node.start()
+		self.assertEqual(80,
+		                 node.execute("SELECT COUNT(*) FROM o_test;")[0][0])
+		self.assertEqual(
+		    80,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id2) t;")
+		    [0][0])
+		self.assertEqual(
+		    80,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id3) t;")
+		    [0][0])
+		node.execute("DELETE FROM o_test;")
+		self.assertEqual(0, node.execute("SELECT COUNT(*) FROM o_test;")[0][0])
+		self.assertEqual(
+		    0,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id2) t;")
+		    [0][0])
+		self.assertEqual(
+		    0,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id3) t;")
+		    [0][0])
+		node.stop()
+
+	def test_primary_xip_secondary_tuples_update(self):
+		node = self.node
+		node.append_conf(
+		    'postgresql.conf', "checkpoint_timeout = 1d\n"
+		    "orioledb.enable_stopevents = true\n")
+		node.start()
+		node.safe_psql(
+		    'postgres', """
+					   CREATE EXTENSION IF NOT EXISTS orioledb;
+					   CREATE TABLE IF NOT EXISTS o_test (
+						   id integer NOT NULL,
+						   id2 integer NOT NULL,
+						   id3 integer NOT NULL,
+						   PRIMARY KEY (id)
+					   ) USING orioledb;
+					   CREATE UNIQUE INDEX o_test_ix1 ON o_test (id2);
+					   CREATE INDEX o_test_ix2 ON o_test (id3);
+					   """)
+		con1 = node.connect()
+		con2 = node.connect()
+		con1.begin()
+		con1.execute(
+		    "INSERT INTO o_test (SELECT id, id + 1, id + 3 FROM generate_series(1, 100, 1) id);"
+		)
+		con1.commit()
+		con1.begin()
+		con1.execute("UPDATE o_test SET id = id + 100 WHERE mod(id, 10) = 0;")
+		con1.execute("UPDATE o_test SET id2 = id2 + 100 WHERE mod(id, 3) = 0;")
+		con1.execute("UPDATE o_test SET id3 = id3 + 100 WHERE mod(id, 4) = 0;")
+		con1.execute(
+		    "UPDATE o_test SET id = id + 100, id2 = id2 + 100, id3 = id3 + 100 WHERE mod(id, 7) = 0;"
+		)
+		con1.execute(
+		    "SELECT pg_stopevent_set('checkpoint_index_start', '$.treeName == \"o_test_ix1\"');"
+		)
+
+		t1 = ThreadQueryExecutor(con2, "CHECKPOINT;")
+		t1.start()
+		wait_checkpointer_stopevent(node)
+		con1.commit()
+		con1.execute("SELECT pg_stopevent_reset('checkpoint_index_start');")
+
+		t1.join()
+		con1.close()
+		con2.close()
+		self.crash_with_os_buffer_loss()
+		node.start()
+		self.assertEqual(100,
+		                 node.execute("SELECT COUNT(*) FROM o_test;")[0][0])
+		self.assertEqual(
+		    100,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id2) t;")
+		    [0][0])
+		self.assertEqual(
+		    100,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id3) t;")
+		    [0][0])
+		node.execute("DELETE FROM o_test;")
+		self.assertEqual(0, node.execute("SELECT COUNT(*) FROM o_test;")[0][0])
+		self.assertEqual(
+		    0,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id2) t;")
+		    [0][0])
+		self.assertEqual(
+		    0,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id3) t;")
+		    [0][0])
+		node.stop()
+
+	def test_primary_xip_secondary_tuples_mix(self):
+		node = self.node
+		node.append_conf(
+		    'postgresql.conf', "checkpoint_timeout = 1d\n"
+		    "orioledb.enable_stopevents = true\n")
+		node.start()
+		node.safe_psql(
+		    'postgres', """
+					   CREATE EXTENSION IF NOT EXISTS orioledb;
+					   CREATE TABLE IF NOT EXISTS o_test (
+						   id integer NOT NULL,
+						   id2 integer NOT NULL,
+						   id3 integer NOT NULL,
+						   PRIMARY KEY (id)
+					   ) USING orioledb;
+					   CREATE UNIQUE INDEX o_test_ix1 ON o_test (id2);
+					   CREATE INDEX o_test_ix2 ON o_test (id3);
+					   """)
+		# insert-update-delete-commit
+		con1 = node.connect()
+		con2 = node.connect()
+		con1.begin()
+		con1.execute(
+		    "INSERT INTO o_test (SELECT id, id + 1, id + 3 FROM generate_series(1, 10, 1) id);"
+		)
+		con1.execute("UPDATE o_test SET id3 = id3 + 1 WHERE id < 5")
+		con1.execute("DELETE FROM o_test WHERE id > 5;")
+		con1.execute(
+		    "SELECT pg_stopevent_set('checkpoint_index_start', '$.treeName == \"o_test_ix1\"');"
+		)
+		t1 = ThreadQueryExecutor(con2, "CHECKPOINT;")
+		t1.start()
+		wait_checkpointer_stopevent(node)
+
+		con1.commit()
+		con1.execute("SELECT pg_stopevent_reset('checkpoint_index_start');")
+
+		t1.join()
+		con1.close()
+		con2.close()
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(
+		    "[(1, 2, 5), (2, 3, 6), (3, 4, 7), (4, 5, 8), (5, 6, 8)]",
+		    str(node.execute("SELECT * FROM o_test;")))
+		self.assertEqual(5, node.execute("SELECT COUNT(*) FROM o_test;")[0][0])
+		self.assertEqual(
+		    5,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id2) t;")
+		    [0][0])
+		self.assertEqual(
+		    5,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id3) t;")
+		    [0][0])
+		node.execute("DELETE FROM o_test;")
+		self.assertEqual(0, node.execute("SELECT COUNT(*) FROM o_test;")[0][0])
+		self.assertEqual(
+		    0,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id2) t;")
+		    [0][0])
+		self.assertEqual(
+		    0,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id3) t;")
+		    [0][0])
+		node.stop()
+
+		node.start()
+		# insert-update-delete-rollback
+		con1 = node.connect()
+		con2 = node.connect()
+		con1.execute(
+		    "INSERT INTO o_test (SELECT id, id + 1, id + 3 FROM generate_series(1, 10, 1) id);"
+		)
+		con1.execute("UPDATE o_test SET id3 = id3 + 1 WHERE id < 5")
+		con1.execute("DELETE FROM o_test WHERE id > 5;")
+		con1.execute(
+		    "SELECT pg_stopevent_set('checkpoint_index_start', '$.treeName == \"o_test_ix1\"');"
+		)
+		t1 = ThreadQueryExecutor(con2, "CHECKPOINT;")
+		t1.start()
+		wait_checkpointer_stopevent(node)
+
+		con1.rollback()
+		con1.execute("SELECT pg_stopevent_reset('checkpoint_index_start');")
+
+		t1.join()
+		con1.close()
+		con2.close()
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(0, node.execute("SELECT COUNT(*) FROM o_test;")[0][0])
+		self.assertEqual(
+		    0,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id2) t;")
+		    [0][0])
+		self.assertEqual(
+		    0,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id3) t;")
+		    [0][0])
+		node.stop()
+
+	def test_primary_empty_secondary_tuples(self):
+		node = self.node
+		node.append_conf(
+		    'postgresql.conf', "checkpoint_timeout = 1d\n"
+		    "orioledb.enable_stopevents = true\n")
+		node.start()
+		node.safe_psql(
+		    'postgres', """
+					   CREATE EXTENSION IF NOT EXISTS orioledb;
+					   CREATE TABLE IF NOT EXISTS o_test (
+						   id integer NOT NULL,
+						   id2 integer NOT NULL,
+						   id3 integer NOT NULL,
+						   PRIMARY KEY (id)
+					   ) USING orioledb;
+					   CREATE UNIQUE INDEX o_test_ix1 ON o_test (id2);
+					   CREATE INDEX o_test_ix2 ON o_test (id3);
+					   INSERT INTO o_test (SELECT id, id + 1, id + 3 FROM generate_series(11, 11, 1) id);
+					   """)
+		# insert-update-delete-commit
+		con1 = node.connect()
+		con2 = node.connect()
+		con1.execute(
+		    "SELECT pg_stopevent_set('checkpoint_index_start', '$.treeName == \"o_test_ix1\"');"
+		)
+		t1 = ThreadQueryExecutor(con2, "CHECKPOINT;")
+		t1.start()
+		wait_checkpointer_stopevent(node)
+
+		con1.begin()
+		con1.execute(
+		    "INSERT INTO o_test (SELECT id, id + 1, id + 3 FROM generate_series(1, 10, 1) id);"
+		)
+		con1.commit()
+		con1.begin()
+		con1.execute("UPDATE o_test SET id3 = id3 + 1 WHERE id < 5")
+		con1.commit()
+		con1.begin()
+		con1.execute("DELETE FROM o_test WHERE id > 5;")
+		con1.commit()
+		con1.execute("SELECT pg_stopevent_reset('checkpoint_index_start');")
+
+		t1.join()
+		con1.close()
+		con2.close()
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(
+		    "[(1, 2, 5), (2, 3, 6), (3, 4, 7), (4, 5, 8), (5, 6, 8)]",
+		    str(node.execute("SELECT * FROM o_test;")))
+		self.assertEqual(5, node.execute("SELECT COUNT(*) FROM o_test;")[0][0])
+		self.assertEqual(
+		    5,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id2) t;")
+		    [0][0])
+		self.assertEqual(
+		    5,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id3) t;")
+		    [0][0])
+		node.execute("DELETE FROM o_test;")
+		self.assertEqual(0, node.execute("SELECT COUNT(*) FROM o_test;")[0][0])
+		self.assertEqual(
+		    0,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id2) t;")
+		    [0][0])
+		self.assertEqual(
+		    0,
+		    node.execute(
+		        "SELECT COUNT(*) FROM (SELECT * FROM o_test ORDER BY id3) t;")
+		    [0][0])
+		node.stop()
+
+	def test_wal_truncate(self):
+		node = self.node
+		node.start()
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "    id integer NOT NULL,\n"
+		    "    val text,\n"
+		    "    PRIMARY KEY (id)\n"
+		    ") USING orioledb;\n")
+		node.safe_psql(
+		    "INSERT INTO o_test\n"
+		    "(SELECT id, id || 'val' FROM generate_series(1, 100, 1) id);\n")
+		node.safe_psql("TRUNCATE o_test;")
+		node.safe_psql(
+		    "INSERT INTO o_test\n"
+		    "(SELECT id, id || 'val' FROM generate_series(101, 200, 1) id);\n")
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(15050,
+		                 node.execute("SELECT SUM(id) FROM o_test;")[0][0])
+		node.stop()
+
+	def test_wal_without_checkpoint(self):
+		node = self.node
+		node.start()
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "    id integer NOT NULL,\n"
+		    "    val text,\n"
+		    "    PRIMARY KEY (id)\n"
+		    ") USING orioledb;\n"
+		    "TRUNCATE o_test;\n")
+		node.safe_psql(
+		    "INSERT INTO o_test\n"
+		    "(SELECT id, id || 'val' FROM generate_series(1, 100, 1) id);\n")
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(
+		    str(node.execute('postgres', 'SELECT * FROM o_test LIMIT 8;')),
+		    "[(1, '1val'), (2, '2val'), (3, '3val'), (4, '4val'), (5, '5val'), (6, '6val'), (7, '7val'), (8, '8val')]"
+		)
+
+		self.assertEqual(
+		    str(
+		        node.execute(
+		            'postgres',
+		            'SELECT * FROM o_test WHERE id BETWEEN 1 and 8;')),
+		    "[(1, '1val'), (2, '2val'), (3, '3val'), (4, '4val'), (5, '5val'), (6, '6val'), (7, '7val'), (8, '8val')]"
+		)
+		node.stop()
+
+	def test_wal_simple(self):
+		node = self.node
+		node.start()  # start PostgreSQL
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "	id integer NOT NULL,\n"
+		    "	val text\n"
+		    ") USING orioledb;\n"
+		    "INSERT INTO o_test\n"
+		    "	(SELECT id, id || 'val' FROM generate_series(1, 1000, 1) id);\n")
+		node.safe_psql('postgres', 'CHECKPOINT;')
+		con1 = node.connect()
+		con1.begin()
+		con1.execute("UPDATE o_test SET val = 'xxx1' WHERE id = 1;")
+		con1.execute("DELETE FROM o_test WHERE id = 2;")
+		con1.execute("INSERT INTO o_test VALUES (1001, 'xxx2');")
+		con2 = node.connect()
+		con2.execute("UPDATE o_test SET val = 'yyy1' WHERE id = 3;")
+		con2.execute("DELETE FROM o_test WHERE id = 4;")
+		con2.execute("INSERT INTO o_test VALUES (1002, 'yyy2');")
+		node.safe_psql('postgres', 'CHECKPOINT;')
+		con1.execute("INSERT INTO o_test VALUES (1003, 'zzz1');")
+		con2.execute("INSERT INTO o_test VALUES (1004, 'zzz2');")
+		con1.commit()
+		con2.rollback()
+		con1.begin()
+		con2.begin()
+		con1.execute("UPDATE o_test SET val = 'xxx3' WHERE id = 5;")
+		con2.execute("UPDATE o_test SET val = 'yyy3' WHERE id = 6;")
+		con1.execute("DELETE FROM o_test WHERE id = 7;")
+		con2.execute("DELETE FROM o_test WHERE id = 8;")
+		con1.execute("INSERT INTO o_test VALUES (1005, 'zzz3');")
+		con2.execute("INSERT INTO o_test VALUES (1006, 'zzz4');")
+		con1.rollback()
+		con2.commit()
+		con1.close()
+		con2.close()
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+
+		self.assertEqual(
+		    str(
+		        node.execute(
+		            'postgres',
+		            'SELECT * FROM o_test WHERE id BETWEEN 1 and 8;')),
+		    "[(1, 'xxx1'), (3, '3val'), (4, '4val'), (5, '5val'), (6, 'yyy3'), (7, '7val')]"
+		)
+		self.assertEqual(
+		    str(
+		        node.execute('postgres',
+		                     'SELECT * FROM o_test WHERE id > 1000;')),
+		    "[(1001, 'xxx2'), (1003, 'zzz1'), (1006, 'zzz4')]")
+		node.stop()  # stop PostgreSQL
+
+	def test_wal_update_pk(self):
+		node = self.node
+		node.start()  # start PostgreSQL
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "	id integer NOT NULL,\n"
+		    "	secid integer NOT NULL,\n"
+		    "	PRIMARY KEY (id)\n"
+		    ") USING orioledb;\n"
+		    "INSERT INTO o_test\n"
+		    "	(SELECT id, id + 1 FROM generate_series(1, 1000, 1) id);\n")
+		node.safe_psql(
+		    'postgres', "CHECKPOINT;\n"
+		    "UPDATE o_test SET id = -1 WHERE id = 1;")
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(
+		    str(
+		        node.execute('postgres',
+		                     'SELECT count(*), sum(id) FROM o_test;')),
+		    "[(1000, 500498)]")
+		node.stop()  # stop PostgreSQL
+
+	def test_wal_update_sec_index(self):
+		node = self.node
+		node.start()  # start PostgreSQL
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "	id integer NOT NULL,\n"
+		    "	secid integer NOT NULL\n"
+		    ") USING orioledb;\n"
+		    "CREATE INDEX o_test_ix1 ON o_test (secid);"
+		    "INSERT INTO o_test\n"
+		    "	(SELECT id, id + 1 FROM generate_series(1, 1000, 1) id);\n")
+		node.safe_psql('postgres', 'CHECKPOINT;')
+		con1 = node.connect()
+		con1.begin()
+		con1.execute(
+		    "UPDATE o_test SET id = i.newId\n"
+		    "FROM (SELECT -1 * id as newId, secid  FROM o_test WHERE secid >= 995) i\n"
+		    "WHERE i.secid = o_test.secid;\n")
+		con1.commit()
+		con1.close()
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(
+		    str(
+		        node.execute('postgres',
+		                     'SELECT * FROM o_test WHERE secid >= 995;')),
+		    "[(-994, 995), (-995, 996), (-996, 997), (-997, 998), (-998, 999), (-999, 1000), (-1000, 1001)]"
+		)
+		node.stop()
+
+	def test_wal_update_unique_index(self):
+		node = self.node
+		node.start()  # start PostgreSQL
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "	id integer NOT NULL,\n"
+		    "	secid integer NOT NULL,\n"
+		    "	PRIMARY KEY (id)\n"
+		    ") USING orioledb;\n"
+		    "CREATE UNIQUE INDEX o_test_ix1 ON o_test (secid);"
+		    "INSERT INTO o_test\n"
+		    "	(SELECT id, id + 1 FROM generate_series(1, 1000, 1) id);\n")
+		node.safe_psql('postgres', 'CHECKPOINT;')
+		con1 = node.connect()
+		con1.begin()
+		con1.execute(
+		    "UPDATE o_test SET id = i.newId\n"
+		    "FROM (SELECT -1 * id as newId, secid  FROM o_test WHERE secid >= 995) i\n"
+		    "WHERE i.secid = o_test.secid;\n")
+		con1.commit()
+		con1.close()
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(
+		    str(
+		        node.execute(
+		            'postgres',
+		            'SELECT * FROM o_test WHERE secid >= 995 ORDER BY secid;')
+		    ),
+		    "[(-994, 995), (-995, 996), (-996, 997), (-997, 998), (-998, 999), (-999, 1000), (-1000, 1001)]"
+		)
+		node.stop()
+
+	def test_wal_two_trans_sec_index(self):
+		node = self.node
+		node.start()  # start PostgreSQL
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "	id integer NOT NULL,\n"
+		    "	secid integer NOT NULL\n"
+		    ") USING orioledb;\n"
+		    "CREATE INDEX o_test_ix1 ON o_test (secid);"
+		    "INSERT INTO o_test\n"
+		    "	(SELECT id, id + 1 FROM generate_series(1, 1000, 1) id);\n")
+		node.safe_psql('postgres', 'CHECKPOINT;')
+		con1 = node.connect()
+		con2 = node.connect()
+		con1.begin()
+		con2.begin()
+		con1.execute(
+		    "UPDATE o_test SET id = i.newId\n"
+		    "FROM (SELECT -1 * id as newId, secid  FROM o_test WHERE secid >= 995) i\n"
+		    "WHERE i.secid = o_test.secid;\n")
+		con1.execute("INSERT INTO o_test VALUES (1001, 1002);")
+		con2.execute("INSERT INTO o_test VALUES (1002, 1003);")
+		con1.execute("DELETE FROM o_test WHERE secid >= 990 and secid <= 992;")
+		con1.execute("UPDATE o_test SET id = 1010 WHERE secid = 994;")
+		con1.commit()
+		con2.execute("DELETE FROM o_test WHERE secid >= 991 and secid <= 994;")
+		con2.execute("UPDATE o_test SET id = 1020 WHERE secid = 995;")
+		con2.rollback()
+		con1.close()
+		con2.close()
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(
+		    str(
+		        node.execute('postgres',
+		                     'SELECT * FROM o_test WHERE secid >= 990;')),
+		    "[(992, 993), (1010, 994), (-994, 995), (-995, 996), (-996, 997), (-997, 998), (-998, 999), (-999, 1000), (-1000, 1001), (1001, 1002)]"
+		)
+		node.stop()
+
+	def test_wal_joint_commit_flush(self):
+		node = self.node
+		node.start()
+
+		node.safe_psql(
+		    'postgres', """
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+
+			CREATE TABLE o_test_1(
+				val_1 int UNIQUE,
+				filler char(110)
+			) USING orioledb;
+
+			CREATE TABLE o_test_2(
+				val_1 int UNIQUE
+			) USING orioledb;
+
+			BEGIN;
+			INSERT INTO o_test_1(val_1, filler)
+				(SELECT val_1, '' FROM generate_series (1, 128) val_1);
+			INSERT INTO o_test_2(val_1)
+				(SELECT * FROM generate_series (1, 13));
+			ALTER TABLE o_test_1 DROP COLUMN filler;
+			COMMIT;
+		""")
+
+	def test_subtrans(self):
+		node = self.node
+		node.start()  # start PostgreSQL
+		node.safe_psql(
+		    'postgres', """
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+			CREATE TABLE IF NOT EXISTS o_test (
+				id integer NOT NULL,
+				val text,
+				PRIMARY KEY (id)
+			) USING orioledb;
+			CREATE INDEX o_test_ix1 ON o_test (val);
+			INSERT INTO o_test
+				(SELECT id, id || 'val' FROM generate_series(1, 1000, 1) id);
+			""")
+		con1 = node.connect()
+		con1.begin()
+		con1.execute("UPDATE o_test SET val = 'xxx1' WHERE id = 1;")
+		con1.execute("SAVEPOINT s1;")
+		con1.execute("UPDATE o_test SET val = 'xxx2' WHERE id = 2;")
+		con1.execute("DELETE FROM o_test WHERE id = 1000;")
+		con1.execute("INSERT INTO o_test VALUES (1001, 'xxx1001');")
+
+		node.safe_psql('postgres', 'CHECKPOINT;')
+
+		con1.execute("UPDATE o_test SET val = 'xxx3' WHERE id = 3;")
+		con1.execute("ROLLBACK TO SAVEPOINT s1;")
+		con1.execute("UPDATE o_test SET val = 'xxx4' WHERE id = 4;")
+		con1.execute("DELETE FROM o_test WHERE id = 999;")
+		con1.execute("INSERT INTO o_test VALUES (1002, 'xxx1002');")
+		con1.commit()
+		con1.close()
+		self.crash_with_os_buffer_loss()
+
+		node.start()  # start PostgreSQL
+
+		self.assertEqual(
+		    str(
+		        node.execute(
+		            'postgres',
+		            'SELECT * FROM o_test WHERE id BETWEEN 1 and 4;')),
+		    "[(1, 'xxx1'), (2, '2val'), (3, '3val'), (4, 'xxx4')]")
+		self.assertEqual(
+		    node.execute('postgres',
+		                 "SELECT id FROM o_test WHERE val = 'xxx4'")[0][0], 4)
+		self.assertEqual(
+		    str(
+		        node.execute(
+		            'postgres',
+		            'SELECT * FROM o_test WHERE id BETWEEN 999 and 1002;')),
+		    "[(1000, '1000val'), (1002, 'xxx1002')]")
+		self.assertEqual(
+		    node.execute('postgres',
+		                 "SELECT id FROM o_test WHERE val = 'xxx1002'")[0][0],
+		    1002)
+
+		node.stop()  # stop PostgreSQL
+
+	def test_subtrans_from_begin(self):
+		node = self.node
+		node.start()  # start PostgreSQL
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "	id integer NOT NULL,\n"
+		    "	val text,\n"
+		    "	PRIMARY KEY (id)"
+		    ") USING orioledb;\n"
+		    "CREATE INDEX o_test_ix1 ON o_test (val);"
+		    "INSERT INTO o_test\n"
+		    "	(SELECT id, id || 'val' FROM generate_series(1, 1000, 1) id);\n")
+		con1 = node.connect()
+		con1.begin()
+		con1.execute("SAVEPOINT s1;")
+		con1.execute("UPDATE o_test SET val = 'xxx1' WHERE id = 1;")
+		con1.execute("UPDATE o_test SET val = 'xxx2' WHERE id = 2;")
+		con1.execute("DELETE FROM o_test WHERE id = 1000;")
+		con1.execute("INSERT INTO o_test VALUES (1001, 'xxx1001');")
+
+		node.safe_psql('postgres', 'CHECKPOINT;')
+
+		con1.execute("UPDATE o_test SET val = 'xxx3' WHERE id = 3;")
+		con1.execute("ROLLBACK TO SAVEPOINT s1;")
+		con1.execute("UPDATE o_test SET val = 'xxx4' WHERE id = 4;")
+		con1.execute("DELETE FROM o_test WHERE id = 999;")
+		con1.execute("INSERT INTO o_test VALUES (1002, 'xxx1002');")
+		con1.commit()
+		con1.close()
+		self.crash_with_os_buffer_loss()
+
+		node.start()  # start PostgreSQL
+
+		self.assertEqual(
+		    str(
+		        node.execute(
+		            'postgres',
+		            'SELECT * FROM o_test WHERE id BETWEEN 1 and 4;')),
+		    "[(1, '1val'), (2, '2val'), (3, '3val'), (4, 'xxx4')]")
+		self.assertEqual(
+		    node.execute('postgres',
+		                 "SELECT id FROM o_test WHERE val = 'xxx4'")[0][0], 4)
+		self.assertEqual(
+		    str(
+		        node.execute(
+		            'postgres',
+		            'SELECT * FROM o_test WHERE id BETWEEN 999 and 1002;')),
+		    "[(1000, '1000val'), (1002, 'xxx1002')]")
+		self.assertEqual(
+		    node.execute('postgres',
+		                 "SELECT id FROM o_test WHERE val = 'xxx1002'")[0][0],
+		    1002)
+
+		node.stop()  # stop PostgreSQL
+
+	def test_wal_compression_simple(self):
+		node = self.node
+		node.start()  # start PostgreSQL
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "	id integer NOT NULL,\n"
+		    "	val text\n"
+		    ") USING orioledb;\n")
+
+		initial = 'x' * 500
+		updated = 'y' * 700
+		inserted = 'z' * 500
+
+		node.safe_psql('postgres',
+		               "INSERT INTO o_test VALUES(0, '%s');" % (initial))
+		node.safe_psql('postgres',
+		               "INSERT INTO o_test VALUES(1, '%s');" % (initial))
+
+		node.safe_psql('postgres', "CHECKPOINT;")
+
+		node.safe_psql(
+		    'postgres',
+		    "UPDATE o_test SET val = '%s' WHERE id = 1;" % (updated))
+		node.safe_psql('postgres',
+		               "INSERT INTO o_test VALUES(2, '%s');" % (inserted))
+		node.safe_psql('postgres',
+		               "INSERT INTO o_test VALUES(3, '%s');" % (inserted))
+		node.safe_psql('postgres', "DELETE FROM o_test WHERE id = 3;")
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		# start PostgreSQL
+
+		self.assertEqual(
+		    node.execute('postgres',
+		                 'SELECT * FROM o_test WHERE id = 0;')[0][1], initial)
+
+		self.assertEqual(
+		    node.execute('postgres',
+		                 'SELECT * FROM o_test WHERE id = 0;')[0][1], initial)
+		self.assertEqual(
+		    node.execute('postgres',
+		                 'SELECT * FROM o_test WHERE id = 1;')[0][1], updated)
+		self.assertEqual(
+		    node.execute('postgres',
+		                 'SELECT * FROM o_test WHERE id = 2;')[0][1], inserted)
+
+		# value with id = 3 was INSERT then DELETE
+		self.assertEqual(
+		    len(node.execute('postgres',
+		                     'SELECT * FROM o_test WHERE id = 3;')), 0)
+		# only three values in the table
+		self.assertEqual(
+		    len(node.execute('postgres', 'SELECT * FROM o_test;')), 3)
+
+		node.stop()
+		# stop PostgreSQL
+
+	def test_compression_subtrans(self):
+		node = self.node
+		self.maxDiff = None
+		node.start()  # start PostgreSQL
+
+		initial = 'x' * 500
+		update_before_savepoint = 'y' * 500
+		tmp1 = 'z' * 400
+		tmp2 = 'a' * 300
+		tmp3 = 'q' * 500
+		update_after_rollback = 'l' * 350
+		insert_after_rollback = 'p' * 400
+
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "	id integer NOT NULL,\n"
+		    "	val text\n"
+		    ") USING orioledb;\n"
+		    "INSERT INTO o_test\n"
+		    "	(SELECT id, id || '%s' FROM generate_series(1, 500, 1) id);\n" %
+		    (initial))
+
+		con1 = node.connect()
+		con1.begin()
+
+		con1.execute("UPDATE o_test SET val = '%s' WHERE id = 1;" %
+		             (update_before_savepoint))
+		con1.execute("SAVEPOINT s1;")
+		con1.execute("UPDATE o_test SET val = '%s' WHERE id = 2;" % (tmp1))
+		con1.execute("DELETE FROM o_test WHERE id = 500;")
+		con1.execute("INSERT INTO o_test VALUES (501, '%s');" % (tmp2))
+
+		node.safe_psql('postgres', 'CHECKPOINT;')
+
+		con1.execute("UPDATE o_test SET val = '%s' WHERE id = 3;" % (tmp3))
+		con1.execute("ROLLBACK TO SAVEPOINT s1;")
+		con1.execute("UPDATE o_test SET val = '%s' WHERE id = 4;" %
+		             (update_after_rollback))
+		con1.execute("DELETE FROM o_test WHERE id = 499;")
+		con1.execute("INSERT INTO o_test VALUES (502, '%s');" %
+		             (insert_after_rollback))
+
+		con1.commit()
+		con1.close()
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()  # start PostgreSQL
+
+		self.assertEqual(
+		    str(
+		        node.execute(
+		            'postgres',
+		            'SELECT * FROM o_test WHERE id BETWEEN 1 and 4;')),
+		    "[(1, '%s'), (2, '%s'), (3, '%s'), (4, '%s')]" %
+		    (update_before_savepoint, '2' + initial, '3' + initial,
+		     update_after_rollback))
+		self.assertEqual(
+		    str(
+		        node.execute(
+		            'postgres',
+		            'SELECT * FROM o_test WHERE id BETWEEN 499 and 502;')),
+		    "[(500, '%s'), (502, '%s')]" %
+		    ('500' + initial, insert_after_rollback))
+		node.stop()  # stop PostgreSQL
+
+	def test_wal_toast_simple(self):
+		node = self.node
+		node.start()  # start PostgreSQL
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "	id integer NOT NULL,\n"
+		    "	val text\n"
+		    ") USING orioledb;\n")
+
+		random.seed(0)
+		initial = generate_string(20000)
+		updated = generate_string(30000)
+		inserted = generate_string(20000)
+
+		node.safe_psql('postgres',
+		               "INSERT INTO o_test VALUES(0, '%s');" % (initial))
+		node.safe_psql('postgres',
+		               "INSERT INTO o_test VALUES(1, '%s');" % (initial))
+
+		node.safe_psql('postgres', "CHECKPOINT;")
+
+		node.safe_psql(
+		    'postgres',
+		    "UPDATE o_test SET val = '%s' WHERE id = 1;" % (updated))
+		node.safe_psql('postgres',
+		               "INSERT INTO o_test VALUES(2, '%s');" % (inserted))
+		node.safe_psql('postgres',
+		               "INSERT INTO o_test VALUES(3, '%s');" % (inserted))
+		node.safe_psql('postgres', "DELETE FROM o_test WHERE id = 3;")
+
+		self.crash_with_os_buffer_loss()
+		node.start()
+		# start PostgreSQL
+
+		self.assertEqual(
+		    node.execute('postgres',
+		                 'SELECT * FROM o_test WHERE id = 0;')[0][1], initial)
+		self.assertEqual(
+		    node.execute('postgres',
+		                 'SELECT * FROM o_test WHERE id = 1;')[0][1], updated)
+		self.assertEqual(
+		    node.execute('postgres',
+		                 'SELECT * FROM o_test WHERE id = 2;')[0][1], inserted)
+
+		# value with id = 3 was INSERT then DELETE
+		self.assertEqual(
+		    len(node.execute('postgres',
+		                     'SELECT * FROM o_test WHERE id = 3;')), 0)
+		# only three values in the table
+		self.assertEqual(
+		    len(node.execute('postgres', 'SELECT * FROM o_test;')), 3)
+
+		node.stop()
+		# stop PostgreSQL
+
+	def test_toast_subtrans(self):
+		node = self.node
+		self.maxDiff = None
+		node.start()  # start PostgreSQL
+
+		random.seed(0)
+		initial = generate_string(10000)
+		update_before_savepoint = generate_string(10001)
+		tmp1 = generate_string(8000)
+		tmp2 = generate_string(7000)
+		tmp3 = generate_string(5000)
+		update_after_rollback = generate_string(7000)
+		insert_after_rollback = generate_string(9000)
+
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "	id integer NOT NULL,\n"
+		    "	val text\n"
+		    ") USING orioledb;\n"
+		    "INSERT INTO o_test\n"
+		    "	(SELECT id, id || '%s' FROM generate_series(1, 500, 1) id);\n" %
+		    (initial))
+
+		con1 = node.connect()
+		con1.begin()
+
+		con1.execute("UPDATE o_test SET val = '%s' WHERE id = 1;" %
+		             (update_before_savepoint))
+		con1.execute("SAVEPOINT s1;")
+		con1.execute("UPDATE o_test SET val = '%s' WHERE id = 2;" % (tmp1))
+		con1.execute("DELETE FROM o_test WHERE id = 500;")
+		con1.execute("INSERT INTO o_test VALUES (501, '%s');" % (tmp2))
+
+		node.safe_psql('postgres', 'CHECKPOINT;')
+
+		con1.execute("UPDATE o_test SET val = '%s' WHERE id = 3;" % (tmp3))
+		con1.execute("ROLLBACK TO SAVEPOINT s1;")
+		con1.execute("UPDATE o_test SET val = '%s' WHERE id = 4;" %
+		             (update_after_rollback))
+		con1.execute("DELETE FROM o_test WHERE id = 499;")
+		con1.execute("INSERT INTO o_test VALUES (502, '%s');" %
+		             (insert_after_rollback))
+
+		con1.commit()
+		con1.close()
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()  # start PostgreSQL
+
+		self.assertEqual(
+		    str(
+		        node.execute(
+		            'postgres',
+		            'SELECT * FROM o_test WHERE id BETWEEN 1 and 4;')),
+		    "[(1, '%s'), (2, '%s'), (3, '%s'), (4, '%s')]" %
+		    (update_before_savepoint, '2' + initial, '3' + initial,
+		     update_after_rollback))
+		self.assertEqual(
+		    str(
+		        node.execute(
+		            'postgres',
+		            'SELECT * FROM o_test WHERE id BETWEEN 499 and 502;')),
+		    "[(500, '%s'), (502, '%s')]" %
+		    ('500' + initial, insert_after_rollback))
+		node.stop()  # stop PostgreSQL
+
+	def number_to_ctid(self, num):
+		return '(%s,%s)' % (str(num // 2047), str(num % 2047))
+
+	def test_ctid_index(self):
+		node = self.node
+		node.start()  # start PostgreSQL
+		# insert 1..10000 before a checkpoint
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "	id integer NOT NULL,\n"
+		    "	val text\n"
+		    ") USING orioledb;\n"
+		    "INSERT INTO o_test\n"
+		    "	(SELECT id, id || 'val' FROM generate_series(1, 10000, 1) id);\n"
+		)
+		node.safe_psql('postgres', "CHECKPOINT;")
+		# insert 10001..20000 after the checkpoint
+		node.safe_psql(
+		    "INSERT INTO o_test\n"
+		    "    (SELECT id, id || 'val' FROM generate_series(%d, %d, 1) id);"
+		    % (10001, 20000))
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		# insert 20001..70000 after recovery
+		node.safe_psql(
+		    "INSERT INTO o_test\n"
+		    "	(SELECT id, id || 'val' FROM generate_series(20001, 70000, 1) id);"
+		)
+		self.assertEqual(
+		    node.execute('postgres', "SELECT count(*) FROM o_test;")[0][0],
+		    70000)
+		self.assertEqual(
+		    node.execute('postgres',
+		                 "SELECT ctid FROM o_test WHERE id = 30000;")[0][0],
+		    self.number_to_ctid(30000))
+		self.assertEqual(
+		    node.execute('postgres',
+		                 "SELECT ctid FROM o_test WHERE id = 70000;")[0][0],
+		    self.number_to_ctid(70000))
+
+		# makes a new checkpoint
+		node.stop()
+
+		node.start()
+		# insert 70001..80000 after the second checkpoint (1..70000 should be restored on startup)
+		node.safe_psql(
+		    "INSERT INTO o_test\n"
+		    "	(SELECT id, id || 'val' FROM generate_series(70001, 80000, 1) id);"
+		)
+		self.assertEqual(
+		    node.execute('postgres', "SELECT count(*) FROM o_test;")[0][0],
+		    80000)
+		self.assertEqual(
+		    node.execute('postgres',
+		                 "SELECT ctid FROM o_test WHERE id = 30000;")[0][0],
+		    self.number_to_ctid(30000))
+		self.assertEqual(
+		    node.execute('postgres',
+		                 "SELECT ctid FROM o_test WHERE id = 70000;")[0][0],
+		    self.number_to_ctid(70000))
+		self.assertEqual(
+		    node.execute('postgres',
+		                 "SELECT ctid FROM o_test WHERE id = 80000;")[0][0],
+		    self.number_to_ctid(80000))
+		node.stop()
+
+	def test_wal_only_commit_or_rollback_container(self):
+		node = self.node
+		node.append_conf('postgresql.conf',
+		                 "shared_preload_libraries = orioledb\n")
+		node.start()
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "	id integer NOT NULL\n"
+		    ") USING orioledb;\n")
+
+		con1 = node.connect()
+		con1.begin()
+		con1.execute('INSERT INTO o_test VALUES (1);')
+		con1.commit()
+
+		con2 = node.connect()
+		con2.begin()
+		con2.execute(
+		    "TRUNCATE o_test;")  # TRUNCATE does not create a WAL record
+		con2.commit()
+		con1.close()
+		con2.close()
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		node.execute("CHECKPOINT;")
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		con1 = node.connect()
+		con1.begin()
+		con1.execute('INSERT INTO o_test VALUES (2);')
+		con1.commit()
+
+		con2 = node.connect()
+		con2.begin()
+		con2.execute("TRUNCATE o_test;")
+		con2.rollback()
+		con1.close()
+		con2.close()
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		node.stop()
+
+	def test_wal_overflow_on_invalidate(self):
+		node = self.node
+		node.append_conf('postgresql.conf', """
+			orioledb.debug_disable_bgwriter = true
+		""")
+		node.start()
+		node.safe_psql("""
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+		""")
+		node.safe_psql("""
+			CREATE TABLE IF NOT EXISTS o_test (
+				key integer NOT NULL,
+				val integer NOT NULL,
+				PRIMARY KEY(key)
+			) USING orioledb;
+		""")
+
+		with node.connect() as con1:
+			with node.connect() as con2:
+				con1.begin()
+				con1.execute("""
+					ALTER TABLE o_test ADD COLUMN val_2 integer NOT NULL;
+					INSERT INTO o_test (key, val, val_2)
+						(SELECT val, val * 100, val + 100
+							FROM generate_series(1, 223) val);
+					ALTER TABLE o_test DROP COLUMN val_2;
+				""")
+
+				con2.execute("""
+					CHECKPOINT;
+				""")
+				con1.commit()
+				con2.commit()
+
+		self.crash_with_os_buffer_loss()
+		node.start()
+
+		node.stop()
+
+	def test_tup_key_hash_with_nulls(self):
+		node = self.node
+		node.append_conf('postgresql.conf',
+		                 "shared_preload_libraries = orioledb\n")
+
+		node.start()
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "	id1 integer NOT NULL,\n"
+		    "    id2 integer,\n"
+		    "    id3 integer,\n"
+		    "    PRIMARY KEY (id1)"
+		    ") USING orioledb;\n"
+		    "CREATE UNIQUE INDEX o_test_ix1 ON o_test (id2);"
+		    "CREATE UNIQUE INDEX o_test_ix2 ON o_test (id3);")
+
+		node.execute("INSERT INTO o_test VALUES (1, NULL, 3);")
+		node.execute("INSERT INTO o_test VALUES (2, 4, NULL);")
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(2, node.execute("SELECT COUNT(*) FROM o_test;")[0][0])
+		node.stop()
+
+	def test_recovery_rename_index(self):
+		node = self.node
+
+		node.start()
+		node.safe_psql(
+		    'postgres', """
+						CREATE EXTENSION IF NOT EXISTS orioledb;
+						CREATE TABLE IF NOT EXISTS o_test (
+							key bigint NOT NULL,
+							val int,
+							val2 int NOT NULL,
+							PRIMARY KEY (key)
+						) USING orioledb;
+
+						CREATE INDEX o_test_idx1 ON o_test (val);
+						INSERT INTO o_test
+							SELECT 1000 + i,
+								   3000 + i,
+								   3000 + i FROM
+									generate_series(1, 500) AS i;""")
+		node.safe_psql('postgres',
+		               "CREATE INDEX o_test_idx2 ON o_test (val2);")
+		node.safe_psql(
+		    'postgres', """
+						BEGIN;
+						ALTER INDEX o_test_idx2 RENAME TO
+									o_test_idx2_renamed;
+						ROLLBACK;""")
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(
+		    500,
+		    node.execute("SELECT COUNT(val2) FROM o_test WHERE val2 > 0;")[0]
+		    [0])
+		explain = node.safe_psql("""
+			SET enable_seqscan = off;
+			EXPLAIN SELECT val2 FROM o_test
+				WHERE val2 > 0 ORDER BY val2;""").decode('utf-8')
+		self.assertNotEqual(explain.find('o_test_idx2'), -1)
+		node.stop()
+
+	def test_missingattr_recovery(self):
+		node = self.node
+
+		node.start()
+		with node.connect('postgres') as con1:
+			with node.connect('postgres') as con2:
+				node.safe_psql("""
+					CREATE EXTENSION IF NOT EXISTS orioledb;
+					CREATE TABLE o_test_missingattr
+					(
+						key int NOT NULL,
+						val int NOT NULL DEFAULT 5
+					) USING orioledb;
+
+					INSERT INTO o_test_missingattr
+						SELECT id FROM generate_series(1, 10) id;
+				""")
+				con1.execute("""ALTER TABLE o_test_missingattr
+								ADD COLUMN val3 int NOT NULL DEFAULT 18;""")
+				con1.execute("""ALTER TABLE o_test_missingattr
+								ADD COLUMN val4 text DEFAULT 'abc';""")
+				con1.commit()
+				self.assertEqual(
+				    (1, 5, 18, 'abc'),
+				    con1.execute("""SELECT key, val, val3, val4 FROM
+							o_test_missingattr WHERE key = 1;""")[0])
+				self.assertEqual(
+				    (1, 5, 18, 'abc'),
+				    con2.execute("""SELECT key, val, val3, val4 FROM
+							o_test_missingattr WHERE key = 1;""")[0])
+				con1.execute("""UPDATE o_test_missingattr
+								SET val3 = 33 WHERE key BETWEEN 6 AND 8;""")
+				con1.commit()
+				self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual((6, 5, 33, 'abc'),
+		                 node.execute(
+		                     'postgres', """
+					SELECT key, val, val3, val4 FROM
+						o_test_missingattr WHERE key = 6;""")[0])
+
+	def test_recovery_partial_index(self):
+		node = self.node
+		node.append_conf('postgresql.conf',
+		                 "shared_preload_libraries = orioledb\n")
+
+		node.start()
+		node.safe_psql(
+		    'postgres', """
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+			CREATE TABLE IF NOT EXISTS o_test (
+				key int8 NOT NULL PRIMARY KEY,
+				value text
+			) USING orioledb;
+			CREATE INDEX o_test_ix_partial ON o_test (key, value) WHERE key > 10;
+		""")
+
+		node.execute("""INSERT INTO o_test
+			(SELECT id, id || 'text' FROM generate_series(1, 20) as id);""")
+		node.execute(
+		    """UPDATE o_test SET value = 'UPD' WHERE key IN (5, 15)""")
+		node.execute("""DELETE FROM o_test WHERE key IN (5, 16)""")
+		self.assertEqual(
+		    9,
+		    node.execute("SELECT COUNT(*) FROM o_test WHERE key > 10;")[0][0])
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual((11, 2),
+		                 node.execute("""SELECT * FROM
+							 orioledb_index_rows(
+								 'o_test_ix_partial'::regclass);""")[0])
+		self.assertEqual(
+		    'UPD',
+		    node.execute("""SELECT value FROM o_test
+						 					WHERE key = 15
+											ORDER BY key""")[0][0])
+		node.stop()
+
+	def test_recovery_deep_sql_function_predicate(self):
+		node = self.node
+		node.append_conf('orioledb.recovery_pool_size = 1')
+		node.start()
+		node.safe_psql(
+		    'postgres', """
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+
+			CREATE FUNCTION public.my_cmp_sql(a int, b int) RETURNS int AS $$
+				SELECT btint4cmp((a::bit(5) & X'A8'::bit(5))::int,
+								(b::bit(5) & X'A8'::bit(5))::int);
+			$$ LANGUAGE SQL IMMUTABLE;
+
+			CREATE FUNCTION public.my_cmp_sql_sql(a int, b int) RETURNS int
+			AS $$
+				SELECT public.my_cmp_sql(a, b);
+			$$ LANGUAGE SQL IMMUTABLE;
+
+			CREATE FUNCTION public.my_cmp_sql_sql_sql(a int, b int) RETURNS int
+			AS $$
+				SELECT public.my_cmp_sql_sql(a, b);
+			$$ LANGUAGE SQL IMMUTABLE;
+
+			CREATE FUNCTION my_eq_sql_sql_sql_sql(a int, b int)
+				RETURNS bool
+			AS $$
+				SELECT public.my_cmp_sql_sql_sql(a, b) = 0;
+			$$ LANGUAGE SQL IMMUTABLE;
+
+			CREATE TABLE IF NOT EXISTS o_test (
+				val integer
+			) USING orioledb;
+
+			CREATE INDEX o_test_ix1 ON o_test (val)
+					WHERE (my_eq_sql_sql_sql_sql(val, val * 11));
+		""")
+		node.safe_psql("""
+			INSERT INTO o_test VALUES (1);
+			INSERT INTO o_test VALUES (2);
+			INSERT INTO o_test VALUES (3);
+			INSERT INTO o_test VALUES (4);
+			INSERT INTO o_test VALUES (5);
+		""")
+
+		self.assertEqual(
+		    node.execute("""
+			SELECT * FROM o_test
+				WHERE my_eq_sql_sql_sql_sql(val, val * 11);
+		"""), [(1, ), (3, ), (4, )])
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+
+		self.assertEqual(
+		    node.execute("""
+			SELECT * FROM o_test
+				WHERE my_eq_sql_sql_sql_sql(val, val * 11);
+		"""), [(1, ), (3, ), (4, )])
+
+	def test_recovery_expression_index(self):
+		node = self.node
+		node.append_conf('postgresql.conf',
+		                 "shared_preload_libraries = orioledb\n")
+
+		node.start()
+		node.safe_psql(
+		    'postgres', """
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+			CREATE TABLE IF NOT EXISTS o_test (
+				key int8 NOT NULL PRIMARY KEY,
+				value text
+			) USING orioledb;
+			CREATE INDEX o_test_ix_expression ON o_test ((key * 100),
+														 (value || 'WOW'));
+		""")
+
+		node.execute("""INSERT INTO o_test
+			(SELECT id, id || 'text' FROM generate_series(1, 10) as id);""")
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(
+		    6,
+		    node.execute("""
+                                                       WITH o_test_cte AS (
+								SELECT * FROM o_test WHERE (key * 100)
+									BETWEEN 300 AND 800
+							) SELECT COUNT(*) FROM o_test_cte;
+						""")[0][0])
+		node.stop()
+
+	def test_recovery_deep_sql_function_opclass_cmp(self):
+		node = self.node
+		node.append_conf('orioledb.recovery_pool_size = 1')
+		node.start()
+		node.safe_psql(
+		    'postgres', """
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+
+			CREATE OR REPLACE FUNCTION public.my_cmp_sql(a int, b int) RETURNS int
+			AS $$
+				SELECT btint4cmp((a::bit(5) & X'A8'::bit(5))::int,
+								(b::bit(5) & X'A8'::bit(5))::int);
+			$$ LANGUAGE SQL IMMUTABLE;
+
+			CREATE FUNCTION public.my_cmp_s_s(a int, b int) RETURNS int
+			AS $$
+                SELECT public.my_cmp_sql(a, b);
+			$$ LANGUAGE SQL IMMUTABLE;
+
+			CREATE FUNCTION public.my_cmp_s_s_s(a int, b int) RETURNS int
+			AS $$
+				SELECT public.my_cmp_s_s(a, b);
+			$$ LANGUAGE SQL IMMUTABLE;
+
+			CREATE FUNCTION my_cmp_s_s_s_s(a int, b int) RETURNS int
+			AS $$
+				SELECT public.my_cmp_s_s_s(a, b);
+			$$ LANGUAGE SQL IMMUTABLE;
+
+			CREATE FUNCTION my_eq(a int, b int) RETURNS bool AS $$
+				SELECT public.my_cmp_sql(a, b) = 0;
+			$$ LANGUAGE SQL IMMUTABLE;
+
+			CREATE OPERATOR =^ (
+				LEFTARG = int4,
+				RIGHTARG = int4,
+				PROCEDURE = my_eq,
+				COMMUTATOR = =^
+			);
+			CREATE OPERATOR <^ (
+				LEFTARG = int4,
+				RIGHTARG = int4,
+				PROCEDURE = int4lt
+			);
+			CREATE OPERATOR >^ (
+				LEFTARG = int4,
+				RIGHTARG = int4,
+				PROCEDURE = int4gt
+			);
+
+			CREATE OPERATOR CLASS my_op_class FOR TYPE int
+				USING btree
+				AS OPERATOR 1 <^, OPERATOR 3 =^, OPERATOR 5 >^,
+				FUNCTION 1 my_cmp_s_s_s_s(int, int);
+
+			CREATE TABLE IF NOT EXISTS o_test (
+				val integer
+			) USING orioledb;
+
+			CREATE INDEX o_test_ix1 ON o_test(val my_op_class);
+		""")
+		node.safe_psql("""
+			INSERT INTO o_test VALUES (1);
+			INSERT INTO o_test VALUES (2);
+			INSERT INTO o_test VALUES (3);
+			INSERT INTO o_test VALUES (4);
+			INSERT INTO o_test VALUES (5);
+		""")
+
+		self.assertEqual(
+		    node.execute("""
+			SELECT * FROM o_test WHERE my_eq(val, val * 11);
+		"""), [(1, ), (3, ), (4, )])
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+
+		self.assertEqual(
+		    node.execute("""
+			SELECT * FROM o_test WHERE my_eq(val, val * 11);
+		"""), [(1, ), (3, ), (4, )])
+
+	def test_checkpoint_concurrent_no_wal_undo(self):
+		node = self.node
+		node.append_conf(
+		    'postgresql.conf', "checkpoint_timeout = 1d\n"
+		    "orioledb.enable_stopevents = true\n")
+		node.start()
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "    id integer NOT NULL,\n"
+		    "    val text,\n"
+		    "    PRIMARY KEY (id)\n"
+		    ") USING orioledb;\n")
+		node.safe_psql(
+		    "INSERT INTO o_test\n"
+		    "(SELECT id, id || 'val' FROM generate_series(1, 100, 1) id);\n")
+
+		con1 = node.connect()
+		con2 = node.connect()
+
+		con1.begin()
+		con1.execute(
+		    "SELECT pg_stopevent_set('checkpoint_index_start', '$.treeName == \"o_test_pkey\"');"
+		)
+		t1 = ThreadQueryExecutor(con2, "CHECKPOINT;")
+		t1.start()
+		wait_checkpointer_stopevent(node)
+
+		con1.execute("INSERT INTO o_test VALUES(101, 'abcdef');")
+		con1.execute("SELECT pg_stopevent_reset('checkpoint_index_start');")
+		t1.join()
+		con1.close()
+		con2.close()
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(
+		    node.execute('postgres', 'SELECT count(*) FROM o_test')[0][0], 100)
+		node.stop()
+
+	def test_checkpoint_concurrent_no_wal_undo_secondary(self):
+		node = self.node
+		node.append_conf(
+		    'postgresql.conf', "checkpoint_timeout = 1d\n"
+		    "orioledb.enable_stopevents = true\n")
+		node.start()
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "    id integer NOT NULL,\n"
+		    "    val text,\n"
+		    "    PRIMARY KEY (id)\n"
+		    ") USING orioledb;\n"
+		    "CREATE INDEX o_test_val_idx ON o_test(val);\n")
+		node.safe_psql(
+		    "INSERT INTO o_test\n"
+		    "(SELECT id, 'val' || id FROM generate_series(1, 100, 1) id);\n")
+
+		con1 = node.connect()
+		con2 = node.connect()
+
+		con1.begin()
+		con1.execute(
+		    "SELECT pg_stopevent_set('checkpoint_index_start', '$.treeName == \"o_test_val_idx\"');"
+		)
+		t1 = ThreadQueryExecutor(con2, "CHECKPOINT;")
+		t1.start()
+		wait_checkpointer_stopevent(node)
+
+		con1.execute("INSERT INTO o_test VALUES(101, 'abcdef');")
+		con1.execute("SELECT pg_stopevent_reset('checkpoint_index_start');")
+		t1.join()
+		con1.close()
+		con2.close()
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(
+		    node.execute(
+		        'postgres',
+		        "SELECT count(*) FROM o_test WHERE val = 'abcdef';")[0][0], 0)
+		node.stop()
+
+	def test_apply_branches(self):
+		node = self.node
+		node.append_conf(
+		    'postgresql.conf', "checkpoint_timeout = 1d\n"
+		    "orioledb.enable_stopevents = true\n")
+		node.start()
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "    id integer NOT NULL,\n"
+		    "    val integer,\n"
+		    "    PRIMARY KEY (id)\n"
+		    ") USING orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test2 (\n"
+		    "    id integer NOT NULL,\n"
+		    "    val integer,\n"
+		    "    PRIMARY KEY (id)\n"
+		    ") USING orioledb;\n"
+		    "CREATE UNIQUE INDEX o_test_val_idx ON o_test(val);\n")
+		node.safe_psql("INSERT INTO o_test\n"
+		               "(SELECT id, id FROM generate_series(1, 100, 1) id);\n")
+		node.safe_psql("INSERT INTO o_test2\n"
+		               "(SELECT id, id FROM generate_series(1, 1, 1) id);\n")
+
+		con1 = node.connect()
+		con2 = node.connect()
+		con3 = node.connect()
+		con2_pid = con2.pid
+		con3_pid = con3.pid
+
+		con1.execute("SELECT pg_stopevent_set('index_insert', 'true');")
+		con1.execute(
+		    "SELECT pg_stopevent_set('checkpoint_index_start', '$.treeName == \"o_test2_pkey\"');"
+		)
+
+		con2.begin()
+		con2.execute("SET orioledb.debug_slot_number = 1;")
+		t1 = ThreadQueryExecutor(
+		    con2, "INSERT INTO o_test VALUES (101, 1) ON CONFLICT DO NOTHING;")
+		t1.start()
+		wait_stopevent(node, con2_pid)
+
+		t2 = ThreadQueryExecutor(con3, "CHECKPOINT;")
+		t2.start()
+		wait_checkpointer_stopevent(node)
+
+		con1.execute("SELECT pg_stopevent_reset('index_insert');")
+		t1.join()
+
+		con1.execute("SELECT pg_stopevent_reset('checkpoint_index_start');")
+		t2.join()
+		con1.close()
+		con2.close()
+		con3.close()
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual(
+		    node.execute('postgres', "SELECT count(*) FROM o_test;")[0][0],
+		    100)
+		node.stop()
+
+	def test_recovery_subtrans_concurrent(self):
+		node = self.node
+		node.start()
+		node.safe_psql(
+		    'postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;\n"
+		    "CREATE TABLE IF NOT EXISTS o_test (\n"
+		    "    id integer NOT NULL,\n"
+		    "    val text,\n"
+		    "    PRIMARY KEY (id)\n"
+		    ") USING orioledb;\n")
+		node.safe_psql(
+		    "INSERT INTO o_test\n"
+		    "(SELECT id, 'val' || id FROM generate_series(1, 2, 1) id);\n")
+
+		con1 = node.connect()
+		con2 = node.connect()
+
+		con1.begin()
+		con1.execute("UPDATE o_test SET val = val || 'aaa' WHERE id = 1;")
+		con1.execute("SAVEPOINT s1;")
+		con1.execute("UPDATE o_test SET val = val || 'aaa' WHERE id = 2;")
+		con1.execute("ROLLBACK TO SAVEPOINT s1;")
+		con2.begin()
+		con2.execute("UPDATE o_test SET val = val || 'bbb' WHERE id = 2;")
+		con2.commit()
+		con1.commit()
+
+		self.assertEqual("[(1, 'val1aaa'), (2, 'val2bbb')]",
+		                 str(node.execute("SELECT * FROM o_test;")))
+		con1.close()
+		con2.close()
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+		self.assertEqual("[(1, 'val1aaa'), (2, 'val2bbb')]",
+		                 str(node.execute("SELECT * FROM o_test;")))
+		node.stop()
+
+	def test_recovery_timestamp(self):
+		node = self.node
+		node.start()
+		node.safe_psql("""
+
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+
+			CREATE TABLE o_test_1 (
+				val_1 timestamp DEFAULT timeofday()::timestamp
+			) USING orioledb;
+		""")
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+
+		node.stop()
+
+	def test_recovery_default_sql_func(self):
+		node = self.node
+		node.start()
+		node.safe_psql("""
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+			CREATE FUNCTION foo(a INT) RETURNS TEXT
+			AS $$ SELECT 'WOW'
+			$$ LANGUAGE sql VOLATILE;
+			CREATE TABLE o_test_plpgsql_default (
+				pk INT NOT NULL PRIMARY KEY,
+				c_int INT DEFAULT LENGTH(foo(6))
+			) USING orioledb;
+		""")
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+
+		node.stop()
+
+	def test_recovery_default_plpgsql_func(self):
+		node = self.node
+		node.start()
+		node.safe_psql("""
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+			CREATE FUNCTION foo(a INT) RETURNS TEXT AS $$
+			BEGIN
+				RETURN 'WOW';
+			END;
+			$$ LANGUAGE plpgsql VOLATILE;
+			CREATE TABLE o_test_plpgsql_default (
+				pk INT NOT NULL PRIMARY KEY,
+				c_int INT DEFAULT LENGTH(foo(6))
+			) USING orioledb;
+			INSERT INTO o_test_plpgsql_default (pk) VALUES (1), (3), (8);
+		""")
+
+		self.assertEqual([(1, 3), (3, 3), (8, 3)],
+		                 node.execute("""
+							SELECT * FROM o_test_plpgsql_default
+								ORDER BY pk
+						 """))
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+
+		self.assertEqual([(1, 3), (3, 3), (8, 3)],
+		                 node.execute("""
+							SELECT * FROM o_test_plpgsql_default
+								ORDER BY pk
+						 """))
+
+		node.stop()
+
+	def test_recovery_truncate(self):
+		node = self.node
+		node.start()
+		node.safe_psql("""
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+		""")
+		node.safe_psql("""
+			CREATE TABLE o_test_1 (
+				val_1 int PRIMARY KEY,
+				val_2 int
+			) USING orioledb;
+
+			INSERT INTO o_test_1
+				(SELECT val_1, val_1 + 100 FROM generate_series(1, 5) val_1);
+
+			TRUNCATE o_test_1;
+		""")
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+
+		node.safe_psql("""
+			INSERT INTO o_test_1
+				(SELECT val_1, val_1 + 100 FROM generate_series(1, 5) val_1);
+		""")
+
+		node.stop()
+
+	def test_recovery_partiton(self):
+		node = self.node
+		node.start()
+		node.safe_psql("CREATE EXTENSION IF NOT EXISTS orioledb;")
+		with node.connect() as con:
+			con.execute("""
+				CREATE TABLE o_test_1 (
+					val_1 int,
+					val_2 text,
+					PRIMARY KEY (val_1)
+				) PARTITION BY RANGE (val_1);
+			""")
+			con.execute("""
+				CREATE TABLE o_test_2 (
+					val_3 int,
+					like o_test_1
+				) USING orioledb;
+			""")
+			con.execute("""
+				ALTER TABLE o_test_2 DROP COLUMN val_3;
+			""")
+			con.execute("""
+				ALTER TABLE o_test_1 ATTACH PARTITION o_test_2
+					FOR VALUES FROM (1) to (10);
+			""")
+			con.execute("""
+				INSERT INTO o_test_1 (val_2, val_1)
+					VALUES ('abc', 2), ('qwe', 4);
+			""")
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+
+		node.stop()
+
+	def test_recovery_c_func_predicate(self):
+		node = self.node
+		node.start()
+
+		node.safe_psql("""
+
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+
+			CREATE FUNCTION my_c_func(a int, b int)
+				RETURNS int8
+				AS 'orioledb', 'orioledb_compression_max_level'
+				LANGUAGE C STRICT IMMUTABLE;
+
+			CREATE TABLE o_test_1 (
+				val_1 int
+			) USING orioledb;
+
+			CREATE INDEX ind1 ON
+				o_test_1(val_1) WHERE (my_c_func(val_1, 1) = 0);
+
+		""")
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+
+		node.stop()
+
+	def test_recovery_partition_ioc_ctid(self):
+		node = self.node
+		node.append_conf('orioledb.recovery_pool_size = 1')
+		node.start()
+
+		node.execute("""
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+
+			CREATE TABLE o_test_1 (
+				a int UNIQUE,
+				b char
+			) PARTITION BY LIST (a);
+
+			CREATE TABLE o_test_2 (
+				a int UNIQUE,
+				b char
+			) USING orioledb;
+
+			ALTER TABLE o_test_1 ATTACH PARTITION o_test_2 FOR VALUES IN (3);
+			INSERT INTO o_test_1 VALUES (3, 'a');
+		""")
+		self.assertEqual(
+		    node.execute("""
+			SELECT ctid, * FROM o_test_2
+		"""), [('(0,1)', 3, 'a')])
+		node.execute("""
+			INSERT INTO o_test_1 VALUES (3, 'a') ON CONFLICT (a)
+				DO UPDATE SET b = 'b';
+		""")
+		self.assertEqual(
+		    node.execute("""
+			SELECT ctid, * FROM o_test_2
+		"""), [('(0,1)', 3, 'b')])
+
+		self.crash_with_os_buffer_loss()
+		node.start()
+		self.assertEqual(
+		    node.execute("""
+			SELECT ctid, * FROM o_test_2
+		"""), [('(0,1)', 3, 'b')])
+		node.stop()
+
+	def test_recovery_row_expresion_index(self):
+		node = self.node
+		node.append_conf('postgresql.conf', "checkpoint_timeout = 1d\n")
+		node.start()
+		node.execute("""
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+			CREATE TYPE o_type_1 AS (a int, b text);
+			CREATE TABLE o_test_1 (
+				val_1 int,
+				val_2 text
+			) USING orioledb;
+			CREATE INDEX ind_1 ON o_test_1((row(val_1, val_2)::o_type_1));
+		""")
+		self.assertEqual(node.execute("""
+			SELECT * FROM o_test_1;
+		"""), [])
+		self.crash_with_os_buffer_loss()
+		node.start()
+		node.stop()
+
+	def test_temp_tables_cleanup_after_recovery(self):
+		node = self.node
+		node.append_conf('orioledb.recovery_pool_size = 1')
+		node.append_conf('orioledb.recovery_idx_pool_size = 1')
+		node.append_conf('autovacuum_naptime = 1s')
+		node.append_conf('autovacuum_vacuum_threshold = 0')
+		node.append_conf('autovacuum_vacuum_scale_factor = 0')
+		node.start()
+
+		node.safe_psql("""
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+		""")
+		cur_database = node.execute("""
+			SELECT oid FROM pg_database WHERE datname = current_database()
+		""")[0][0]
+
+		with node.connect() as con1:
+			con1.execute("""
+				CREATE TEMP TABLE o_test_3 (f1 int, f2 text) USING orioledb;
+				INSERT INTO o_test_3 VALUES (1, 'A'), (2, 'B');
+			""")
+			con1.execute("""
+				CREATE TEMP TABLE o_test_4 (
+					b bool,
+					i int,
+					junk float,
+					unique(b, i)
+				) USING orioledb;
+				INSERT INTO o_test_4 VALUES (true, 1.1, 2.222);
+			""")
+			con1.execute("""
+				CREATE TEMP TABLE o_test_9 (c1 int, c2 text) USING orioledb;
+				INSERT INTO o_test_9 VALUES (1, 'abc');
+			""")
+			self.assertEqual([(1, 'A'), (2, 'B')],
+			                 con1.execute("TABLE o_test_3"))
+			con1.execute("""
+				CHECKPOINT;
+			""")
+			con1.commit()
+			self.assertEqual([(1, 'A'), (2, 'B')],
+			                 con1.execute("TABLE o_test_3"))
+			self.assertEqual(
+			    node.execute("""
+								SELECT c.relname
+								FROM orioledb_table ot JOIN
+									pg_database db ON db.oid = ot.datoid JOIN
+									pg_class c ON c.oid = ot.reloid
+								WHERE db.datname = current_database()
+								ORDER BY c.relname
+							"""), [('o_test_3', ), ('o_test_4', ), ('o_test_9', )])
+
+			self.crash_with_os_buffer_loss()
+
+		file_num = 3  # PK trees
+		file_num += 1  # Indexes
+		db_dir = f"{node.data_dir}/orioledb_data/{cur_database}"
+
+		self.assertEqual(len(sorted(os.listdir(db_dir))), file_num)
+		node.start()
+
+		node.poll_query_until(
+		    "SELECT count(*) = 0 FROM pg_class WHERE relname LIKE 'o_test_%%'")
+		self.assertEqual(len(sorted(os.listdir(db_dir))), 0)
+
+		self.assertEqual(
+		    node.execute("""
+								SELECT c.relname
+								FROM orioledb_table ot JOIN
+									pg_database db ON db.oid = ot.datoid JOIN
+									pg_class c ON c.oid = ot.reloid
+								WHERE db.datname = current_database()
+								ORDER BY c.relname
+						 """), [])
+		node.stop()
+
+	def test_recovery_temp_table_index(self):
+		node = self.node
+		node.start()
+
+		node.safe_psql("""
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+
+			CREATE TEMP TABLE o_test_1 (
+				val_1 int
+			) USING orioledb;
+
+			CREATE INDEX ind_1 ON o_test_1(val_1);
+			DROP INDEX ind_1;
+
+			CHECKPOINT;
+		""")
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+
+		node.stop()
+
+	def test_recovery_bridged_indexes(self):
+		node = self.node
+		node.append_conf(
+		    'postgresql.conf',
+		    "checkpoint_timeout = 1d\norioledb.recovery_pool_size = 1\n")
+		node.start()
+
+		node.safe_psql("""
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+
+			CREATE TABLE o_test (
+				id int primary key,
+				p point
+			) USING orioledb WITH (index_bridging);
+
+			CREATE INDEX o_test_o_idx ON o_test USING gist (p);
+			CHECKPOINT;
+		""")
+
+		node.safe_psql("""
+			INSERT INTO o_test VALUES (1, '(0, 0)');
+			INSERT INTO o_test VALUES (2, '(0.5, 0.5)');
+			INSERT INTO o_test VALUES (3, '(1.0, 1.0)');
+			DELETE FROM o_test WHERE id = 3;
+			UPDATE o_test SET p = '(1.0, 1.0)' WHERE id = 2;
+		""")
+
+		node.safe_psql("VACUUM o_test;")
+
+		result = node.execute(
+		    "SET enable_indexonlyscan = off; SELECT id FROM o_test WHERE p <@ '((0,0),(1, 1))'::box;"
+		)
+		self.assertEqual(", ".join([str(x[0]) for x in result]), "1, 2")
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+
+		result = node.execute(
+		    "SET enable_indexonlyscan = off; SELECT id, p::text FROM o_test WHERE p <@ '((0,0),(1, 1))'::box;"
+		)
+		self.assertEqual(", ".join([str(x[0]) for x in result]), "1, 2")
+
+		node.stop()
+
+	def test_recovery_add_bridge_index(self):
+		node = self.node
+		node.append_conf(
+		    'postgresql.conf',
+		    "checkpoint_timeout = 1d\norioledb.recovery_pool_size = 1\n")
+		node.start()
+
+		node.safe_psql("""
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+
+			CREATE TABLE o_test (
+				id int primary key,
+				val text,
+				p point
+			) USING orioledb;
+
+			INSERT INTO o_test
+				SELECT id, 'val' || id, point(id, id)
+				FROM generate_series(1, 100) id;
+
+			CHECKPOINT;
+		""")
+
+		# Adding a GiST index triggers add_bridge_index() and table rewrite
+		node.safe_psql("""
+			CREATE INDEX o_test_gist ON o_test USING gist (p);
+		""")
+
+		# Verify data is accessible via both seqscan and index
+		self.assertEqual(100,
+		                 node.execute("SELECT count(*) FROM o_test;")[0][0])
+		self.assertEqual(
+		    'val1',
+		    node.execute("SELECT val FROM o_test WHERE id = 1;")[0][0])
+
+		self.crash_with_os_buffer_loss()
+
+		node.start()
+
+		# After recovery, all data must be present
+		self.assertEqual(100,
+		                 node.execute("SELECT count(*) FROM o_test;")[0][0])
+		self.assertEqual(
+		    'val1',
+		    node.execute("SELECT val FROM o_test WHERE id = 1;")[0][0])
+		result = node.execute(
+		    "SET enable_indexonlyscan = off; "
+		    "SELECT count(*) FROM o_test WHERE p <@ '((0,0),(100,100))'::box;")
+		self.assertEqual(100, result[0][0])
+
+		node.stop()
+
+	def test_recovery_replay_until_lsn(self):
+		node = self.node
+		node.start()
+
+		node.safe_psql("CREATE EXTENSION IF NOT EXISTS orioledb;")
+		node.safe_psql("CREATE TABLE IF NOT EXISTS o(b text) USING orioledb;")
+
+		# Execute initial batches of inserts (1000 rows total)
+		# Some acquire xact_id to become joint_commits
+		node.safe_psql("""
+			BEGIN;
+			SELECT pg_current_xact_id();
+			INSERT INTO o(b) SELECT md5(random()::text) FROM generate_series(1, 100);
+			COMMIT;
+
+			INSERT INTO o(b) SELECT md5(random()::text) FROM generate_series(1, 100);
+			INSERT INTO o(b) SELECT md5(random()::text) FROM generate_series(1, 100);
+
+			BEGIN;
+			SELECT pg_current_xact_id();
+			INSERT INTO o(b) SELECT md5(random()::text) FROM generate_series(1, 100);
+			COMMIT;
+
+			INSERT INTO o(b) SELECT md5(random()::text) FROM generate_series(1, 100);
+			INSERT INTO o(b) SELECT md5(random()::text) FROM generate_series(1, 100);
+			INSERT INTO o(b) SELECT md5(random()::text) FROM generate_series(1, 100);
+
+			BEGIN;
+			SELECT pg_current_xact_id();
+			INSERT INTO o(b) SELECT md5(random()::text) FROM generate_series(1, 100);
+			COMMIT;
+
+			INSERT INTO o(b) SELECT md5(random()::text) FROM generate_series(1, 100);
+			INSERT INTO o(b) SELECT md5(random()::text) FROM generate_series(1, 100);
+		""")
+
+		# Capture the exact state and LSN threshold
+		res = node.execute("SELECT count(*), pg_current_wal_lsn() FROM o;")
+		expected_count = res[0][0]
+		replay_until_lsn = res[0][1]
+
+		# Execute subsequent batches (500 rows total)
+		node.safe_psql("""
+			INSERT INTO o(b) SELECT md5(random()::text) FROM generate_series(1, 100);
+			INSERT INTO o(b) SELECT md5(random()::text) FROM generate_series(1, 100);
+
+			BEGIN;
+			SELECT pg_current_xact_id();
+			INSERT INTO o(b) SELECT md5(random()::text) FROM generate_series(1, 100);
+			COMMIT;
+
+			INSERT INTO o(b) SELECT md5(random()::text) FROM generate_series(1, 100);
+
+			BEGIN;
+			SELECT pg_current_xact_id();
+			INSERT INTO o(b) SELECT md5(random()::text) FROM generate_series(1, 100);
+			COMMIT;
+		""")
+
+		# Apply the threshold GUC. ALTER SYSTEM writes to postgresql.auto.conf,
+		# which is applied during the subsequent crash recovery startup.
+		node.safe_psql(
+		    f"ALTER SYSTEM SET orioledb.replay_until_lsn = '{replay_until_lsn}';"
+		)
+
+		# Send SIGQUIT to trigger crash recovery on next start
+		self.crash_with_os_buffer_loss()
+
+		# Start the node (Crash recovery evaluates the GUC and halts OrioleDB replay)
+		node.start()
+
+		# Verify OrioleDB correctly ignored the final 500 rows
+		actual_count = node.execute("SELECT count(*) FROM o;")[0][0]
+		self.assertEqual(expected_count, actual_count)
+
+		node.safe_psql("ALTER SYSTEM RESET orioledb.replay_until_lsn;")
+
+		node.stop()
+
+	def test_recovery_sk_cross_row_rotation(self):
+		"""
+		Secondary key sync after crash recovery.
+
+		Drives a concurrent token-rotation workload + concurrent checkpoints
+		then a clean crash, and verifies SK matches PK after recovery.
+
+		Each rotation txn:
+		    UPDATE row_a SET token = T_new       -- removes A's old token from SK
+		    UPDATE row_b SET token = A's old      -- re-inserts A's old at B
+		The SK key "A's old" is deleted from one row and inserted at another
+		in the same txn.
+		"""
+		import threading
+		from collections import Counter
+
+		node = self.node
+		node.append_conf(
+		    'postgresql.conf', "checkpoint_timeout = 1d\n"
+		    "max_wal_size = 4GB\n"
+		    "orioledb.recovery_pool_size = 1\n"
+		    "max_worker_processes = 32\n")
+		node.start()
+		n_rows = 200
+		node.safe_psql(
+		    'postgres', f"""
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+			CREATE TABLE o_sk_rotation (
+				id int NOT NULL,
+				token bigint NOT NULL,
+				PRIMARY KEY (id)
+			) USING orioledb;
+			CREATE UNIQUE INDEX o_sk_rotation_token_idx ON o_sk_rotation (token);
+			INSERT INTO o_sk_rotation
+				SELECT i, i FROM generate_series(1, {n_rows}) i;
+		""")
+		node.safe_psql('postgres', "CHECKPOINT;")
+
+		n_writers = 8
+		n_rotations = 2000
+		counter = [0]
+		counter_lock = threading.Lock()
+
+		def writer_loop():
+			con = node.connect()
+			try:
+				while True:
+					with counter_lock:
+						i = counter[0]
+						if i >= n_rotations:
+							return
+						counter[0] = i + 1
+					a = (i * 7) % n_rows + 1
+					b = (i * 13 + 1) % n_rows + 1
+					if a == b:
+						continue
+					t_new = 10 * n_rows + i
+					while True:
+						try:
+							con.begin()
+							old_a = con.execute(
+							    f"SELECT token FROM o_sk_rotation WHERE id = {a}"
+							)[0][0]
+							con.execute(
+							    f"UPDATE o_sk_rotation SET token = {t_new} WHERE id = {a}"
+							)
+							con.execute(
+							    f"UPDATE o_sk_rotation SET token = {old_a} WHERE id = {b}"
+							)
+							con.commit()
+							break
+						except Exception:
+							try:
+								con.rollback()
+							except Exception:
+								pass
+			finally:
+				con.close()
+
+		stop_checkpointer = threading.Event()
+
+		def checkpointer_loop():
+			con = node.connect()
+			try:
+				while not stop_checkpointer.is_set():
+					try:
+						con.execute("CHECKPOINT;")
+					except Exception:
+						break
+					time.sleep(0.05)
+			finally:
+				try:
+					con.close()
+				except Exception:
+					pass
+
+		threads = [
+		    threading.Thread(target=writer_loop) for _ in range(n_writers)
+		]
+		ckpt_thread = threading.Thread(target=checkpointer_loop)
+		ckpt_thread.start()
+		for t in threads:
+			t.start()
+		for t in threads:
+			t.join()
+		stop_checkpointer.set()
+		ckpt_thread.join()
+
+		self.crash_with_os_buffer_loss()
+		node.start()
+
+		n_pk = node.execute('postgres',
+		                    "SELECT count(*) FROM o_sk_rotation")[0][0]
+		n_sk = node.execute(
+		    'postgres',
+		    "SELECT count(DISTINCT token) FROM o_sk_rotation")[0][0]
+
+		if n_pk != n_sk:
+			# Collect tokens through PK seq-scan vs SK index scan; the
+			# asymmetric difference identifies which entries are orphaned
+			# in which tree.
+			node.execute(
+			    'postgres', "SET enable_indexscan = off;"
+			    "SET enable_bitmapscan = off;")
+			pk_tokens = sorted(r[0] for r in node.execute(
+			    'postgres', "SELECT token FROM o_sk_rotation ORDER BY id"))
+			node.execute(
+			    'postgres', "RESET enable_indexscan;"
+			    "RESET enable_bitmapscan;"
+			    "SET enable_seqscan = off;")
+			sk_tokens = sorted(r[0] for r in node.execute(
+			    'postgres', "SELECT token FROM o_sk_rotation ORDER BY token"))
+			node.execute('postgres', "RESET enable_seqscan;")
+			pk_set, sk_set = set(pk_tokens), set(sk_tokens)
+			print(f"\n  PK rows={n_pk} ({len(pk_tokens)} via seq), "
+			      f"SK distinct={n_sk} ({len(sk_tokens)} via index)\n"
+			      f"  in PK not SK: {sorted(pk_set - sk_set)[:10]}\n"
+			      f"  in SK not PK: {sorted(sk_set - pk_set)[:10]}\n"
+			      f"  SK duplicate tokens: "
+			      f"{[t for t,c in Counter(sk_tokens).items() if c > 1][:10]}")
+
+		self.assertEqual(
+		    n_pk, n_sk,
+		    f"PK rows ({n_pk}) != SK distinct tokens ({n_sk}) after recovery")
+		self.assertTrue(
+		    node.execute(
+		        'postgres',
+		        "SELECT orioledb_tbl_check('o_sk_rotation'::regclass)")[0][0])
+		node.stop()
+
+	def _sk_modify_pending_setup(self):
+		"""
+		Boot a node with stopevents on, create a PK + unique SK table seeded
+		with 5 rows, and burn a clean checkpoint so the next CHECKPOINT in
+		the test definitely flushes the table.
+		"""
+		node = self.node
+		node.append_conf(
+		    'postgresql.conf', "checkpoint_timeout = 1d\n"
+		    "max_wal_size = 4GB\n"
+		    "orioledb.enable_stopevents = true\n")
+		node.start()
+		node.safe_psql(
+		    'postgres', """
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+			CREATE TABLE o_sk_pending (
+				id int NOT NULL,
+				token bigint NOT NULL,
+				PRIMARY KEY (id)
+			) USING orioledb;
+			CREATE UNIQUE INDEX o_sk_pending_token_idx
+				ON o_sk_pending (token);
+			INSERT INTO o_sk_pending
+				SELECT i, i FROM generate_series(1, 5) i;
+		""")
+		node.safe_psql('postgres', "CHECKPOINT;")
+		return node
+
+	def _sk_modify_pending_assert_consistent(self, node, expected_rows):
+		n_pk = node.execute('postgres',
+		                    "SELECT count(*) FROM o_sk_pending")[0][0]
+		n_sk = node.execute(
+		    'postgres', "SELECT count(DISTINCT token) FROM o_sk_pending")[0][0]
+		self.assertEqual(
+		    n_pk, n_sk,
+		    f"PK rows ({n_pk}) != SK distinct tokens ({n_sk}) after recovery")
+		self.assertEqual(n_pk, expected_rows)
+		self.assertTrue(
+		    node.execute(
+		        'postgres',
+		        "SELECT orioledb_tbl_check('o_sk_pending'::regclass)")[0][0])
+
+	def test_recovery_sk_modify_pending_concurrent(self):
+		"""
+		Three concurrent INSERT / UPDATE / DELETE transactions all park at
+		sk_modify_pending (PK applied, SK pending) on the same table at the
+		same time; a single CHECKPOINT must capture all three pending fix-ups
+		into the xid file.  After disarm + commit + crash, recovery
+		reconciles every secondary-index entry.
+
+		Replaces the old single-operation tests with one stressed run that
+		also exercises the marker scan iterating over multiple oProcData
+		slots in a single checkpoint cycle.
+		"""
+		node = self._sk_modify_pending_setup()
+
+		con_ctl = node.connect()
+		con_ctl.execute("SET application_name = 's_ctl';")
+		dmls = [
+		    ("INSERT INTO o_sk_pending VALUES (100, 100);", "s_ins"),
+		    ("UPDATE o_sk_pending SET token = 1000 WHERE id = 1;", "s_upd"),
+		    ("DELETE FROM o_sk_pending WHERE id = 2;", "s_del"),
+		]
+		expected_rows = 5  # +1 insert, -1 delete
+
+		cons = []
+		pids = []
+		threads = []
+		for sql, app in dmls:
+			c = node.connect()
+			c.execute(f"SET application_name = '{app}';")
+			c.commit()
+			pids.append(c.execute("SELECT pg_backend_pid();")[0][0])
+			c.commit()
+			cons.append(c)
+
+		con_ctl.execute("SELECT pg_stopevent_set('sk_modify_pending', "
+		                "'$applicationName starts with \"s_\" "
+		                "&& $applicationName != \"s_ctl\"');")
+
+		for c, (sql, _) in zip(cons, dmls):
+			t = ThreadQueryExecutor(c, f"BEGIN; {sql} COMMIT;")
+			t.start()
+			threads.append(t)
+
+		for pid in pids:
+			wait_stopevent(node, pid)
+
+		# Single CHECKPOINT scans every parked backend's pendingSkUndoLoc.
+		con_ctl.execute("CHECKPOINT;")
+		con_ctl.execute("SELECT pg_stopevent_reset('sk_modify_pending');")
+		for t in threads:
+			t.join()
+
+		live_pk = node.execute('postgres',
+		                       "SELECT count(*) FROM o_sk_pending")[0][0]
+		live_sk = node.execute(
+		    'postgres', "SELECT count(DISTINCT token) FROM o_sk_pending")[0][0]
+		self.assertEqual((live_pk, live_sk), (expected_rows, expected_rows),
+		                 f"PK/SK diverged before crash: {live_pk}/{live_sk}")
+
+		con_ctl.close()
+		for c in cons:
+			c.close()
+
+		self.crash_with_os_buffer_loss()
+		node.start()
+		self._sk_modify_pending_assert_consistent(node, expected_rows)
+		node.stop()
+
+	def test_recovery_sk_modify_pending_self_created(self):
+		"""
+		The PK btree_modify for a table CREATEd in the current transaction
+		takes the self-created shortcut in o_btree_modify_internal() that
+		skips the undo record.  Without the WaitingSkUndoLoc sentinel a
+		CHECKPOINT running between PK and SK btree_modify would silently
+		snapshot the PK page with the new row while the SK page is still
+		without it, and a subsequent crash would lose the SK side because
+		the INSERT WAL sits before the new checkpoint's redo LSN.
+
+		With the sentinel the marker scan spins until the backend leaves
+		the PK-applied/SK-pending window, so the checkpoint snapshot is
+		atomic across PK and SK.  This test fails (timeouts at
+		wait_stopevent, because set_pending_sk_marker bails on the invalid
+		pkUndoLoc) before the sentinel patch and passes after.
+		"""
+		node = self.node
+		node.append_conf(
+		    'postgresql.conf', "checkpoint_timeout = 1d\n"
+		    "max_wal_size = 4GB\n"
+		    "orioledb.enable_stopevents = true\n")
+		node.start()
+		node.safe_psql('postgres', "CREATE EXTENSION IF NOT EXISTS orioledb;")
+		node.safe_psql('postgres', "CHECKPOINT;")
+
+		con_ctl = node.connect()
+		con_dml = node.connect()
+		con_chk = node.connect()
+		con_ctl.execute("SET application_name = 's_ctl';")
+		con_chk.execute("SET application_name = 's_chk';")
+		con_dml.execute("SET application_name = 's_dml';")
+		con_dml.commit()
+		dml_pid = con_dml.execute("SELECT pg_backend_pid();")[0][0]
+		con_dml.commit()
+
+		con_ctl.execute("SELECT pg_stopevent_set('sk_modify_pending', "
+		                "'$applicationName == \"s_dml\"');")
+
+		# Same txn: CREATE TABLE + CREATE INDEX + INSERT.  The PK btree's
+		# createOxid matches the txn's oxid, so o_btree_modify_internal()
+		# skips undo for the INSERT and set_pending_sk_marker() writes
+		# WaitingSkUndoLoc instead of a real undo location.
+		dml_thread = ThreadQueryExecutor(
+		    con_dml, """
+			BEGIN;
+			CREATE TABLE o_sk_self (
+				id int NOT NULL,
+				token bigint NOT NULL,
+				PRIMARY KEY (id)
+			) USING orioledb;
+			CREATE UNIQUE INDEX o_sk_self_token_idx
+				ON o_sk_self (token);
+			INSERT INTO o_sk_self VALUES (100, 100);
+			COMMIT;""")
+		dml_thread.start()
+
+		# Bounded wait with a clear failure message: without the
+		# WaitingSkUndoLoc sentinel, set_pending_sk_marker() bails on the
+		# invalid pkUndoLoc and the stopevent never fires, so an unbounded
+		# wait_stopevent() would hang.
+		deadline = time.time() + 30
+		while time.time() < deadline:
+			if node.execute(
+			    'postgres', f"SELECT EXISTS(SELECT 1 FROM pg_stopevents() "
+			    f"WHERE waiter_pids @> ARRAY[{dml_pid}])")[0][0]:
+				break
+			time.sleep(0.1)
+		else:
+			raise AssertionError(
+			    "sk_modify_pending stopevent did not fire for self-created "
+			    "table -- WaitingSkUndoLoc sentinel path is broken")
+
+		# CHECKPOINT must spin on WaitingSkUndoLoc until s_dml clears it.
+		# Run it on a separate connection so we can also issue the disarm
+		# without serialising behind CHECKPOINT.
+		chk_thread = ThreadQueryExecutor(con_chk, "CHECKPOINT;")
+		chk_thread.start()
+
+		# Briefly let CHECKPOINT enter the marker-scan wait loop, then
+		# release the parked backend.  The SK insert (and commit) happen
+		# while CHECKPOINT is still spinning on the sentinel; once
+		# pendingSkUndoLoc clears, CHECKPOINT proceeds and snapshots a
+		# consistent PK+SK state.
+		time.sleep(0.2)
+		con_ctl.execute("SELECT pg_stopevent_reset('sk_modify_pending');")
+		dml_thread.join()
+		chk_thread.join()
+
+		live_pk = node.execute('postgres',
+		                       "SELECT count(*) FROM o_sk_self")[0][0]
+		live_sk = node.execute(
+		    'postgres', "SELECT count(DISTINCT token) FROM o_sk_self")[0][0]
+		self.assertEqual((live_pk, live_sk), (1, 1))
+
+		con_ctl.close()
+		con_dml.close()
+		con_chk.close()
+
+		self.crash_with_os_buffer_loss()
+		node.start()
+
+		n_pk = node.execute('postgres', "SELECT count(*) FROM o_sk_self")[0][0]
+		n_sk = node.execute(
+		    'postgres', "SELECT count(DISTINCT token) FROM o_sk_self")[0][0]
+		self.assertEqual(n_pk, n_sk,
+		                 f"PK ({n_pk}) != SK ({n_sk}) after recovery")
+		self.assertEqual(n_pk, 1)
+		self.assertTrue(
+		    node.execute(
+		        'postgres',
+		        "SELECT orioledb_tbl_check('o_sk_self'::regclass)")[0][0])
+		node.stop()
+
+
+class RecoverySkModifyPendingReplicaTest(BaseTest):
+	"""
+	Same PK->SK fix-up mechanism but the marker is captured by a
+	*restartpoint* on a replica instead of a master checkpoint.
+
+	The master runs the DML through to commit; the replica's recovery
+	worker parks at sk_modify_pending between the PK and SK btree_modify
+	calls, a CHECKPOINT on the replica becomes a restartpoint and scans
+	the marker into the xid file, then disarm + catchup + immediate stop
+	+ restart -- the SK fix-up reconciles PK and SK on restart.
+
+	The stopevent filter matches both the recovery worker's backendType
+	and the PK tree name, so a parallel DML on the master never matches.
+	"""
+
+	def setUp(self):
+		self.startTime = time.time()
+		self.node = self.initNode(self.getBasePort(),
+		                          suffix="tgsn",
+		                          allows_streaming=True)
+
+	def _wait_recovery_worker_at_sk_modify_pending(self, replica):
+		"""
+		Poll until some recovery worker is parked at sk_modify_pending.
+		Uses poll_query_until so we don't hammer the spinlock that
+		pg_stopevents() takes while iterating events.
+		"""
+		replica.poll_query_until(
+		    "SELECT coalesce(array_length(waiter_pids, 1), 0) > 0 "
+		    "FROM pg_stopevents() "
+		    "WHERE stopevent = 'sk_modify_pending'",
+		    expected=True,
+		    sleep_time=0.2,
+		    max_attempts=300,
+		    suppress=[Exception])
+
+	def test_recovery_sk_modify_pending_replica_concurrent(self):
+		"""
+		Three concurrent DML transactions on the master replicate to a
+		replica whose recovery workers park at sk_modify_pending; a single
+		replica-side CHECKPOINT (restartpoint) captures all three pending
+		fix-ups, then disarm + catchup + immediate stop + restart verifies
+		consistency.
+		"""
+		master = self.node
+		master.append_conf(
+		    'postgresql.conf', "checkpoint_timeout = 1d\n"
+		    "max_wal_size = 4GB\n"
+		    "orioledb.enable_stopevents = true\n")
+		master.start()
+		master.safe_psql(
+		    'postgres', """
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+			CREATE TABLE o_sk_pending (
+				id int NOT NULL,
+				token bigint NOT NULL,
+				PRIMARY KEY (id)
+			) USING orioledb;
+			CREATE UNIQUE INDEX o_sk_pending_token_idx
+				ON o_sk_pending (token);
+			INSERT INTO o_sk_pending
+				SELECT i, i FROM generate_series(1, 5) i;
+		""")
+		master.safe_psql('postgres', "CHECKPOINT;")
+
+		with self.getReplica() as replica:
+			replica.append_conf(
+			    'postgresql.conf', "checkpoint_timeout = 1d\n"
+			    "max_wal_size = 4GB\n"
+			    "orioledb.enable_stopevents = true\n")
+			replica.start()
+			self.catchup_orioledb(replica)
+
+			replica.safe_psql("SELECT pg_stopevent_set('sk_modify_pending', "
+			                  "'$backendType == \"orioledb recovery worker\" "
+			                  "&& $.treeName == \"o_sk_pending_pkey\"');")
+
+			# Three concurrent DMLs on master.  All three commit on the
+			# master immediately (filter only matches replica's recovery
+			# workers); WAL ships and the workers park on the replica.
+			expected_rows = 5  # 5 initial + 1 insert - 1 delete
+			master_threads = [
+			    ThreadQueryExecutor(
+			        master.connect(), "BEGIN; "
+			        "INSERT INTO o_sk_pending VALUES (100, 100); COMMIT;"),
+			    ThreadQueryExecutor(
+			        master.connect(), "BEGIN; "
+			        "UPDATE o_sk_pending SET token = 1000 WHERE id = 1; "
+			        "COMMIT;"),
+			    ThreadQueryExecutor(
+			        master.connect(), "BEGIN; "
+			        "DELETE FROM o_sk_pending WHERE id = 2; COMMIT;"),
+			]
+			for t in master_threads:
+				t.start()
+			for t in master_threads:
+				t.join()
+
+			self._wait_recovery_worker_at_sk_modify_pending(replica)
+
+			# Restartpoint -- captures pendingSkUndoLoc into the xid file
+			# for every parked worker.
+			replica.safe_psql("CHECKPOINT;")
+
+			replica.safe_psql(
+			    "SELECT pg_stopevent_reset('sk_modify_pending');")
+			self.catchup_orioledb(replica)
+
+			live_pk = replica.execute(
+			    "SELECT count(*) FROM o_sk_pending")[0][0]
+			live_sk = replica.execute(
+			    "SELECT count(DISTINCT token) FROM o_sk_pending")[0][0]
+			self.assertEqual(
+			    (live_pk, live_sk), (expected_rows, expected_rows),
+			    f"PK/SK diverged on replica before crash: {live_pk}/{live_sk}")
+
+			replica.stop(['-m', 'immediate'])
+			replica.start()
+
+			n_pk = replica.execute("SELECT count(*) FROM o_sk_pending")[0][0]
+			n_sk = replica.execute(
+			    "SELECT count(DISTINCT token) FROM o_sk_pending")[0][0]
+			self.assertEqual(
+			    n_pk, n_sk, f"PK rows ({n_pk}) != SK distinct tokens ({n_sk}) "
+			    f"on replica after restart")
+			self.assertEqual(n_pk, expected_rows)
+
+		master.stop()
+
+
+class RecoveryWithArchivingTest(BaseTest):
+
+	def setUp(self):
+		self.startTime = time.time()
+		self.node = self.initNode(self.getBasePort(),
+		                          suffix="tgsn",
+		                          has_archiving=True,
+		                          allows_streaming=True)
+
+	def test_recovery_target_time(self):
+		node = self.node
+		node.start()
+
+		node.safe_psql("""
+			CREATE EXTENSION IF NOT EXISTS orioledb;
+			CREATE TABLE tab_int (a int) USING orioledb;
+		""")
+
+		with self.getReplica(has_restoring=True) as replica:
+			node.safe_psql(
+			    "INSERT INTO tab_int VALUES (generate_series(1,1000))")
+			recovery_time = node.execute("SELECT now()")[0][0]
+
+			replica.append_conf(f"recovery_target_time = '{recovery_time}'")
+
+			node.safe_psql(
+			    "INSERT INTO tab_int VALUES (generate_series(1001,2000))")
+
+			replica.start()
+
+			self.assertTrue(replica.execute("SELECT count(*) from tab_int"),
+			                1000)

@@ -1,0 +1,47 @@
+name: pgindent
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pgindent:
+    # Only run on push events OR pull requests from forks
+    if: |
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name != github.repository
+    runs-on:
+      - blacksmith-4vcpu-ubuntu-2404
+    strategy:
+      fail-fast: false
+      matrix:
+        pg_version: [17]
+    env:
+      LLVM_VER: 18
+      CPU: ${{ matrix.cpu }}
+      CHECK_TYPE: pgindent
+      PG_VERSION: ${{ matrix.pg_version }}
+      COMPILER: gcc
+    steps:
+      - name: Checkout extension code into workspace directory
+        uses: actions/checkout@v6
+        with:
+          path: orioledb
+      - name: Get the required tag name
+        shell: bash
+        run: |
+          echo "PGTAG=$(grep '^${{ matrix.pg_version }}: ' orioledb/.pgtags | cut -d' ' -f2-)" >> $GITHUB_ENV
+      - name: Checkout PostgreSQL code into workspace directory
+        uses: actions/checkout@v6
+        with:
+          repository: orioledb/postgres
+          ref: ${{ env.PGTAG }}
+          path: postgresql
+      - name: Setup prerequisites
+        run: bash ./orioledb/ci/prerequisites.sh
+      - name: Build
+        run: bash ./orioledb/ci/build.sh
+      - name: Install post build prerequisites
+        run: bash ./orioledb/ci/post_build_prerequisites.sh
+      - name: PGIndent
+        run: bash ./orioledb/ci/pgindent.sh

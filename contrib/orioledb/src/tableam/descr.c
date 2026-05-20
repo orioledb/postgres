@@ -1,0 +1,2723 @@
+/*-------------------------------------------------------------------------
+ *
+ * descr.c
+ *		Routines for handling descriptors of orioledb trees.
+ *
+ * Copyright (c) 2021-2026, Oriole DB Inc.
+ * Copyright (c) 2025-2026, Supabase Inc.
+ *
+ * IDENTIFICATION
+ *	  contrib/orioledb/src/tableam/descr.c
+ *
+ *-------------------------------------------------------------------------
+ */
+#include "postgres.h"
+
+#include "orioledb.h"
+
+#include "btree/io.h"
+#include "btree/iterator.h"
+#include "btree/modify.h"
+#include "btree/undo.h"
+#include "checkpoint/checkpoint.h"
+#include "catalog/free_extents.h"
+#include "catalog/o_indices.h"
+#include "catalog/o_sys_cache.h"
+#include "catalog/o_tables.h"
+#include "catalog/sys_trees.h"
+#include "postgres_ext.h"
+#include "recovery/recovery.h"
+#include "tableam/handler.h"
+#include "tableam/toast.h"
+#include "tableam/tree.h"
+#include "tuple/slot.h"
+#include "transam/undo.h"
+#include "utils/page_pool.h"
+#include "utils/stopevent.h"
+
+#include "access/nbtree.h"
+#include "catalog/pg_opfamily.h"
+#include "common/hashfn.h"
+#include "executor/functions.h"
+#include "funcapi.h"
+#include "miscadmin.h"
+#include "parser/parse_coerce.h"
+#include "utils/builtins.h"
+#include "utils/fmgrtab.h"
+#include "utils/lsyscache.h"
+#include "utils/memutils.h"
+#include "utils/resowner.h"
+#include "utils/syscache.h"
+#include "pgstat.h"
+
+typedef struct
+{
+	OnCommitUndoStackItem header;
+	Oid			opfamily;
+	Oid			lefttype;
+	Oid			righttype;
+} InvalidateComparatorUndoStackItem;
+
+static OIndexDescr *get_index_descr(ORelOids ixOids, OIndexType ixType,
+									bool miss_ok, OTableFetchContext ctx, void *o_table_source, OTableSource source);
+static bool o_table_descr_fill_indices(OTableDescr *descr, OTable *table, OSnapshot *snapshot);
+static void init_shared_root_info(PagePool *pool,
+								  SharedRootInfo *sharedRootInfo);
+static void o_invalidate_descrs_internal(Oid datoid, Oid reloid, Oid relfilenode);
+static bool o_tree_init_free_extents(BTreeDescr *desc);
+static OComparator *o_find_opclass_comparator(OOpclass *opclass, Oid collation);
+static inline OComparator *o_find_cached_comparator(OComparatorKey *key);
+static inline OComparator *o_add_comparator_to_cache(OComparator *comparator);
+static bool recreate_table_descr(OTableDescr *descr);
+static void recreate_index_descr(OIndexDescr *descr);
+static OExclusionFn *o_find_exclusion_op_fn(Oid exclusion_op);
+static inline OExclusionFn *o_find_cached_exclusion_fn(Oid exclusion_op);
+static inline OExclusionFn *o_add_exclusion_fn_to_cache(OExclusionFn *exclusion_fn);
+static OHashFn *o_find_hash_fn(Oid hash_fn_oid, Oid datoid);
+static inline OHashFn *o_find_cached_hash_fn(OHashFnKey *key);
+static inline OHashFn *o_add_hash_fn_to_cache(OHashFn *hash_fn);
+
+PG_FUNCTION_INFO_V1(orioledb_get_table_descrs);
+PG_FUNCTION_INFO_V1(orioledb_get_index_descrs);
+PG_FUNCTION_INFO_V1(orioledb_get_evicted_trees);
+
+
+typedef struct DeferredDescrInvalidation
+{
+	Oid			datoid;
+	Oid			reloid;
+	Oid			relfilenode;
+} DeferredDescrInvalidation;
+
+/*
+ * When true, invalidation messages arriving via o_invalidate_descrs() are
+ * saved instead of being processed immediately.  This is set while executing
+ * a comparator function inside o_call_comparator(), because the comparator
+ * may trigger AcceptInvalidationMessages() which processes sinval messages,
+ * which in turn may call o_invalidate_descrs().  Processing those
+ * invalidations inside a comparator is unsafe (it can read catalogs while
+ * the caller holds page locks), so we save them and replay later.
+ */
+static bool saving_inval_messages = false;
+static List *saved_descr_invals = NIL;
+
+
+struct OComparatorKey
+{
+	Oid			opfamily;
+	Oid			lefttype;
+	Oid			righttype;
+	Oid			collation;
+};
+
+struct OComparator
+{
+	OComparatorKey key;
+	bool		haveSortSupport;
+
+	/* Filled when haveSortSupport == false */
+	FmgrInfo	finfo;
+
+	/* Filled when haveSortSupport == true */
+	MemoryContext ssup_cxt;
+	void	   *ssup_extra;
+	int			(*ssup_comparator) (Datum x, Datum y, SortSupport ssup);
+};
+
+static HTAB *oTableDescrHash;
+static HTAB *oIndexDescrHash;
+static HTAB *comparatorCache;
+static HTAB *exclusionFnCache;
+static HTAB *hashFnCache;
+
+/*
+ * Backend-local hash of SharedRootInfo for trees backed by LocalPagePool
+ * (temp tables).  Their pages carry BLKNO_LOCAL_BIT and are meaningless to
+ * other backends, so they must not reach SYS_TREES_SHARED_ROOT_INFO.
+ */
+static HTAB *localSharedRootInfoHash = NULL;
+static OComparatorKey lastkey = {0};
+static OComparator *lastcmp = NULL;
+static MemoryContext descrCxt = NULL;
+static Oid	last_exclusion_op = InvalidOid;
+static OExclusionFn *last_exclusion_fn = NULL;
+static OHashFnKey last_hash_fn_key = {0};
+static OHashFn *last_hash_fn = NULL;
+OHashFn		o_default_hash_fn = {.key = {.hash_fn_oid = O_DEFAULT_HASH_FN_OID}};
+
+static void o_find_toastable_attrs(OTableDescr *tableDescr);
+
+/*
+ * Default context for fetching table/index descriptors from system trees.
+ *
+ * Uses o_non_deleted_snapshot so that trees deleted by uncommitted
+ * (sub-)transactions are still accessible -- they may become visible again
+ * on rollback.
+ */
+OTableFetchContext default_table_fetch_context = {.snapshot = &o_non_deleted_snapshot,.version = O_TABLE_INVALID_VERSION};
+
+/*
+ * Creates shared root info.  But insertion into shared cache is performed by
+ * table_descr_init_tree function.
+ */
+static SharedRootInfo *
+create_shared_root_info(PagePool *pool, SharedRootInfoKey *key)
+{
+	SharedRootInfo *sharedRootInfo;
+
+	sharedRootInfo = palloc0(sizeof(SharedRootInfo));
+	sharedRootInfo->key = *key;
+	init_shared_root_info(pool, sharedRootInfo);
+	return sharedRootInfo;
+}
+
+static HTAB *
+get_local_shared_root_info_hash(void)
+{
+	if (localSharedRootInfoHash == NULL)
+	{
+		HASHCTL		ctl;
+
+		MemSet(&ctl, 0, sizeof(ctl));
+		ctl.keysize = sizeof(SharedRootInfoKey);
+		ctl.entrysize = sizeof(SharedRootInfo);
+		ctl.hcxt = TopMemoryContext;
+		localSharedRootInfoHash = hash_create("OrioleDB local shared root info",
+											  8, &ctl,
+											  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+	}
+	return localSharedRootInfoHash;
+}
+
+static SharedRootInfo *
+find_local_shared_root_info(SharedRootInfoKey *key)
+{
+	SharedRootInfo *entry;
+	SharedRootInfo *copy;
+	bool		found;
+
+	if (localSharedRootInfoHash == NULL)
+		return NULL;
+
+	entry = (SharedRootInfo *) hash_search(localSharedRootInfoHash, key,
+										   HASH_FIND, &found);
+	if (!found)
+		return NULL;
+
+	copy = (SharedRootInfo *) palloc(sizeof(SharedRootInfo));
+	memcpy(copy, entry, sizeof(SharedRootInfo));
+	return copy;
+}
+
+static void
+insert_local_shared_root_info(SharedRootInfo *info)
+{
+	HTAB	   *hash = get_local_shared_root_info_hash();
+	SharedRootInfo *entry;
+	bool		found;
+
+	entry = (SharedRootInfo *) hash_search(hash, &info->key, HASH_ENTER, &found);
+	Assert(!found);
+	memcpy(entry, info, sizeof(SharedRootInfo));
+}
+
+static bool
+drop_local_shared_root_info(SharedRootInfoKey *key)
+{
+	bool		found = false;
+
+	if (localSharedRootInfoHash == NULL)
+		return false;
+
+	(void) hash_search(localSharedRootInfoHash, key, HASH_REMOVE, &found);
+	return found;
+}
+
+EvictedTreeData *
+read_evicted_data(Oid datoid, Oid relnode, bool delete)
+{
+	SharedRootInfoKey key;
+	OTuple		keyTuple;
+	OTuple		result;
+
+	/*
+	 * Don't do lookup for system trees.  This is essential for initialization
+	 * sequence.  This is correct because we don't evict root pages of system
+	 * trees.
+	 */
+	if (datoid == SYS_TREES_DATOID)
+		return NULL;
+
+	key.datoid = datoid;
+	key.relnode = relnode;
+	keyTuple.formatFlags = 0;
+	keyTuple.data = (Pointer) &key;
+
+	result = o_btree_find_tuple_by_key(get_sys_tree(SYS_TREES_EVICTED_DATA),
+									   &keyTuple, BTreeKeyNonLeafKey,
+									   &o_in_progress_snapshot, NULL,
+									   CurrentMemoryContext, NULL);
+	if (O_TUPLE_IS_NULL(result))
+		return NULL;
+
+	if (delete)
+	{
+		bool		success PG_USED_FOR_ASSERTS_ONLY;
+
+		success = o_btree_autonomous_delete(get_sys_tree(SYS_TREES_EVICTED_DATA),
+											keyTuple, BTreeKeyNonLeafKey, NULL);
+		Assert(success);
+	}
+
+	return (EvictedTreeData *) result.data;
+}
+
+void
+insert_evicted_data(EvictedTreeData *data)
+{
+	OTuple		tuple;
+	bool		success PG_USED_FOR_ASSERTS_ONLY;
+
+	tuple.formatFlags = 0;
+	tuple.data = (Pointer) data;
+
+	success = o_btree_autonomous_insert(get_sys_tree(SYS_TREES_EVICTED_DATA),
+										tuple);
+	Assert(success);
+}
+
+Datum
+orioledb_get_evicted_trees(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	BTreeIterator *it;
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	it = o_btree_iterator_create(get_sys_tree(SYS_TREES_EVICTED_DATA),
+								 NULL, BTreeKeyNone,
+								 &o_in_progress_snapshot, ForwardScanDirection);
+
+	while (true)
+	{
+		OTuple		tuple;
+		CommitSeqNo tupleCsn;
+		Datum		values[4];
+		bool		nulls[4] = {false};
+		EvictedTreeData *data;
+
+		tuple = o_btree_iterator_fetch(it, &tupleCsn, NULL,
+									   BTreeKeyNone, false, NULL);
+		if (O_TUPLE_IS_NULL(tuple))
+			break;
+
+		data = (EvictedTreeData *) tuple.data;
+		values[0] = ObjectIdGetDatum(data->key.datoid);
+		values[1] = ObjectIdGetDatum(data->key.relnode);
+		values[2] = UInt64GetDatum(data->file_header.rootDownlink);
+		values[3] = UInt64GetDatum(data->file_header.datafileLength);
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	btree_iterator_free(it);
+
+	return (Datum) 0;
+}
+
+/*
+ * OTableDescr* BTrees are created without shared memory initialization.
+ * Sequence buffers files, data rootInfo file are not initialized too. There are
+ * reasons for it:
+ *
+ * 1. Long queries may do not use all indices.
+ * 2. In some cases no sense to initialize BTree memory if it not exists.
+ *
+ * We can load shared memory in-place, in low-level BTree code
+ * but it more complicated approach. It will be harder to understand and debug.
+ *
+ * To avoid concurrency problems with eviction/cleanup table this call must be
+ * under AccessShareLock (See o_tables.h/o_tables_rel_lock()).
+ */
+static bool
+o_btree_load_shmem_internal(BTreeDescr *desc, bool checkpoint)
+{
+	SharedRootInfoKey key;
+	SharedRootInfo *sharedRootInfo = NULL;
+	bool		was_evicted,
+				is_compressed,
+				init_extents,
+				inserted PG_USED_FOR_ASSERTS_ONLY;
+	int			lockNo;
+	bool		hasLock = false;
+	bool		is_temp;
+
+	Assert(desc != NULL);
+	if (!ORelOidsIsValid(desc->oids) || IS_SYS_TREE_OIDS(desc->oids))
+		return true;
+
+	/* easy case: shared memory is initialized */
+	if (ORootPageIsValid(desc) && OMetaPageIsValid(desc))
+		return true;
+
+	is_temp = (desc->storageType == BTreeStorageTemporary);
+
+	memset(&key, 0, sizeof(SharedRootInfoKey));
+	key.datoid = desc->oids.datoid;
+	key.relnode = desc->oids.relnode;
+
+	/*
+	 * evictable_tree_init() needs that.  Initialized it before we get one of
+	 * checkpoint_state->oSharedRootInfoInsertLocks.
+	 */
+	(void) get_sys_tree(SYS_TREES_CHKP_NUM);
+
+	sharedRootInfo = o_find_shared_root_info(&key);
+	if (sharedRootInfo == NULL)
+	{
+		/*
+		 * Deletion from SYS_TREES_SHARED_ROOT_INFO comes before applying undo
+		 * records to SYS_TREES_O_INDICES.  So, this situation is possible in
+		 * checkpointer due to concurrent deletion.  Just give up then.
+		 */
+		if (checkpoint && tree_is_under_checkpoint(desc))
+			return false;
+
+		/*---
+		 * Reserve 8 pages:
+		 *
+		 * - root page
+		 * - meta page
+		 * - 2 for nextChkp seq bufs
+		 * - 2 for tmp seq bufs
+		 * - 2 for free seq bufs
+		 */
+		ppool_reserve_pages(desc->ppool, PPOOL_RESERVE_META, 8);
+
+		/*
+		 * Temporary trees live in a backend-local hash, so the shared insert
+		 * lock is unnecessary (and a no-op re-lookup would be too).
+		 */
+		if (!is_temp)
+		{
+			lockNo = tag_hash(&key, sizeof(key)) % SHARED_ROOT_INFO_INSERT_NUM_LOCKS;
+			LWLockAcquire(&checkpoint_state->oSharedRootInfoInsertLocks[lockNo],
+						  LW_EXCLUSIVE);
+			hasLock = true;
+			sharedRootInfo = o_find_shared_root_info(&key);
+		}
+	}
+
+	if (sharedRootInfo && sharedRootInfo->placeholder)
+	{
+		if (hasLock)
+		{
+			LWLockRelease(&checkpoint_state->oSharedRootInfoInsertLocks[lockNo]);
+			ppool_release_reserved(desc->ppool, PPOOL_RESERVE_META);
+		}
+		pfree(sharedRootInfo);
+		return false;
+	}
+
+	if (sharedRootInfo == NULL)
+	{
+		OTuple		sharedRootInfoTuple;
+
+		/* tries to create SharedRootInfo */
+		sharedRootInfo = create_shared_root_info(desc->ppool, &key);
+		desc->rootInfo = sharedRootInfo->rootInfo;
+		Assert(desc->storageType == BTreeStoragePersistence ||
+			   desc->storageType == BTreeStorageTemporary ||
+			   desc->storageType == BTreeStorageUnlogged);
+		if (desc->storageType == BTreeStoragePersistence ||
+			desc->storageType == BTreeStorageUnlogged)
+		{
+			checkpointable_tree_init(desc, true, &was_evicted);
+		}
+		else if (desc->storageType == BTreeStorageTemporary)
+		{
+			evictable_tree_init(desc, true, &was_evicted);
+		}
+		is_compressed = OCompressIsValid(desc->compress);
+		desc->rootInfo = sharedRootInfo->rootInfo;
+
+		init_extents = false;
+		if (is_compressed && !was_evicted)
+		{
+			init_extents = true;
+
+			/*
+			 * We should prevent iteration through free extentents list by the
+			 * checkpointer until free extents is not completely initialized
+			 * yet.
+			 */
+			LWLockAcquire(&BTREE_GET_META(desc)->copyBlknoLock, LW_SHARED);
+		}
+
+		if (is_temp)
+		{
+			insert_local_shared_root_info(sharedRootInfo);
+		}
+		else
+		{
+			sharedRootInfoTuple.data = (Pointer) sharedRootInfo;
+			sharedRootInfoTuple.formatFlags = 0;
+			inserted = o_btree_autonomous_insert(get_sys_tree(SYS_TREES_SHARED_ROOT_INFO),
+												 sharedRootInfoTuple);
+			Assert(inserted);
+		}
+
+		if (init_extents)
+		{
+			/*
+			 * The loader of an index fills the free extents list.
+			 */
+			if (!o_tree_init_free_extents(desc))
+			{
+				LWLockRelease(&BTREE_GET_META(desc)->copyBlknoLock);
+				elog(FATAL,
+					 "unable to read free extents file %s",
+					 get_seq_buf_filename(&desc->freeBuf.tag));
+			}
+			LWLockRelease(&BTREE_GET_META(desc)->copyBlknoLock);
+		}
+	}
+	else
+	{
+		/*
+		 * o_btree_load_shmem() must be called only under relation locks, in
+		 * this state BTree can not be evicted and removed from ShareDescr
+		 * cache because AccessExclusiveLock needed for this actions.
+		 */
+		Assert(OInMemoryBlknoIsValid(sharedRootInfo->rootInfo.rootPageBlkno));
+		Assert(OInMemoryBlknoIsValid(sharedRootInfo->rootInfo.metaPageBlkno));
+
+		desc->rootInfo = sharedRootInfo->rootInfo;
+
+		if (desc->storageType == BTreeStoragePersistence || desc->storageType == BTreeStorageUnlogged)
+		{
+			checkpointable_tree_init(desc, false, NULL);
+		}
+		else if (desc->storageType == BTreeStorageTemporary)
+		{
+			evictable_tree_init(desc, false, NULL);
+		}
+
+	}
+
+	if (hasLock)
+		LWLockRelease(&checkpoint_state->oSharedRootInfoInsertLocks[lockNo]);
+
+	Assert(sharedRootInfo != NULL);
+	Assert(!sharedRootInfo->placeholder);
+	pfree(sharedRootInfo);
+	ppool_release_reserved(desc->ppool, PPOOL_RESERVE_META);
+	return true;
+}
+
+void
+o_btree_load_shmem(BTreeDescr *desc)
+{
+	bool		result PG_USED_FOR_ASSERTS_ONLY;
+
+	result = o_btree_load_shmem_internal(desc, false);
+	Assert(result == true);
+}
+
+bool
+o_btree_load_shmem_checkpoint(BTreeDescr *desc)
+{
+	return o_btree_load_shmem_internal(desc, true);
+}
+
+/*
+ * Returns false if BTree does not exist in shared memory.
+ *
+ * Same to o_btree_load_shmem() but it does not create a BTree in shared
+ * memory. Must be called under relation locks too.
+ */
+bool
+o_btree_try_use_shmem(BTreeDescr *desc)
+{
+	Assert(ORelOidsIsValid(desc->oids));
+
+	if (!ORootPageIsValid(desc) || !OMetaPageIsValid(desc))
+	{
+		SharedRootInfoKey key;
+		SharedRootInfo *shared = NULL;
+
+		key.datoid = desc->oids.datoid;
+		key.relnode = desc->oids.relnode;
+
+		shared = o_find_shared_root_info(&key);
+		if (shared == NULL)
+			return false;
+
+		if (shared->placeholder)
+			return false;
+
+		Assert(OInMemoryBlknoIsValid(shared->rootInfo.rootPageBlkno));
+		Assert(OInMemoryBlknoIsValid(shared->rootInfo.metaPageBlkno));
+
+		desc->rootInfo = shared->rootInfo;
+
+		if (desc->storageType == BTreeStoragePersistence || desc->storageType == BTreeStorageUnlogged)
+		{
+			checkpointable_tree_init(desc, false, NULL);
+		}
+		else if (desc->storageType == BTreeStorageTemporary)
+		{
+			evictable_tree_init(desc, false, NULL);
+		}
+		pfree(shared);
+	}
+	return true;
+}
+
+/*
+ * Appends extents from free blocks file to the free extents list.
+ */
+static bool
+o_tree_init_free_extents(BTreeDescr *desc)
+{
+	BTreeMetaPage *metaPageBlkno = BTREE_GET_META(desc);
+	uint64		num_free_blocks = pg_atomic_read_u64(&metaPageBlkno->numFreeBlocks);
+	File		file;
+	char	   *filename;
+
+	Assert(OCompressIsValid(desc->compress));
+
+	if (num_free_blocks == 0)
+		return true;
+
+	filename = get_seq_buf_filename(&desc->freeBuf.tag);
+	file = PathNameOpenFile(filename, O_RDONLY | PG_BINARY);
+	pfree(filename);
+
+	if (file >= 0)
+	{
+		FileExtent *extent;
+		off_t		offset = sizeof(CheckpointFileHeader),
+					bytes_read,
+					i;
+		char		buf[ORIOLEDB_BLCKSZ];
+
+		do
+		{
+			bytes_read = OFileRead(file, buf, ORIOLEDB_BLCKSZ, offset,
+								   WAIT_EVENT_DATA_FILE_READ);
+			offset += bytes_read;
+			if (bytes_read % sizeof(FileExtent) > 0)
+				break;
+
+			for (i = 0; i < bytes_read; i += sizeof(FileExtent))
+			{
+				extent = (FileExtent *) (buf + i);
+				if (extent->len > 1)
+					pg_atomic_fetch_add_u64(&metaPageBlkno->numFreeBlocks, (uint64) extent->len - 1);
+
+				free_extent(desc, *extent);
+				num_free_blocks--;
+			}
+		} while (num_free_blocks > 0 && bytes_read == ORIOLEDB_BLCKSZ);
+		FileClose(file);
+
+		return num_free_blocks == 0;
+	}
+
+	return false;
+}
+
+static void
+index_descr_free(OIndexDescr *tree)
+{
+	if (tree->old_leaf_slot)
+	{
+		ExecDropSingleTupleTableSlot(tree->old_leaf_slot);
+		tree->old_leaf_slot = NULL;
+	}
+	if (tree->new_leaf_slot)
+	{
+		ExecDropSingleTupleTableSlot(tree->new_leaf_slot);
+		tree->new_leaf_slot = NULL;
+	}
+	if (tree->index_slot)
+	{
+		ExecDropSingleTupleTableSlot(tree->index_slot);
+		tree->index_slot = NULL;
+	}
+	if (tree->leafTupdesc)
+	{
+		FreeTupleDesc(tree->leafTupdesc);
+		tree->leafTupdesc = NULL;
+	}
+	if (tree->nonLeafTupdesc)
+	{
+		FreeTupleDesc(tree->nonLeafTupdesc);
+		tree->nonLeafTupdesc = NULL;
+	}
+	if (tree->itupdesc)
+	{
+		FreeTupleDesc(tree->itupdesc);
+		tree->itupdesc = NULL;
+	}
+	if (tree->econtext)
+	{
+		FreeExprContext(tree->econtext, false);
+		tree->econtext = NULL;
+	}
+	if (tree->index_mctx)
+	{
+		MemoryContextDelete(tree->index_mctx);
+		tree->index_mctx = NULL;
+	}
+	checkpointable_tree_free(&tree->desc);
+}
+
+static void
+index_descr_delete_from_hash(OIndexDescr *tree)
+{
+	bool		found;
+
+	index_descr_free(tree);
+
+	elog(DEBUG3, "index descr hash delete index (%u, %u, %u)",
+		 tree->oids.datoid,
+		 tree->oids.reloid,
+		 tree->oids.relnode);
+
+	(void) hash_search(oIndexDescrHash, &tree->oids,
+					   HASH_REMOVE, &found);
+	Assert(found);
+}
+
+static void
+table_descr_free(OTableDescr *descr)
+{
+	int			i;
+
+	elog(DEBUG3, "index descr hash delete for (%u, %u, %u)",
+		 descr->oids.datoid,
+		 descr->oids.reloid,
+		 descr->oids.relnode);
+
+	if (descr->toast)
+	{
+		descr->toast->refcnt--;
+		if (!descr->toast->valid && descr->toast->refcnt == 0)
+			index_descr_delete_from_hash(descr->toast);
+	}
+
+	if (descr->indices)
+	{
+		for (i = 0; i < descr->nIndices; i++)
+			if (descr->indices[i])
+			{
+				descr->indices[i]->refcnt--;
+				if (!descr->indices[i]->valid && descr->indices[i]->refcnt == 0)
+					index_descr_delete_from_hash(descr->indices[i]);
+			}
+		pfree(descr->indices);
+	}
+
+	if (descr->oldTuple)
+		ExecDropSingleTupleTableSlot(descr->oldTuple);
+	if (descr->newTuple)
+		ExecDropSingleTupleTableSlot(descr->newTuple);
+	if (descr->tupdesc)
+		FreeTupleDesc(descr->tupdesc);
+}
+
+
+void
+o_free_tmp_table_descr(OTableDescr *descr)
+{
+	int			i;
+
+	if (descr->toast)
+	{
+		index_descr_free(descr->toast);
+		pfree(descr->toast);
+	}
+
+	if (descr->indices)
+	{
+		for (i = 0; i < descr->nIndices; i++)
+		{
+			index_descr_free(descr->indices[i]);
+			pfree(descr->indices[i]);
+		}
+		pfree(descr->indices);
+	}
+
+	if (descr->oldTuple)
+		ExecDropSingleTupleTableSlot(descr->oldTuple);
+	if (descr->newTuple)
+		ExecDropSingleTupleTableSlot(descr->newTuple);
+	if (descr->tupdesc)
+		FreeTupleDesc(descr->tupdesc);
+}
+
+
+static void
+table_descr_delete_from_hash(OTableDescr *descr)
+{
+	bool		found;
+
+	table_descr_free(descr);
+	(void) hash_search(oTableDescrHash, &descr->oids,
+					   HASH_REMOVE, &found);
+	Assert(found);
+}
+
+static void
+fill_table_descr_common_fields(OTableDescr *descr, OTable *o_table)
+{
+	MemoryContext old_context;
+	int			refcnt;
+
+	refcnt = descr->refcnt;
+	memset(descr, 0, sizeof(OTableDescr));
+	old_context = MemoryContextSwitchTo(descrCxt);
+	descr->refcnt = refcnt;
+	descr->oids = o_table->oids;
+	descr->version = o_table->version;
+	descr->tablespace = o_table->tablespace;
+	descr->tupdesc = o_table_tupdesc(o_table);
+	descr->oldTuple = MakeSingleTupleTableSlot(descr->tupdesc,
+											   &TTSOpsOrioleDB);
+	descr->newTuple = MakeSingleTupleTableSlot(descr->tupdesc,
+											   &TTSOpsOrioleDB);
+	o_set_sys_cache_search_datoid(o_table->oids.datoid);
+	MemoryContextSwitchTo(old_context);
+}
+
+static bool
+fill_table_descr(OTableDescr *descr, OTable *o_table, OSnapshot *snapshot)
+{
+	MemoryContext old_context;
+	bool		was_saving;
+	bool		success;
+
+	/*
+	 * Defer invalidation messages while filling the table descriptor. Index
+	 * descriptor filling involves catalog lookups that can trigger
+	 * AcceptInvalidationMessages(), which could free descriptors while they
+	 * are still being initialized.
+	 */
+	was_saving = o_start_saving_inval_messages();
+
+	fill_table_descr_common_fields(descr, o_table);
+
+	old_context = MemoryContextSwitchTo(descrCxt);
+	success = o_table_descr_fill_indices(descr, o_table, snapshot);
+	MemoryContextSwitchTo(old_context);
+
+	o_table_free(o_table);
+
+	o_stop_saving_inval_messages(was_saving);
+	return success;
+}
+
+void
+o_fill_tmp_table_descr(OTableDescr *descr, OTable *o_table)
+{
+	MemoryContext old_context;
+	OIndexNumber cur_ix;
+	OIndex	   *index;
+	OIndexDescr *indexDescr;
+
+	descr->refcnt = 0;
+	fill_table_descr_common_fields(descr, o_table);
+
+	old_context = MemoryContextSwitchTo(descrCxt);
+
+	descr->nIndices = o_table->nindices;
+	if (!o_table->has_primary)
+		descr->nIndices++;
+
+	descr->indices = (OIndexDescr **) palloc0(sizeof(OIndexDescr *) * descr->nIndices);
+	for (cur_ix = 0; cur_ix < descr->nIndices; cur_ix++)
+	{
+		index = make_o_index(o_table, cur_ix, OIndexVersionPass);
+		indexDescr = palloc0(sizeof(OIndexDescr));
+		o_index_fill_descr(indexDescr, index, o_table, oTableSourceTable);
+		index_btree_desc_init(&indexDescr->desc, indexDescr->compress,
+							  indexDescr->fillfactor, indexDescr->oids,
+							  index->indexType, index->table_persistence,
+							  index->tablespace, index->createOxid,
+							  indexDescr);
+		free_o_index(index);
+		descr->indices[cur_ix] = indexDescr;
+	}
+
+	index = make_o_index(o_table, TOASTIndexNumber, OIndexVersionPass);
+	indexDescr = palloc0(sizeof(OIndexDescr));
+	o_index_fill_descr(indexDescr, index, o_table, oTableSourceTable);
+	index_btree_desc_init(&indexDescr->desc, indexDescr->compress,
+						  indexDescr->fillfactor, indexDescr->oids,
+						  index->indexType, index->table_persistence,
+						  index->tablespace, index->createOxid, indexDescr);
+	free_o_index(index);
+	descr->toast = indexDescr;
+
+	if (ORelOidsIsValid(o_table->bridge_oids))
+	{
+		index = make_o_index(o_table, BridgeIndexNumber, OIndexVersionPass);
+		indexDescr = palloc0(sizeof(OIndexDescr));
+		o_index_fill_descr(indexDescr, index, o_table, oTableSourceTable);
+		index_btree_desc_init(&indexDescr->desc, indexDescr->compress,
+							  indexDescr->fillfactor,
+							  indexDescr->oids, index->indexType,
+							  index->table_persistence, index->tablespace,
+							  index->createOxid, indexDescr);
+		free_o_index(index);
+		descr->bridge = indexDescr;
+	}
+
+	o_find_toastable_attrs(descr);
+	MemoryContextSwitchTo(old_context);
+}
+
+static OTableDescr *
+create_table_descr(ORelOids oids, OTableFetchContext ctx)
+{
+	OTableDescr *descr;
+	bool		found;
+	OTable	   *o_table;
+	bool		old_enable_stopevents;
+
+	old_enable_stopevents = enable_stopevents;
+	enable_stopevents = false;
+
+	o_table = o_tables_get_extended(oids, ctx);
+
+	if (o_table == NULL)
+	{
+		enable_stopevents = old_enable_stopevents;
+		return NULL;
+	}
+
+	descr = hash_search(oTableDescrHash,
+						&o_table->oids,
+						HASH_ENTER,
+						&found);
+	/* Assert(!found); */
+
+	Assert(ctx.snapshot);
+
+	descr->refcnt = 0;
+	if (!fill_table_descr(descr, o_table, ctx.snapshot))
+	{
+		table_descr_free(descr);
+		(void) hash_search(oTableDescrHash, &oids,
+						   HASH_REMOVE, &found);
+		enable_stopevents = old_enable_stopevents;
+		return NULL;
+	}
+
+	enable_stopevents = old_enable_stopevents;
+	return descr;
+}
+
+/*
+ * Finds tree with given oids in private table descriptor.
+ */
+OIndexNumber
+find_tree_in_descr(OTableDescr *descr, ORelOids oids)
+{
+	int			i;
+
+	for (i = 0; i < descr->nIndices; i++)
+	{
+		if (descr->indices[i]->oids.datoid == oids.datoid &&
+			descr->indices[i]->oids.reloid == oids.reloid &&
+			descr->indices[i]->oids.relnode == oids.relnode)
+		{
+			return i;
+		}
+	}
+
+	if (descr->toast->oids.datoid == oids.datoid &&
+		descr->toast->oids.reloid == oids.reloid &&
+		descr->toast->oids.relnode == oids.relnode)
+		return TOASTIndexNumber;
+
+	return InvalidIndexNumber;
+}
+
+/*
+ * o_fetch_table_descr fetches OTableDescr from cache, or creates a new one.
+ */
+OTableDescr *
+o_fetch_table_descr(ORelOids oids)
+{
+	return o_fetch_table_descr_extended(oids, default_table_fetch_context);
+}
+
+/*
+ * o_fetch_table_descr_extended
+ *
+ * Fetch an OrioleDB table descriptor for the specified relation OIDs using
+ * the provided fetch context.
+ *
+ * The descriptor is resolved according to:
+ *  - ctx.snapshot : MVCC visibility rules
+ *  - ctx.version  : explicit table schema version
+ *
+ * This function may return a historical version of the table descriptor if
+ * the requested version differs from the current catalog version, as long
+ * as it is visible under the given snapshot.
+ *
+ * Parameters:
+ *  - oids : OIDs identifying the table
+ *  - ctx  : fetch context combining snapshot and schema version
+ *
+ * Returns:
+ *  - Pointer to OTableDescr if the table is visible and exists
+ *  - NULL if no visible descriptor can be found
+ *
+ * Notes:
+ *  - The returned descriptor may differ from the current in-memory descriptor
+ *    if catalog changes occurred after the snapshot.
+ *  - Callers must not assume the descriptor reflects the latest schema
+ *  - Use default fetch context with O_TABLE_INVALID_VERSION and some default snapshot
+ *    to retrieve latest descriptor
+ */
+OTableDescr *
+o_fetch_table_descr_extended(ORelOids oids, OTableFetchContext ctx)
+{
+	OTableDescr *table_descr = NULL;
+	bool		found = false;
+	int			refcnt = 0;
+
+	table_descr = hash_search(oTableDescrHash, &oids, HASH_FIND, &found);
+	Assert((found && table_descr) || !found);
+	if (found && table_descr)
+	{
+		refcnt = table_descr->refcnt;	/* store actual reference count if
+										 * descr is present */
+	}
+	found = found && (ctx.version == O_TABLE_INVALID_VERSION || table_descr->version == ctx.version);
+
+	if (!found)
+		table_descr = create_table_descr(oids, ctx);
+
+	if (table_descr)
+		table_descr->refcnt = refcnt;	/* restore reference count after
+										 * possible reload */
+
+	return table_descr;
+}
+
+/*
+ * o_fetch_index_descr fetches OIndexDescr for particular tree from cache, or
+ * creates a new one.
+ */
+OIndexDescr *
+o_fetch_index_descr(ORelOids oids, OIndexType type, bool lock, bool *nested)
+{
+	return o_fetch_index_descr_extended(oids, type, lock,
+										default_table_fetch_context,
+										default_table_fetch_context);
+}
+
+/*
+ * o_fetch_index_descr_extended
+ *
+ * Fetch an OrioleDB index descriptor for the specified OIDs and index type
+ * using snapshot-aware and version-aware catalog lookup.
+ *
+ * The function resolves the index descriptor using two fetch contexts:
+ *  - ctx       : fetch context for the index itself
+ *  - base_ctx  : fetch context for the underlying base table descriptor
+ *
+ * This separation is required because index and table schema versions may
+ * diverge temporarily during DDL operations and transactional catalog updates.
+ *
+ * Parameters:
+ *  - oids      : OIDs identifying the index
+ *  - type      : OrioleDB index type (primary, unique, regular, toast, etc.)
+ *  - lock      : whether to acquire a catalog lock while fetching
+ *  - ctx       : fetch context for the index descriptor
+ *  - base_ctx  : fetch context for the base table descriptor
+ *
+ * Returns:
+ *  - Pointer to OIndexDescr if the index is visible and exists
+ *  - NULL if no visible descriptor can be found
+ *
+ * Notes:
+ *  - The returned index descriptor may correspond to a historical schema
+ *    version and must be interpreted in conjunction with the base table
+ *    descriptor fetched using base_ctx.
+ *  - Callers must ensure consistent usage of ctx and base_ctx to avoid
+ *    descriptor mismatches during logical decoding and recovery.
+ */
+OIndexDescr *
+o_fetch_index_descr_extended(ORelOids oids, OIndexType type, bool lock,
+							 OTableFetchContext ctx, OTableFetchContext base_ctx)
+{
+	OIndexDescr *index_descr = NULL;
+
+	if (lock)
+		o_tables_rel_lock_extended(&oids, AccessShareLock, true);
+
+	index_descr = get_index_descr(oids, type, true, ctx, &base_ctx, oTableSourceContext);
+
+	if (!index_descr && lock)
+	{
+		o_tables_rel_unlock_extended(&oids, AccessShareLock, true);
+	}
+
+	return index_descr;
+}
+
+static void
+init_shared_root_info(PagePool *pool, SharedRootInfo *sharedRootInfo)
+{
+	BTreeMetaPage *meta_page;
+	BTreeRootInfo *rootInfo = &sharedRootInfo->rootInfo;
+	int			blkno,
+				bufnum;
+
+	sharedRootInfo->placeholder = false;
+	rootInfo->rootPageBlkno = ppool_alloc_page(pool, PPOOL_RESERVE_META);
+	rootInfo->metaPageBlkno = ppool_alloc_page(pool, PPOOL_RESERVE_META);
+	rootInfo->rootPageChangeCount = O_PAGE_GET_CHANGE_COUNT(O_GET_IN_MEMORY_PAGE(rootInfo->rootPageBlkno));
+
+	Assert(OInMemoryBlknoIsValid(rootInfo->rootPageBlkno));
+	Assert(OInMemoryBlknoIsValid(rootInfo->metaPageBlkno));
+
+	meta_page = (BTreeMetaPage *) O_GET_IN_MEMORY_PAGE(rootInfo->metaPageBlkno);
+	for (blkno = 0; blkno < 2; blkno++)
+	{
+		meta_page->freeBuf.pages[blkno] = OInvalidInMemoryBlkno;
+		for (bufnum = 0; bufnum < 2; bufnum++)
+		{
+			meta_page->nextChkp[bufnum].pages[blkno] = OInvalidInMemoryBlkno;
+			meta_page->tmpBuf[bufnum].pages[blkno] = OInvalidInMemoryBlkno;
+		}
+	}
+}
+
+/*
+ * Start saving invalidation messages instead of processing them immediately.
+ * Returns the previous saving state so it can be restored by the caller.
+ */
+bool
+o_start_saving_inval_messages(void)
+{
+	bool		was_saving = saving_inval_messages;
+
+	saving_inval_messages = true;
+	return was_saving;
+}
+
+/*
+ * Stop saving invalidation messages, restoring the previous state.
+ */
+void
+o_stop_saving_inval_messages(bool was_saving)
+{
+	saving_inval_messages = was_saving;
+}
+
+/* #define ALWAYS_DISCARD_CACHES */
+
+/*
+ * Replay invalidation messages saved during o_call_comparator() or
+ * ppool_reserve_pages().  Called from AcceptInvalidationMessagesHook
+ * when we are outside a saving section, so it is safe to process them.
+ */
+void
+o_replay_saved_inval_messages(void)
+{
+#ifdef ALWAYS_DISCARD_CACHES
+	if (saving_inval_messages)
+		return;
+
+	o_invalidate_descrs_internal(InvalidOid, InvalidOid, InvalidOid);
+
+	list_free_deep(saved_descr_invals);
+	saved_descr_invals = NIL;
+#else
+	if (saving_inval_messages || saved_descr_invals == NIL)
+		return;
+
+	while (saved_descr_invals != NIL)
+	{
+		List	   *invals = saved_descr_invals;
+		ListCell   *lc;
+
+		saved_descr_invals = NIL;
+
+		foreach(lc, invals)
+		{
+			DeferredDescrInvalidation *pending_inval;
+
+			pending_inval = (DeferredDescrInvalidation *) lfirst(lc);
+			o_invalidate_descrs(pending_inval->datoid,
+								pending_inval->reloid,
+								pending_inval->relfilenode);
+			pfree(pending_inval);
+		}
+
+		list_free(invals);
+	}
+#endif
+}
+
+static void
+o_invalidate_descrs_internal(Oid datoid, Oid reloid, Oid relfilenode)
+{
+	HASH_SEQ_STATUS scan_status;
+	OTableDescr *tableDescr;
+	OIndexDescr *indexDescr;
+
+	Assert(!have_locked_pages());
+
+	if (!OidIsValid(datoid) || !OidIsValid(reloid) || !OidIsValid(relfilenode))
+	{
+		Assert(!OidIsValid(datoid) && !OidIsValid(reloid) && !OidIsValid(relfilenode));
+		hash_seq_init(&scan_status, oTableDescrHash);
+		while ((tableDescr = (OTableDescr *) hash_seq_search(&scan_status)) != NULL)
+		{
+			bool		delete = tableDescr->refcnt == 0;
+
+			Assert(!tableDescr->noInvalidation);
+
+			if (!delete)
+				delete = !recreate_table_descr(tableDescr);
+
+			if (delete)
+				table_descr_delete_from_hash(tableDescr);
+		}
+
+		hash_seq_init(&scan_status, oIndexDescrHash);
+		while ((indexDescr = (OIndexDescr *) hash_seq_search(&scan_status)) != NULL)
+		{
+			if (indexDescr->refcnt == 0)
+				index_descr_delete_from_hash(indexDescr);
+			else
+				recreate_index_descr(indexDescr);
+		}
+	}
+	else
+	{
+		ORelOids	oids = {datoid, reloid, relfilenode};
+		bool		found;
+
+		tableDescr = hash_search(oTableDescrHash, &oids, HASH_FIND, &found);
+		if (found)
+		{
+			bool		delete = tableDescr->refcnt == 0;
+
+			Assert(!tableDescr->noInvalidation);
+
+			if (!delete)
+				delete = !recreate_table_descr(tableDescr);
+
+			if (delete)
+				table_descr_delete_from_hash(tableDescr);
+		}
+
+		indexDescr = hash_search(oIndexDescrHash, &oids, HASH_FIND, &found);
+		if (found)
+		{
+			if (indexDescr->refcnt == 0)
+				index_descr_delete_from_hash(indexDescr);
+			else
+				recreate_index_descr(indexDescr);
+		}
+	}
+}
+
+void
+o_invalidate_descrs(Oid datoid, Oid reloid, Oid relfilenode)
+{
+	DeferredDescrInvalidation *deferred;
+	MemoryContext oldcontext;
+	bool		was_saving;
+
+	/*
+	 * If we are inside o_call_comparator(), save the invalidation message for
+	 * later replay.  Processing it now could read catalogs while the caller
+	 * holds page locks or is in the middle of a comparison.
+	 */
+	if (saving_inval_messages)
+	{
+		oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+		deferred = palloc(sizeof(DeferredDescrInvalidation));
+		deferred->datoid = datoid;
+		deferred->reloid = reloid;
+		deferred->relfilenode = relfilenode;
+		saved_descr_invals = lappend(saved_descr_invals, deferred);
+		MemoryContextSwitchTo(oldcontext);
+		return;
+	}
+
+	was_saving = o_start_saving_inval_messages();
+
+	/* Handle the current invalidation. */
+	o_invalidate_descrs_internal(datoid, reloid, relfilenode);
+
+	o_stop_saving_inval_messages(was_saving);
+}
+
+SharedRootInfo *
+o_find_shared_root_info(SharedRootInfoKey *key)
+{
+	OTuple		key_tuple,
+				result_tuple;
+	SharedRootInfo *local;
+
+	local = find_local_shared_root_info(key);
+	if (local != NULL)
+		return local;
+
+	key_tuple.data = (Pointer) key;
+	key_tuple.formatFlags = 0;
+
+	result_tuple = o_btree_find_tuple_by_key(get_sys_tree(SYS_TREES_SHARED_ROOT_INFO),
+											 &key_tuple, BTreeKeyNonLeafKey,
+											 &o_in_progress_snapshot, NULL,
+											 CurrentMemoryContext, NULL);
+
+	return (SharedRootInfo *) result_tuple.data;
+}
+
+void
+o_insert_shared_root_placeholder(Oid datoid, Oid relnode)
+{
+	OTuple		sharedRootInfoTuple;
+	SharedRootInfo sharedRootInfo = {0};
+	bool		inserted PG_USED_FOR_ASSERTS_ONLY;
+
+	sharedRootInfoTuple.formatFlags = 0;
+	sharedRootInfoTuple.data = (Pointer) &sharedRootInfo;
+
+	memset(&sharedRootInfo, 0, sizeof(sharedRootInfo));
+	sharedRootInfo.key.datoid = datoid;
+	sharedRootInfo.key.relnode = relnode;
+	sharedRootInfo.placeholder = true;
+	sharedRootInfo.rootInfo.metaPageBlkno = OInvalidInMemoryBlkno;
+	sharedRootInfo.rootInfo.rootPageBlkno = OInvalidInMemoryBlkno;
+	sharedRootInfo.rootInfo.rootPageChangeCount = 0;
+
+	inserted = o_btree_autonomous_insert(get_sys_tree(SYS_TREES_SHARED_ROOT_INFO),
+										 sharedRootInfoTuple);
+	Assert(inserted);
+}
+
+void
+cleanup_btree(OIndexKey ix_key, bool files, bool fsync)
+{
+	SharedRootInfoKey key;
+	SharedRootInfo *shared = NULL;
+
+	key.datoid = ix_key.oids.datoid;
+	key.relnode = ix_key.oids.relnode;
+
+	shared = o_find_shared_root_info(&key);
+
+	if (shared)
+	{
+		bool		drop_result PG_USED_FOR_ASSERTS_ONLY;
+
+		drop_result = o_drop_shared_root_info(key.datoid, key.relnode);
+		Assert(drop_result);
+		if (!shared->placeholder)
+			o_btree_cleanup_pages(shared->rootInfo.rootPageBlkno,
+								  shared->rootInfo.metaPageBlkno,
+								  shared->rootInfo.rootPageChangeCount);
+		pfree(shared);
+	}
+	if (files)
+		cleanup_btree_files(ix_key, fsync);
+}
+
+bool
+o_drop_shared_root_info(Oid datoid, Oid relnode)
+{
+	SharedRootInfoKey key;
+	OTuple		key_tuple;
+
+	key.datoid = datoid;
+	key.relnode = relnode;
+
+	if (drop_local_shared_root_info(&key))
+		return true;
+
+	key_tuple.data = (Pointer) &key;
+	key_tuple.formatFlags = 0;
+
+	return o_btree_autonomous_delete(get_sys_tree(SYS_TREES_SHARED_ROOT_INFO),
+									 key_tuple, BTreeKeyNonLeafKey, NULL);
+}
+
+static OIndexDescr *
+get_index_descr(ORelOids ixOids, OIndexType ixType,
+				bool miss_ok, OTableFetchContext ctx, void *o_table_source, OTableSource source)
+{
+	OIndexDescr *result;
+	OIndex	   *oIndex;
+	MemoryContext mcxt;
+	bool		found = false;
+
+	result = hash_search(oIndexDescrHash, &ixOids, HASH_ENTER, &found);
+	Assert((found && result) || !found);
+
+	found = found && (ctx.version == O_TABLE_INVALID_VERSION || result->version == ctx.version);
+
+	if (found)
+		return result;
+
+	oIndex = o_indices_get_extended(ixOids, ixType, ctx);
+	Assert(oIndex || miss_ok);
+	if (!oIndex && miss_ok)
+	{
+		(void) hash_search(oIndexDescrHash, &ixOids, HASH_REMOVE, &found);
+		Assert(found);
+		return NULL;
+	}
+	mcxt = MemoryContextSwitchTo(descrCxt);
+	o_index_fill_descr(result, oIndex, o_table_source, source);
+	MemoryContextSwitchTo(mcxt);
+	index_btree_desc_init(&result->desc, result->compress, result->fillfactor,
+						  result->oids, oIndex->indexType,
+						  oIndex->table_persistence, oIndex->tablespace,
+						  oIndex->createOxid, result);
+	free_o_index(oIndex);
+
+	return result;
+}
+
+static void
+recreate_index_descr(OIndexDescr *descr)
+{
+	OIndex	   *oIndex;
+	int			refcnt;
+	MemoryContext mcxt;
+
+	oIndex = o_indices_get(descr->oids, descr->desc.type);
+	if (!oIndex)
+	{
+		descr->valid = false;
+		return;
+	}
+	refcnt = descr->refcnt;
+	index_descr_free(descr);
+	mcxt = MemoryContextSwitchTo(descrCxt);
+	o_index_fill_descr(descr, oIndex, &default_table_fetch_context, oTableSourceContext);
+	MemoryContextSwitchTo(mcxt);
+	index_btree_desc_init(&descr->desc, descr->compress, descr->fillfactor,
+						  descr->oids, oIndex->indexType,
+						  oIndex->table_persistence, oIndex->tablespace,
+						  oIndex->createOxid, descr);
+	descr->refcnt = refcnt;
+	free_o_index(oIndex);
+	(void) o_btree_try_use_shmem(&descr->desc);
+}
+
+/*
+ * o_table_descr_fill_indices()
+ *
+ * Populate OTableDescr with index descriptors visible under the given snapshot.
+ *
+ * Important: index descriptors are fetched from OrioleDB system trees using an
+ * OTableFetchContext that includes both:
+ *  - snapshot: MVCC visibility for sys-tree tuples,
+ *  - version: an "incarnation id" for the index metadata record.
+ *
+ * The version disambiguates multiple incarnations of the same logical index
+ * (primary/toast/bridge) that can appear across CREATE/DROP/TRUNCATE/rollback
+ * sequences and may be concurrently visible to different readers during
+ * recovery and logical decoding.
+ */
+static bool
+o_table_descr_fill_indices(OTableDescr *descr, OTable *table, OSnapshot *snapshot)
+{
+	OIndexNumber cur_ix,
+				ctid_idx_off = 0;
+
+	descr->nIndices = table->nindices;
+	if (!table->has_primary)
+	{
+		descr->nIndices++;
+		ctid_idx_off = 1;
+	}
+
+	descr->indices = (OIndexDescr **) palloc0(sizeof(OIndexDescr *) * descr->nIndices);
+	for (cur_ix = 0; cur_ix < descr->nIndices; cur_ix++)
+	{
+		ORelOids	ixOids;
+		OIndexType	ixType;
+		uint32		version;
+		OTableFetchContext ctx;
+
+		/*
+		 * NOTE: version here is *not* the Postgres relcache/catversion. It's
+		 * an OrioleDB per-index incarnation number used in sys-tree keys.
+		 */
+
+		/*
+		 * Choose the correct index incarnation version to build a fetch
+		 * context.
+		 *
+		 * For regular indexes the version is stored in
+		 * table->indices[].version.
+		 *
+		 * For the synthetic "primary" descriptor (ctid-based) used when the
+		 * base table has no declared primary index, the incarnation is
+		 * tracked in table->primary_ixversion.
+		 *
+		 * In both cases the version becomes part of the sys-tree key-space
+		 * for OIndex records, ensuring get_index_descr() reads the intended
+		 * incarnation under the supplied snapshot.
+		 */
+
+		if (!table->has_primary && cur_ix == 0)
+		{
+			ixOids = table->oids;
+			ixType = oIndexPrimary;
+			version = table->primary_ixversion;
+		}
+		else
+		{
+			ixOids = table->indices[cur_ix - ctid_idx_off].oids;
+			ixType = table->indices[cur_ix - ctid_idx_off].type;
+			version = table->indices[cur_ix - ctid_idx_off].version;
+		}
+
+		ctx = build_fetch_context(snapshot, version);
+		descr->indices[cur_ix] = get_index_descr(ixOids, ixType, true, ctx, table, oTableSourceTable);
+		if (descr->indices[cur_ix] == NULL)
+			return false;
+		descr->indices[cur_ix]->refcnt++;
+	}
+
+	if (ORelOidsIsValid(table->bridge_oids))
+	{
+		/*
+		 * Bridge index is not part of table->indices[]: it has its own OIDs
+		 * and its own incarnation counter in OTable.
+		 */
+		OTableFetchContext ctx = build_fetch_context(snapshot, table->bridge_ixversion);
+
+		descr->bridge = get_index_descr(table->bridge_oids, oIndexBridge, true, ctx, table, oTableSourceTable);
+		if (descr->bridge == NULL)
+			return false;
+		descr->bridge->refcnt++;
+	}
+	else
+		descr->bridge = NULL;
+
+	if (ORelOidsIsValid(table->toast_oids))
+	{
+		/*
+		 * Toast index metadata may be recreated independently of user
+		 * indexes. toast_ixversion tracks the current incarnation.
+		 */
+		OTableFetchContext ctx = build_fetch_context(snapshot, table->toast_ixversion);
+
+		descr->toast = get_index_descr(table->toast_oids, oIndexToast, true, ctx, table, oTableSourceTable);
+		if (descr->toast == NULL)
+			return false;
+		descr->toast->refcnt++;
+	}
+	else
+		descr->toast = NULL;
+
+	o_find_toastable_attrs(descr);
+	return true;
+}
+
+static bool
+is_pk_attnum(OTableDescr *tableDescr, AttrNumber attnum)
+{
+	OIndexDescr *pk = GET_PRIMARY(tableDescr);
+	int			i;
+
+	for (i = 0; i < pk->nFields; i++)
+	{
+		if (attnum == pk->tableAttnums[i])
+			return true;
+	}
+	return false;
+}
+
+static void
+o_find_toastable_attrs(OTableDescr *tableDescr)
+{
+	OIndexDescr *pk = GET_PRIMARY(tableDescr);
+	TupleDesc	tupdesc = pk->leafTupdesc;
+	List	   *toastable = NIL;
+	ListCell   *lc;
+	int			i,
+				ctid_off = pk->primaryIsCtid ? 1 : 0;
+
+	toastable = NIL;
+
+	for (i = ctid_off; i < tupdesc->natts; i++)
+	{
+		Form_pg_attribute att = TupleDescAttr(tupdesc, i);
+
+		if (!att->attisdropped && att->attlen <= 0 &&
+			att->attstorage != TYPSTORAGE_PLAIN &&
+			!is_pk_attnum(tableDescr, i + 1))
+			toastable = lappend_int(toastable, i);
+	}
+
+	if (toastable != NIL)
+	{
+		tableDescr->ntoastable = list_length(toastable);
+		tableDescr->toastable = palloc(sizeof(AttrNumber) * tableDescr->ntoastable);
+		i = 0;
+		foreach(lc, toastable)
+		{
+			tableDescr->toastable[i] = lfirst_int(lc);
+			i++;
+		}
+		list_free(toastable);
+	}
+	else
+	{
+		tableDescr->toastable = NULL;
+		tableDescr->ntoastable = 0;
+	}
+}
+
+/*
+ * oFillFieldOpClassAndComparator
+ *
+ * Resolve opclass/comparator metadata for an index field using explicit
+ * object datoid.
+ *
+ * Note: this function may be reached while processing pages selected by the
+ * global page-pool clock. Therefore, database context must come from the
+ * index/table metadata (datoid argument), not implicitly from the current
+ * backend database.
+ */
+void
+oFillFieldOpClassAndComparator(OIndexField *field, Oid datoid, Oid opclassoid, Oid exclusion_op, Oid hash_fn_oid)
+{
+	OOpclass   *opclass;
+
+	Assert(OidIsValid(datoid));
+	Assert(OidIsValid(opclassoid));
+
+	o_set_sys_cache_search_datoid(datoid);
+	opclass = o_opclass_get(opclassoid, datoid);
+	if (opclass == NULL)
+		elog(ERROR, "failed to resolve opclass %u in datoid %u", opclassoid, datoid);
+
+	field->opclass = opclassoid;
+	field->inputtype = opclass->inputtype;
+	field->opfamily = opclass->opfamily;
+	field->comparator = o_find_opclass_comparator(opclass, field->collation);
+	if (OidIsValid(exclusion_op))
+		field->exclusion_fn = o_find_exclusion_op_fn(exclusion_op);
+	if (hash_fn_oid == O_DEFAULT_HASH_FN_OID)
+		field->hash_fn = &o_default_hash_fn;
+	else
+		field->hash_fn = o_find_hash_fn(hash_fn_oid, datoid);
+
+	Assert(field->comparator != NULL);
+}
+
+/*
+ * Find opfamily omparator for given datatypes and collation.  Throws error
+ * if not found.
+ */
+OComparator *
+o_find_comparator(Oid opfamily, Oid lefttype, Oid righttype, Oid collation)
+{
+	OComparatorKey key = {
+		.opfamily = opfamily,
+		.lefttype = lefttype,
+		.righttype = righttype,
+		.collation = collation
+	};
+	OComparator *result;
+	OComparator comparator;
+	Oid			procOid;
+
+	/*
+	 * At first, try to find existing comparator in cache.
+	 */
+	if ((result = o_find_cached_comparator(&key)) != NULL)
+		return result;
+
+	/*
+	 * If comparator isn't cached, then look for comparator with sort support
+	 * function.
+	 */
+	Assert(OidIsValid(lefttype));
+	Assert(OidIsValid(righttype));
+	procOid =
+		get_opfamily_proc(opfamily, lefttype, righttype, BTSORTSUPPORT_PROC);
+	memset(&comparator, 0, sizeof(comparator));
+	comparator.key = key;
+	if (OidIsValid(procOid))
+	{
+		SortSupportData ssup;
+
+		memset(&ssup, 0, sizeof(ssup));
+		ssup.ssup_cxt = descrCxt;
+		ssup.ssup_collation = collation;
+		ssup.abbreviate = false;
+		OidFunctionCall1(procOid, PointerGetDatum(&ssup));
+		if (ssup.comparator != NULL)
+		{
+			comparator.haveSortSupport = true;
+			comparator.ssup_cxt = ssup.ssup_cxt;
+			comparator.ssup_extra = ssup.ssup_extra;
+			comparator.ssup_comparator = ssup.comparator;
+		}
+	}
+
+	/*
+	 * Finally, look for plain comparison function.  Throw error if not found.
+	 */
+	if (!comparator.haveSortSupport)
+	{
+		MemoryContext oldcontext;
+
+		procOid =
+			get_opfamily_proc(opfamily, lefttype, righttype, BTORDER_PROC);
+		if (!OidIsValid(procOid))
+		{
+			HeapTuple	tup;
+			Form_pg_opfamily opfamilyForm;
+
+			tup = SearchSysCache1(OPFAMILYOID, ObjectIdGetDatum(opfamily));
+			Assert(HeapTupleIsValid(tup));
+			opfamilyForm = (Form_pg_opfamily) GETSTRUCT(tup);
+
+			ereport(ERROR,
+					(errcode(ERRCODE_DATATYPE_MISMATCH),
+					 errmsg("opfamily %s doesn't contain comparison function for types %s and %s",
+							NameStr(opfamilyForm->opfname),
+							format_type_be(lefttype),
+							format_type_be(righttype))));
+		}
+
+		/*
+		 * The cached OComparator (see o_add_comparator_to_cache) lives in
+		 * descrCxt, but fmgr_info() sets finfo->fn_mcxt to whatever
+		 * CurrentMemoryContext happens to be at miss time.  Misses from
+		 * o_call_comparator() during execution arrive with a transient
+		 * per-query context current; leaving fn_mcxt pointing there would
+		 * dangle once that context is reset, and the next FunctionCall (which
+		 * lazily allocates fn_extra in fn_mcxt) would touch freed memory.
+		 * Switch to descrCxt so fn_mcxt matches the cache's lifetime.
+		 */
+		oldcontext = MemoryContextSwitchTo(descrCxt);
+		fmgr_info(procOid, &comparator.finfo);
+		MemoryContextSwitchTo(oldcontext);
+	}
+
+	return o_add_comparator_to_cache(&comparator);
+}
+
+/*
+ * Find opclass comparator in cache or create new one.
+ *
+ * Comparator support functions are resolved in opclass-owning database.
+ * Use opclass->key.common.datoid explicitly to avoid cross-database proc
+ * cache lookup when descriptor build is triggered from global eviction path.
+ */
+static OComparator *
+o_find_opclass_comparator(OOpclass *opclass, Oid collation)
+{
+	OComparatorKey key;
+	OComparator *result;
+	OComparator comparator;
+
+	Assert(opclass != NULL);
+
+	key.opfamily = opclass->opfamily;
+	key.lefttype = opclass->inputtype;
+	key.righttype = opclass->inputtype;
+	key.collation = collation;
+
+	/*
+	 * At first, try to find existing comparator in cache.
+	 */
+	if ((result = o_find_cached_comparator(&key)) != NULL)
+		return result;
+
+	memset(&comparator, 0, sizeof(comparator));
+	comparator.key = key;
+
+	/*
+	 * If comparator isn't cached, then look for comparator with sort support
+	 * function.
+	 */
+	Assert(OidIsValid(opclass->key.common.datoid)); /* ssup may use SysCache */
+	o_set_syscache_hooks();
+	if (MyDatabaseId == opclass->key.common.datoid &&
+		OidIsValid(opclass->ssupOid))
+	{
+		SortSupportData ssup;
+		FmgrInfo	finfo;
+
+		memset(&finfo, 0, sizeof(FmgrInfo));
+		memset(&ssup, 0, sizeof(ssup));
+		ssup.ssup_cxt = descrCxt;
+		ssup.ssup_collation = collation;
+		ssup.abbreviate = false;
+
+		o_proc_cache_fill_finfo(&finfo, opclass->ssupOid, opclass->key.common.datoid);
+
+		FunctionCall1(&finfo, PointerGetDatum(&ssup));
+
+		if (ssup.comparator != NULL)
+		{
+			comparator.haveSortSupport = true;
+			comparator.ssup_cxt = ssup.ssup_cxt;
+			comparator.ssup_extra = ssup.ssup_extra;
+			comparator.ssup_comparator = ssup.comparator;
+		}
+	}
+
+	/*
+	 * Finally, look for plain comparison function.
+	 */
+	if (!comparator.haveSortSupport)
+	{
+		/* See o_find_comparator() for why we switch to descrCxt. */
+		MemoryContext oldcontext = MemoryContextSwitchTo(descrCxt);
+
+		o_proc_cache_fill_finfo(&comparator.finfo, opclass->cmpOid, opclass->key.common.datoid);
+
+		MemoryContextSwitchTo(oldcontext);
+	}
+	o_unset_syscache_hooks();
+
+	return o_add_comparator_to_cache(&comparator);
+}
+
+/*
+ * Tries to find a comparator in the cache.
+ */
+static inline OComparator *
+o_find_cached_comparator(OComparatorKey *key)
+{
+	OComparator *result;
+	bool		found;
+
+	/* compares with previous search */
+	if (memcmp(key, &lastkey, sizeof(OComparatorKey)) == 0)
+		return lastcmp;
+
+	/* try to find in the cache */
+	result = hash_search(comparatorCache, key, HASH_FIND, &found);
+	if (found)
+	{
+		memcpy(&lastkey, key, sizeof(OComparatorKey));
+		lastcmp = result;
+		return result;
+	}
+
+	return NULL;
+}
+
+/*
+ * Adds the comparator to the cache.
+ */
+static inline OComparator *
+o_add_comparator_to_cache(OComparator *comparator)
+{
+	OComparator *cached;
+
+	cached = hash_search(comparatorCache, &comparator->key, HASH_ENTER, NULL);
+	memcpy(cached, comparator, sizeof(OComparator));
+
+	memcpy(&lastkey, &comparator->key, sizeof(OComparatorKey));
+	lastcmp = cached;
+
+	return cached;
+}
+
+void
+o_invalidate_comparator_cache(Oid opfamily, Oid lefttype, Oid righttype)
+{
+	OComparator *comparator;
+	HASH_SEQ_STATUS scan_status;
+	OComparatorKey key = {
+		.opfamily = opfamily,
+		.lefttype = lefttype,
+		.righttype = righttype
+	};
+
+	if (key.opfamily == lastkey.opfamily &&
+		key.lefttype == lastkey.lefttype &&
+		key.righttype == lastkey.righttype)
+		lastcmp = NULL;
+
+	hash_seq_init(&scan_status, comparatorCache);
+	while ((comparator = (OComparator *) hash_seq_search(&scan_status)) != NULL)
+	{
+		if (key.opfamily == comparator->key.opfamily &&
+			key.lefttype == comparator->key.lefttype &&
+			key.righttype == comparator->key.righttype)
+		{
+			Oid			collation = comparator->key.collation;
+
+			if (comparator->ssup_extra)
+				pfree(comparator->ssup_extra);
+			key.collation = collation;
+			(void) hash_search(comparatorCache, &key, HASH_REMOVE, NULL);
+		}
+	}
+}
+
+void
+o_invalidate_comparator_callback(UndoLogType undoType, UndoLocation location,
+								 UndoStackItem *baseItem,
+								 OXid oxid, OUndoCallbackStage stage,
+								 bool changeCountsValid)
+{
+	InvalidateComparatorUndoStackItem *invalidateItem = (InvalidateComparatorUndoStackItem *) baseItem;
+
+	if (stage == OUndoCallbackStagePreCommit)
+		return;
+
+	o_invalidate_comparator_cache(invalidateItem->opfamily,
+								  invalidateItem->lefttype,
+								  invalidateItem->righttype);
+}
+
+void
+o_add_invalidate_comparator_undo_item(Oid opfamily, Oid lefttype, Oid righttype)
+{
+	UndoLocation location;
+	InvalidateComparatorUndoStackItem *item;
+	LocationIndex size;
+
+	size = sizeof(InvalidateComparatorUndoStackItem);
+	item = (InvalidateComparatorUndoStackItem *) get_undo_record_unreserved(UndoLogSystem,
+																			&location,
+																			MAXALIGN(size));
+	item->opfamily = opfamily;
+	item->lefttype = lefttype;
+	item->righttype = righttype;
+	item->header.base.type = InvalidateComparatorUndoItemType;
+	item->header.base.indexType = oIndexPrimary;
+	item->header.base.itemSize = size;
+
+	add_new_undo_stack_item(UndoLogSystem, location);
+	release_undo_size(UndoLogSystem);
+}
+
+int
+o_call_comparator(OComparator *comparator, Datum left, Datum right)
+{
+	int			ret;
+	bool		was_saving;
+
+	was_saving = o_start_saving_inval_messages();
+
+	if (comparator->haveSortSupport)
+	{
+		SortSupportData ssup;
+
+		memset(&ssup, 0, sizeof(ssup));
+		ASAN_UNPOISON_MEMORY_REGION(&ssup, sizeof(ssup));
+		ssup.ssup_cxt = comparator->ssup_cxt;
+		ssup.ssup_collation = comparator->key.collation;
+		ssup.ssup_extra = comparator->ssup_extra;
+		ssup.abbreviate = false;
+		ret = comparator->ssup_comparator(left, right, &ssup);
+		comparator->ssup_extra = ssup.ssup_extra;
+	}
+	else
+	{
+		Datum		cmp;
+
+		/* FIX: There should be a better way */
+		if (o_is_syscache_hooks_set() && comparator->finfo.fn_addr == fmgr_sql)
+			comparator->finfo.fn_addr = o_fmgr_sql;
+		cmp = FunctionCall2Coll(&comparator->finfo, comparator->key.collation,
+								left, right);
+		ret = DatumGetInt32(cmp);
+	}
+
+	o_stop_saving_inval_messages(was_saving);
+
+	return ret;
+}
+
+/* Info needed to use an old-style comparison function as a sort comparator */
+typedef struct
+{
+	FmgrInfo	flinfo;			/* lookup data for comparison function */
+	FunctionCallInfoBaseData fcinfo;	/* reusable callinfo structure */
+} SortShimExtra;
+
+#define SizeForSortShimExtra(nargs) (offsetof(SortShimExtra, fcinfo) + SizeForFunctionCallInfo(nargs))
+
+/*
+ * Shim function for calling an old-style comparator
+ *
+ * This is essentially an inlined version of FunctionCall2Coll(), except
+ * we assume that the FunctionCallInfoBaseData was already mostly set up by
+ * PrepareSortSupportComparisonShim.
+ */
+static int
+comparison_shim(Datum x, Datum y, SortSupport ssup)
+{
+	SortShimExtra *extra = (SortShimExtra *) ssup->ssup_extra;
+	Datum		result;
+
+	extra->fcinfo.args[0].value = x;
+	extra->fcinfo.args[1].value = y;
+
+	/* just for paranoia's sake, we reset isnull each time */
+	extra->fcinfo.isnull = false;
+
+	result = FunctionCallInvoke(&extra->fcinfo);
+
+	/* Check for null result, since caller is clearly not expecting one */
+	if (extra->fcinfo.isnull)
+		elog(ERROR, "function %u returned NULL", extra->flinfo.fn_oid);
+
+	return result;
+}
+
+void
+o_finish_sort_support_function(OComparator *comparator, SortSupport ssup)
+{
+	Assert(comparator);
+	if (comparator->haveSortSupport)
+	{
+		ssup->comparator = comparator->ssup_comparator;
+		ssup->ssup_extra = comparator->ssup_extra;
+	}
+	else
+	{
+		SortShimExtra *extra;
+
+		extra = (SortShimExtra *) MemoryContextAlloc(ssup->ssup_cxt,
+													 SizeForSortShimExtra(2));
+
+		memcpy(&extra->flinfo, &comparator->finfo, sizeof(FmgrInfo));
+
+		/* We can initialize the callinfo just once and re-use it */
+		InitFunctionCallInfoData(extra->fcinfo, &extra->flinfo, 2,
+								 ssup->ssup_collation, NULL, NULL);
+		extra->fcinfo.args[0].isnull = false;
+		extra->fcinfo.args[1].isnull = false;
+
+		ssup->ssup_extra = extra;
+		ssup->comparator = comparison_shim;
+	}
+}
+
+void
+o_tableam_descr_init(void)
+{
+	HASHCTL		ctl;
+
+	descrCxt = AllocSetContextCreate(TopMemoryContext,
+									 "OrioleDB descriptors",
+									 ALLOCSET_DEFAULT_SIZES);
+
+	MemSet(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(ORelOids);
+	ctl.entrysize = sizeof(OTableDescr);
+	ctl.hcxt = descrCxt;
+	oTableDescrHash = hash_create("OrioleDB table descriptors", 8,
+								  &ctl,
+								  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+
+	MemSet(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(ORelOids);
+	ctl.entrysize = sizeof(OIndexDescr);
+	ctl.hcxt = descrCxt;
+	oIndexDescrHash = hash_create("OrioleDB index descriptors", 8,
+								  &ctl,
+								  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+
+	MemSet(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(OComparatorKey);
+	ctl.entrysize = sizeof(OComparator);
+	ctl.hcxt = descrCxt;
+	comparatorCache = hash_create("OrioleDB comparators", 8,
+								  &ctl,
+								  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+
+	MemSet(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(Oid);
+	ctl.entrysize = sizeof(OExclusionFn);
+	ctl.hcxt = descrCxt;
+	exclusionFnCache = hash_create("OrioleDB exclusion functions", 8,
+								   &ctl,
+								   HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+
+	MemSet(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(OHashFnKey);
+	ctl.entrysize = sizeof(OHashFn);
+	ctl.hcxt = descrCxt;
+	hashFnCache = hash_create("OrioleDB hash functions", 8,
+							  &ctl,
+							  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+}
+
+static bool
+recreate_table_descr(OTableDescr *descr)
+{
+	OTable	   *o_table;
+	bool		old_enable_stopevents;
+	OEACallsCounters *saved_ea_counters;
+
+	old_enable_stopevents = enable_stopevents;
+	enable_stopevents = false;
+
+	o_table = o_tables_get(descr->oids);
+	if (!o_table)
+		return false;
+
+	saved_ea_counters = ea_counters;
+	ea_counters = NULL;
+	table_descr_free(descr);
+	if (!fill_table_descr(descr, o_table, &o_non_deleted_snapshot))
+	{
+		ea_counters = saved_ea_counters;
+		enable_stopevents = old_enable_stopevents;
+		return false;
+	}
+	ea_counters = saved_ea_counters;
+
+	enable_stopevents = old_enable_stopevents;
+	return true;
+}
+
+void
+recreate_table_descr_by_oids(ORelOids oids)
+{
+	OTableDescr *descr;
+	bool		found;
+
+	descr = hash_search(oTableDescrHash, &oids, HASH_FIND, &found);
+
+	if (found)
+	{
+		OIndexDescr *indexDescr;
+
+		indexDescr = hash_search(oIndexDescrHash, &oids, HASH_FIND, &found);
+		if (found)
+			index_descr_delete_from_hash(indexDescr);
+		recreate_table_descr(descr);
+	}
+	else
+		(void) create_table_descr(oids, default_table_fetch_context);
+}
+
+void
+table_descr_inc_refcnt(OTableDescr *descr)
+{
+	descr->refcnt++;
+}
+
+void
+table_descr_dec_refcnt(OTableDescr *descr)
+{
+	Assert(descr->refcnt > 0);
+	descr->refcnt--;
+}
+
+Datum
+orioledb_get_table_descrs(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	HASH_SEQ_STATUS scan_status;
+	OTableDescr *tableDescr;
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	hash_seq_init(&scan_status, oTableDescrHash);
+	while ((tableDescr = (OTableDescr *) hash_seq_search(&scan_status)) != NULL)
+	{
+		Datum		values[4];
+		bool		nulls[4] = {false};
+
+		values[0] = tableDescr->oids.datoid;
+		values[1] = tableDescr->oids.reloid;
+		values[2] = tableDescr->oids.relnode;
+		values[3] = tableDescr->refcnt;
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	return (Datum) 0;
+}
+
+Datum
+orioledb_get_index_descrs(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	HASH_SEQ_STATUS scan_status;
+	OIndexDescr *indexDescr;
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	hash_seq_init(&scan_status, oIndexDescrHash);
+	while ((indexDescr = (OIndexDescr *) hash_seq_search(&scan_status)) != NULL)
+	{
+		Datum		values[4];
+		bool		nulls[4] = {false};
+
+		values[0] = indexDescr->oids.datoid;
+		values[1] = indexDescr->oids.reloid;
+		values[2] = indexDescr->oids.relnode;
+		values[3] = indexDescr->refcnt;
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	return (Datum) 0;
+}
+
+void
+o_invalidate_undo_item_callback(UndoLogType undoType, UndoLocation location,
+								UndoStackItem *baseItem,
+								OXid oxid, OUndoCallbackStage stage,
+								bool changeCountsValid)
+{
+	InvalidateUndoStackItem *invalidateItem = (InvalidateUndoStackItem *) baseItem;
+
+	if (stage == OUndoCallbackStagePreCommit)
+		return;
+
+	if (stage == OUndoCallbackStageAbort &&
+		!(invalidateItem->flags & O_INVALIDATE_OIDS_ON_ABORT))
+		return;
+
+	if (stage == OUndoCallbackStageCommit &&
+		!(invalidateItem->flags & O_INVALIDATE_OIDS_ON_COMMIT))
+		return;
+
+	o_invalidate_oids(invalidateItem->oids);
+}
+
+void
+o_add_invalidate_undo_item(ORelOids oids, uint32 flags)
+{
+	UndoLocation location;
+	InvalidateUndoStackItem *item;
+	LocationIndex size;
+
+	size = sizeof(InvalidateUndoStackItem);
+	item = (InvalidateUndoStackItem *) get_undo_record_unreserved(UndoLogSystem,
+																  &location,
+																  MAXALIGN(size));
+	item->oids = oids;
+	item->flags = flags;
+	item->header.base.type = InvalidateUndoItemType;
+	item->header.base.indexType = oIndexPrimary;
+	item->header.base.itemSize = size;
+
+	add_new_undo_stack_item(UndoLogSystem, location);
+	release_undo_size(UndoLogSystem);
+}
+
+/*
+ * Find exclusion function in cache or create new one.
+ */
+static OExclusionFn *
+o_find_exclusion_op_fn(Oid exclusion_op)
+{
+	OExclusionFn *result;
+	OExclusionFn exclusion_fn;
+	Oid			oprcode;
+	MemoryContext oldcontext;
+
+	if ((result = o_find_cached_exclusion_fn(exclusion_op)) != NULL)
+		return result;
+
+	memset(&exclusion_fn, 0, sizeof(exclusion_fn));
+	exclusion_fn.operator = exclusion_op;
+
+	o_set_syscache_hooks();
+	oprcode = o_operator_cache_get_oprcode(exclusion_op);
+
+	/* See o_find_comparator() for why we switch to descrCxt. */
+	oldcontext = MemoryContextSwitchTo(descrCxt);
+	o_proc_cache_fill_finfo(&exclusion_fn.finfo, oprcode, MyDatabaseId);
+	MemoryContextSwitchTo(oldcontext);
+
+	o_unset_syscache_hooks();
+
+	return o_add_exclusion_fn_to_cache(&exclusion_fn);
+}
+
+/*
+ * Tries to find an exclusion function in the cache.
+ */
+static inline OExclusionFn *
+o_find_cached_exclusion_fn(Oid exclusion_op)
+{
+	OExclusionFn *result;
+	bool		found;
+
+	/* compares with previous search */
+	if (exclusion_op == last_exclusion_op)
+		return last_exclusion_fn;
+
+	/* try to find in the cache */
+	result = hash_search(exclusionFnCache, &exclusion_op, HASH_FIND, &found);
+	if (found)
+	{
+		last_exclusion_op = exclusion_op;
+		last_exclusion_fn = result;
+		return result;
+	}
+
+	return NULL;
+}
+
+/*
+ * Adds the exclusion function to the cache.
+ */
+static inline OExclusionFn *
+o_add_exclusion_fn_to_cache(OExclusionFn *exclusion_fn)
+{
+	OExclusionFn *cached;
+
+	cached = hash_search(exclusionFnCache, &exclusion_fn->operator, HASH_ENTER, NULL);
+	memcpy(cached, exclusion_fn, sizeof(OExclusionFn));
+
+	last_exclusion_op = exclusion_fn->operator;
+	last_exclusion_fn = cached;
+
+	return cached;
+}
+
+int
+o_call_exclusion_fn(OExclusionFn *exclusion_fn, Datum left, Datum right, Oid collation)
+{
+	int			cmp;
+	Datum		ret;
+
+	/* FIX: There should be a better way */
+	if (o_is_syscache_hooks_set() && exclusion_fn->finfo.fn_addr == fmgr_sql)
+		exclusion_fn->finfo.fn_addr = o_fmgr_sql;
+	ret = FunctionCall2Coll(&exclusion_fn->finfo, collation, left, right);
+	cmp = DatumGetBool(ret) ? 0 : 1;
+
+	return cmp;
+}
+
+void
+reset_saving_inval_messages(void)
+{
+	saving_inval_messages = false;
+}
+
+/*
+ * Find hash function in cache or create new one.
+ */
+static OHashFn *
+o_find_hash_fn(Oid hash_fn_oid, Oid datoid)
+{
+	OHashFnKey	key = {
+		.datoid = datoid,
+		.hash_fn_oid = hash_fn_oid
+	};
+	OHashFn    *result;
+	OHashFn		hash_fn;
+	MemoryContext oldcontext;
+
+	if ((result = o_find_cached_hash_fn(&key)) != NULL)
+		return result;
+
+	memset(&hash_fn, 0, sizeof(hash_fn));
+	hash_fn.key = key;
+
+	o_set_syscache_hooks();
+
+	/* See o_find_comparator() for why we switch to descrCxt. */
+	oldcontext = MemoryContextSwitchTo(descrCxt);
+	o_proc_cache_fill_finfo(&hash_fn.finfo, hash_fn_oid, datoid);
+	MemoryContextSwitchTo(oldcontext);
+
+	o_unset_syscache_hooks();
+
+	return o_add_hash_fn_to_cache(&hash_fn);
+}
+
+/*
+ * Tries to find an hash function in the cache.
+ */
+static inline OHashFn *
+o_find_cached_hash_fn(OHashFnKey *key)
+{
+	OHashFn    *result;
+	bool		found;
+
+	/* compares with previous search */
+	if (memcmp(key, &last_hash_fn_key, sizeof(OHashFnKey)) == 0)
+		return last_hash_fn;
+
+	/* try to find in the cache */
+	result = hash_search(hashFnCache, key, HASH_FIND, &found);
+	if (found)
+	{
+		memcpy(&last_hash_fn_key, key, sizeof(OHashFnKey));
+		last_hash_fn = result;
+		return result;
+	}
+
+	return NULL;
+}
+
+/*
+ * Adds the hash function to the cache.
+ */
+static inline OHashFn *
+o_add_hash_fn_to_cache(OHashFn *hash_fn)
+{
+	OHashFn    *cached;
+
+	cached = hash_search(hashFnCache, &hash_fn->key, HASH_ENTER, NULL);
+	memcpy(cached, hash_fn, sizeof(OHashFn));
+
+	memcpy(&last_hash_fn_key, &hash_fn->key, sizeof(OHashFnKey));
+	last_hash_fn = cached;
+
+	return cached;
+}
+
+uint32
+o_call_hash_fn(OHashFn *hash_fn, Oid collation, Datum val)
+{
+	uint32		result;
+	Datum		ret;
+	bool		was_saving;
+
+	was_saving = o_start_saving_inval_messages();
+
+	/* FIX: There should be a better way */
+	if (o_is_syscache_hooks_set() && hash_fn->finfo.fn_addr == fmgr_sql)
+		hash_fn->finfo.fn_addr = o_fmgr_sql;
+	ret = FunctionCall1Coll(&hash_fn->finfo, collation, val);
+	result = DatumGetUInt32(ret);
+
+	o_stop_saving_inval_messages(was_saving);
+
+	return result;
+}
+
+#if PG_VERSION_NUM >= 170000
+
+static void ResOwnerReleaseOTableDescr(Datum res);
+static char *ResOwnerPrintOTableDescr(Datum res);
+
+static const ResourceOwnerDesc o_table_descr_resowner_desc =
+{
+	.name = "OrioleDB OTableDescr",
+	.release_phase = RESOURCE_RELEASE_BEFORE_LOCKS,
+	.release_priority = RELEASE_PRIO_RELCACHE_REFS,
+	.ReleaseResource = ResOwnerReleaseOTableDescr,
+	.DebugPrint = ResOwnerPrintOTableDescr
+};
+
+void
+ResourceOwnerRememberOTableDescr(ResourceOwner owner, OTableDescr *descr)
+{
+	ResourceOwnerEnlarge(owner);
+	descr->refcnt++;
+	ResourceOwnerRemember(owner, PointerGetDatum(descr), &o_table_descr_resowner_desc);
+}
+
+void
+ResourceOwnerForgetOTableDescr(ResourceOwner owner, OTableDescr *descr)
+{
+	ResourceOwnerForget(owner, PointerGetDatum(descr), &o_table_descr_resowner_desc);
+	descr->refcnt--;
+}
+
+static void
+ResOwnerReleaseOTableDescr(Datum res)
+{
+	OTableDescr *descr = (OTableDescr *) DatumGetPointer(res);
+
+	descr->refcnt--;
+}
+
+static char *
+ResOwnerPrintOTableDescr(Datum res)
+{
+	OTableDescr *descr = (OTableDescr *) DatumGetPointer(res);
+
+	return psprintf("OrioleDB OTableDescr (%u, %u, %u)",
+					descr->oids.datoid, descr->oids.reloid, descr->oids.relnode);
+}
+
+#else
+
+/*
+ * PG16 lacks the per-owner ResourceOwnerRemember API, so we rely on the
+ * global ResourceReleaseCallback mechanism.  The callback fires for every
+ * ResourceOwner release in the tree, so we maintain our own list of
+ * (owner, descr) pairs and filter by CurrentResourceOwner to only decrement
+ * refcnt when the matching owner is being released.  A single callback is
+ * registered once per backend on the first Remember call.
+ */
+typedef struct OTableDescrResOwnerItem
+{
+	struct OTableDescrResOwnerItem *next;
+	ResourceOwner owner;
+	OTableDescr *descr;
+}			OTableDescrResOwnerItem;
+
+static OTableDescrResOwnerItem * otable_descr_resowner_items = NULL;
+static bool otable_descr_resowner_registered = false;
+
+static void
+ResOwnerReleaseOTableDescrCallback(ResourceReleasePhase phase,
+								   bool isCommit, bool isTopLevel, void *arg)
+{
+	OTableDescrResOwnerItem **prev;
+	OTableDescrResOwnerItem *item;
+
+	if (phase != RESOURCE_RELEASE_BEFORE_LOCKS)
+		return;
+
+	prev = &otable_descr_resowner_items;
+	item = *prev;
+	while (item)
+	{
+		if (item->owner == CurrentResourceOwner)
+		{
+			*prev = item->next;
+			item->descr->refcnt--;
+			pfree(item);
+			item = *prev;
+		}
+		else
+		{
+			prev = &item->next;
+			item = item->next;
+		}
+	}
+}
+
+void
+ResourceOwnerRememberOTableDescr(ResourceOwner owner, OTableDescr *descr)
+{
+	OTableDescrResOwnerItem *item;
+
+	if (!otable_descr_resowner_registered)
+	{
+		RegisterResourceReleaseCallback(ResOwnerReleaseOTableDescrCallback, NULL);
+		otable_descr_resowner_registered = true;
+	}
+
+	item = MemoryContextAlloc(TopMemoryContext, sizeof(*item));
+	item->owner = owner;
+	item->descr = descr;
+	item->next = otable_descr_resowner_items;
+	otable_descr_resowner_items = item;
+	descr->refcnt++;
+}
+
+void
+ResourceOwnerForgetOTableDescr(ResourceOwner owner, OTableDescr *descr)
+{
+	OTableDescrResOwnerItem **prev = &otable_descr_resowner_items;
+	OTableDescrResOwnerItem *item = *prev;
+
+	while (item)
+	{
+		if (item->owner == owner && item->descr == descr)
+		{
+			*prev = item->next;
+			pfree(item);
+			descr->refcnt--;
+			return;
+		}
+		prev = &item->next;
+		item = item->next;
+	}
+	elog(ERROR, "OTableDescr not remembered by this ResourceOwner");
+}
+
+#endif
+
+#if PG_VERSION_NUM >= 170000
+
+static void ResOwnerReleaseOIndexDescr(Datum res);
+static char *ResOwnerPrintOIndexDescr(Datum res);
+
+static const ResourceOwnerDesc o_index_descr_resowner_desc =
+{
+	.name = "OrioleDB OIndexDescr",
+	.release_phase = RESOURCE_RELEASE_BEFORE_LOCKS,
+	.release_priority = RELEASE_PRIO_RELCACHE_REFS,
+	.ReleaseResource = ResOwnerReleaseOIndexDescr,
+	.DebugPrint = ResOwnerPrintOIndexDescr
+};
+
+void
+ResourceOwnerRememberOIndexDescr(ResourceOwner owner, OIndexDescr *descr)
+{
+	ResourceOwnerEnlarge(owner);
+	descr->refcnt++;
+	ResourceOwnerRemember(owner, PointerGetDatum(descr), &o_index_descr_resowner_desc);
+}
+
+void
+ResourceOwnerForgetOIndexDescr(ResourceOwner owner, OIndexDescr *descr)
+{
+	ResourceOwnerForget(owner, PointerGetDatum(descr), &o_index_descr_resowner_desc);
+	descr->refcnt--;
+}
+
+static void
+ResOwnerReleaseOIndexDescr(Datum res)
+{
+	OIndexDescr *descr = (OIndexDescr *) DatumGetPointer(res);
+
+	descr->refcnt--;
+}
+
+static char *
+ResOwnerPrintOIndexDescr(Datum res)
+{
+	OIndexDescr *descr = (OIndexDescr *) DatumGetPointer(res);
+
+	return psprintf("OrioleDB OIndexDescr (%u, %u, %u)",
+					descr->oids.datoid, descr->oids.reloid, descr->oids.relnode);
+}
+
+#else
+
+/* See comment on OTableDescr's PG16 implementation above. */
+typedef struct OIndexDescrResOwnerItem
+{
+	struct OIndexDescrResOwnerItem *next;
+	ResourceOwner owner;
+	OIndexDescr *descr;
+}			OIndexDescrResOwnerItem;
+
+static OIndexDescrResOwnerItem * oindex_descr_resowner_items = NULL;
+static bool oindex_descr_resowner_registered = false;
+
+static void
+ResOwnerReleaseOIndexDescrCallback(ResourceReleasePhase phase,
+								   bool isCommit, bool isTopLevel, void *arg)
+{
+	OIndexDescrResOwnerItem **prev;
+	OIndexDescrResOwnerItem *item;
+
+	if (phase != RESOURCE_RELEASE_BEFORE_LOCKS)
+		return;
+
+	prev = &oindex_descr_resowner_items;
+	item = *prev;
+	while (item)
+	{
+		if (item->owner == CurrentResourceOwner)
+		{
+			*prev = item->next;
+			item->descr->refcnt--;
+			pfree(item);
+			item = *prev;
+		}
+		else
+		{
+			prev = &item->next;
+			item = item->next;
+		}
+	}
+}
+
+void
+ResourceOwnerRememberOIndexDescr(ResourceOwner owner, OIndexDescr *descr)
+{
+	OIndexDescrResOwnerItem *item;
+
+	if (!oindex_descr_resowner_registered)
+	{
+		RegisterResourceReleaseCallback(ResOwnerReleaseOIndexDescrCallback, NULL);
+		oindex_descr_resowner_registered = true;
+	}
+
+	item = MemoryContextAlloc(TopMemoryContext, sizeof(*item));
+	item->owner = owner;
+	item->descr = descr;
+	item->next = oindex_descr_resowner_items;
+	oindex_descr_resowner_items = item;
+	descr->refcnt++;
+}
+
+void
+ResourceOwnerForgetOIndexDescr(ResourceOwner owner, OIndexDescr *descr)
+{
+	OIndexDescrResOwnerItem **prev = &oindex_descr_resowner_items;
+	OIndexDescrResOwnerItem *item = *prev;
+
+	while (item)
+	{
+		if (item->owner == owner && item->descr == descr)
+		{
+			*prev = item->next;
+			pfree(item);
+			descr->refcnt--;
+			return;
+		}
+		prev = &item->next;
+		item = item->next;
+	}
+	elog(ERROR, "OIndexDescr not remembered by this ResourceOwner");
+}
+
+#endif

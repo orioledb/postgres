@@ -1,0 +1,185 @@
+/*-------------------------------------------------------------------------
+ *
+ * o_opclass_cache.c
+ *		Routines for orioledb operator classes sys cache.
+ *
+ * Operator class B-tree stores data used by comparator and field initialization
+ * for orioledb engine tables.
+ *
+ * Copyright (c) 2021-2026, Oriole DB Inc.
+ * Copyright (c) 2025-2026, Supabase Inc.
+ *
+ * IDENTIFICATION
+ *	  contrib/orioledb/src/catalog/o_opclass_cache.c
+ *
+ *-------------------------------------------------------------------------
+ */
+
+#include "postgres.h"
+
+#include "orioledb.h"
+
+#include "btree/iterator.h"
+#include "btree/modify.h"
+#include "catalog/o_sys_cache.h"
+#include "checkpoint/checkpoint.h"
+#include "recovery/recovery.h"
+#include "recovery/wal.h"
+#include "utils/planner.h"
+#include "utils/stopevent.h"
+
+#include "access/nbtree.h"
+#include "catalog/pg_am.h"
+#include "catalog/pg_amop.h"
+#include "catalog/pg_amproc.h"
+#include "catalog/pg_opclass.h"
+#include "catalog/pg_type.h"
+#include "commands/defrem.h"
+#include "miscadmin.h"
+#include "utils/builtins.h"
+#include "utils/lsyscache.h"
+#include "utils/memutils.h"
+#include "utils/syscache.h"
+
+static OSysCache *opclass_cache = NULL;
+
+static void o_opclass_cache_free_entry(Pointer entry);
+static void o_opclass_cache_fill_entry(Pointer *entry_ptr, OSysCacheKey *key,
+									   Pointer arg);
+
+O_SYS_CACHE_FUNCS(opclass_cache, OOpclass, 1);
+
+static OSysCacheFuncs opclass_cache_funcs =
+{
+	.free_entry = o_opclass_cache_free_entry,
+	.fill_entry = o_opclass_cache_fill_entry
+};
+
+/*
+ * Initializes the opclass sys cache memory.
+ */
+O_SYS_CACHE_INIT_FUNC(opclass_cache)
+{
+	Oid			keytypes[] = {OIDOID};
+
+	opclass_cache = o_create_sys_cache(SYS_TREES_OPCLASS_CACHE, false,
+									   OpclassOidIndexId, CLAOID, 1, keytypes,
+									   0, fastcache, mcxt,
+									   &opclass_cache_funcs);
+}
+
+
+/*
+ * o_opclass_get
+ *
+ * Look up Oriole opclass metadata by (datoid, opclassoid).
+ *
+ * Why datoid matters:
+ * Oriole sys-cache entries are database-scoped. During global page-pool
+ * eviction, a backend may inspect index pages that belong to another
+ * database. In such paths, relying on MyDatabaseId can resolve metadata in
+ * the wrong database context, causing cache misses and descriptor failures.
+ *
+ * If datoid == InvalidOid, keep legacy behavior and infer database context
+ * from o_sys_cache_set_datoid_lsn(). New call sites should pass explicit
+ * object datoid whenever available.
+ */
+OOpclass *
+o_opclass_get(Oid opclassoid, Oid datoid)
+{
+	XLogRecPtr	cur_lsn;
+
+	o_sys_cache_set_datoid_lsn(&cur_lsn, datoid == InvalidOid ? &datoid : NULL);
+	return o_opclass_cache_search(datoid, opclassoid, cur_lsn,
+								  opclass_cache->nkeys);
+}
+
+HeapTuple
+o_opclass_cache_search_htup(TupleDesc tupdesc, Oid opclassoid)
+{
+	XLogRecPtr	cur_lsn;
+	Oid			datoid;
+	HeapTuple	result = NULL;
+	Datum		values[Natts_pg_opclass] = {0};
+	bool		nulls[Natts_pg_opclass] = {0};
+	OOpclass   *o_opclass;
+	NameData	oname;
+
+	o_sys_cache_set_datoid_lsn(&cur_lsn, &datoid);
+	o_opclass = o_opclass_cache_search(datoid, opclassoid, cur_lsn,
+									   opclass_cache->nkeys);
+	if (o_opclass)
+	{
+		values[Anum_pg_opclass_oid - 1] = o_opclass->key.keys[0];
+		namestrcpy(&oname, "");
+		values[Anum_pg_opclass_opcname - 1] = NameGetDatum(&oname);
+		values[Anum_pg_opclass_opcfamily - 1] =
+			ObjectIdGetDatum(o_opclass->opfamily);
+		values[Anum_pg_opclass_opcintype - 1] =
+			ObjectIdGetDatum(o_opclass->inputtype);
+
+		result = heap_form_tuple(tupdesc, values, nulls);
+	}
+	return result;
+}
+
+void
+o_opclass_cache_fill_entry(Pointer *entry_ptr, OSysCacheKey *key, Pointer arg)
+{
+	HeapTuple	opclasstuple;
+	Form_pg_opclass opclassform;
+	OOpclass   *o_opclass = (OOpclass *) *entry_ptr;
+	Oid			opclassoid = DatumGetObjectId(key->keys[0]);
+	Oid			inputtype;
+
+	/*
+	 * find typecache entry
+	 */
+	opclasstuple = SearchSysCache1(CLAOID, key->keys[0]);
+	if (!HeapTupleIsValid(opclasstuple))
+		elog(ERROR, "cache lookup failed for opclass %u", opclassoid);
+	opclassform = (Form_pg_opclass) GETSTRUCT(opclasstuple);
+
+	if (o_opclass == NULL)
+	{
+		o_opclass = palloc0(sizeof(OOpclass));
+		*entry_ptr = (Pointer) o_opclass;
+	}
+	else
+	{
+		Assert(false);
+	}
+
+	o_opclass->opfamily = opclassform->opcfamily;
+	o_opclass->inputtype = opclassform->opcintype;
+
+	inputtype = o_opclass->inputtype;
+	o_opclass->ssupOid = get_opfamily_proc(o_opclass->opfamily, inputtype,
+										   inputtype, BTSORTSUPPORT_PROC);
+	o_opclass->cmpOid = get_opfamily_proc(o_opclass->opfamily, inputtype,
+										  inputtype, BTORDER_PROC);
+	ReleaseSysCache(opclasstuple);
+}
+
+void
+o_opclass_cache_free_entry(Pointer entry)
+{
+	pfree(entry);
+}
+
+/*
+ * A tuple print function for o_print_btree_pages()
+ */
+void
+o_opclass_cache_tup_print(BTreeDescr *desc, StringInfo buf,
+						  OTuple tup, Pointer arg)
+{
+	OOpclass   *o_opclass = (OOpclass *) tup.data;
+
+	appendStringInfo(buf, "(");
+	o_sys_cache_key_print(desc, buf, tup, arg);
+	appendStringInfo(buf, ", opfamily: %u, inputtype: %d, "
+					 "cmpOid: %u, ssupOid: %u)",
+					 o_opclass->opfamily, o_opclass->inputtype,
+					 o_opclass->cmpOid, o_opclass->ssupOid);
+}

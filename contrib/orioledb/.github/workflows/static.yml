@@ -1,0 +1,55 @@
+name: static
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  static:
+    # Only run on push events OR pull requests from forks
+    if: |
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name != github.repository
+    runs-on:
+      - blacksmith-4vcpu-ubuntu-2404
+    strategy:
+      fail-fast: false
+      matrix:
+        pg_version: [16, 17]
+        compiler: [clang, gcc]
+    env:
+      LLVM_VER: 18
+      CPU: ${{ matrix.cpu }}
+      CHECK_TYPE: static
+      PG_VERSION: ${{ matrix.pg_version }}
+      COMPILER: ${{ matrix.compiler }}
+    steps:
+      - name: Checkout extension code into workspace directory
+        uses: actions/checkout@v6
+        with:
+          path: orioledb
+      - name: Get the required tag name
+        shell: bash
+        run: |
+          echo "PGTAG=$(grep '^${{ matrix.pg_version }}: ' orioledb/.pgtags | cut -d' ' -f2-)" >> $GITHUB_ENV
+      - name: Checkout PostgreSQL code into workspace directory
+        uses: actions/checkout@v6
+        with:
+          repository: orioledb/postgres
+          ref: ${{ env.PGTAG }}
+          path: postgresql
+      - name: Setup prerequisites
+        run: bash ./orioledb/ci/prerequisites.sh
+      - name: Build
+        run: bash ./orioledb/ci/build.sh
+      - name: Static analysis
+        run: bash ./orioledb/ci/static.sh
+      - name: Upload clang reports
+        uses: actions/upload-artifact@v7
+        if: ${{ failure() && matrix.compiler == 'clang' }}
+        with:
+          name: ${{ matrix.pg_version }}_${{ matrix.compiler }}_report
+          path: |
+            /tmp/scan-build-*
+          retention-days: 2
+          if-no-files-found: ignore

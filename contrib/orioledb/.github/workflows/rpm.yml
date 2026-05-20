@@ -1,0 +1,67 @@
+name: rpm
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build'
+        required: true
+        default: '14'
+      target:
+        description: 'Target to build'
+        required: true
+        default: 'nosignbuild14'
+
+jobs:
+  build_rpms:
+    runs-on: [self-hosted, X64, CentOS]
+    strategy:
+      fail-fast: true
+    steps:
+      - name: Setup prerequisites
+        run: |
+          sudo yum install -y llvm llvm-devel clang clang-devel python3-devel \
+                              libxml2-devel libxslt-devel libuuid-devel \
+                              zlib-devel flex bison curl git rpmdevtools \
+                              glibc-devel perl readline-devel pgdg-srpm-macros \
+                              libicu-devel llvm-toolset-7-clang \
+                              krb5-devel e2fsprogs-devel openldap-devel \
+                              pam-devel perl-ExtUtils-Embed tcl-devel \
+                              systemtap-sdt-devel libselinux-devel \
+                              openssl-devel systemd-devel llvm-toolset-7-clang \
+                              llvm5.0-devel gcc gcc-c++ libzstd-devel lz4-devel
+      - name: Checkout PGRPMs into workspace directory
+        uses: actions/checkout@v6
+        with:
+          repository: orioledb/pgrpms
+          ref: orioledb
+      - name: Checkout extension code into workspace directory
+        uses: actions/checkout@v6
+        with:
+          path: orioledb
+      - name: Get the required tag name
+        shell: bash
+        run: |
+          echo "PGTAG=$(grep '^${{ github.event.inputs.version }}: ' orioledb/.pgtags | cut -d' ' -f2-)" >> $GITHUB_ENV
+      - name: Checkout PostgreSQL code into workspace directory
+        uses: actions/checkout@v6
+        with:
+          repository: orioledb/postgres
+          ref: ${{ env.PGTAG }}
+          path: rpm/redhat/${{ github.event.inputs.version }}/postgresql-${{ github.event.inputs.version }}/EL-7/pgsrc
+      - name: Archive sources
+        run: |
+          mv orioledb rpm/redhat/${{ github.event.inputs.version }}/postgresql-${{ github.event.inputs.version }}/EL-7/pgsrc/contrib
+          cd rpm/redhat/${{ github.event.inputs.version }}/postgresql-${{ github.event.inputs.version }}/EL-7
+          tar -czf orioledb.tar.gz -C pgsrc .
+          rm -rf pgsrc
+      - name: Build
+        run: |
+          rm -rf ~/rpm${{ github.event.inputs.version }} ~/rpmbuild
+          cd rpm/redhat/${{ github.event.inputs.version }}/postgresql-${{ github.event.inputs.version }}/EL-7
+          CC=/opt/rh/llvm-toolset-7/root/usr/bin/clang make ${{ github.event.inputs.target }}
+      - name: Upload image
+        uses: actions/upload-artifact@v7
+        with:
+          name: rpms
+          path: ~/rpm${{ github.event.inputs.version }}/RPMS/x86_64/*.rpm

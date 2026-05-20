@@ -1,0 +1,286 @@
+---
+id: getting-started
+sidebar_label: Getting Started
+---
+
+# Usage
+
+OrioleDB uses PosgreSQL's built-in Table Access Method API. When you create a table you can specify `USING orioledb;`.
+
+## Quick start
+
+### Start PostgreSQL
+
+The OrioleDB extension requires PostgreSQL pluggable Storage. Until the PostgreSQL community merges the [required patches](../intro.mdx#patch-set), you can use the OrioleDB docker image to start PostgreSQL on your machine:
+
+```bash title="bash"
+docker run -d --name orioledb -p 5432:5432 orioledb/orioledb
+```
+
+### Enable the extension
+
+You can enable the OrioleDB extension by running the following command:
+
+```sql title="psql"
+CREATE EXTENSION orioledb;
+```
+
+### Create tables
+
+Let's define a `blog_post` table, which stores blog posts and has two indices: primary key on the `id` column and secondary key by `published_at` column.
+
+```sql title="psql"
+-- Create a table
+CREATE TABLE blog_post
+(
+    id int8 NOT NULL,
+    title text NOT NULL,
+    body text NOT NULL,
+    author text NOT NULL,
+    published_at timestamptz  NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    views bigint NOT NULL,
+    PRIMARY KEY(id)
+) USING orioledb; -- Define the storage engine
+
+-- Create an index
+CREATE INDEX blog_post_published_at ON blog_post(published_at);
+```
+
+OrioleDB uses index-organized tables. So, the selection of the primary key is a very critical decision affecting performance. If you do not specify a primary key, a hidden surrogate primary key will be created over the virtual `ctid` column.
+
+### Query tables
+
+Query your tables using regular DML queries, including `SELECT`, `INSERT`, `UPDATE`, `DELETE` and `INSERT ON CONFLICT`.
+
+For example:
+
+```sql title="psql"
+INSERT INTO blog_post (id, title, body, author, views)
+VALUES (1, 'Hello, World!', 'This is my first blog post.', 'John Doe', 1000);
+
+SELECT * FROM blog_post ORDER BY published_at DESC LIMIT 10;
+
+```
+
+### View query plans
+
+Plans of queries involving OrioleDB tables could be viewed using `EXPLAIN` clause as usual.
+
+```sql
+EXPLAIN SELECT * FROM blog_post ORDER BY published_at DESC LIMIT 10;
+```
+
+```bash title="Result"
+                                                 QUERY PLAN
+------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.15..1.67 rows=10 width=120)
+   ->  Index Scan Backward using blog_post_published_at on blog_post  (cost=0.15..48.95 rows=320 width=120)
+(2 rows)
+```
+
+```sql
+EXPLAIN SELECT * FROM blog_post WHERE id = 1;
+```
+
+```bash title="Result"
+                                    QUERY PLAN
+----------------------------------------------------------------------------------
+ Index Scan using blog_post_pkey on blog_post  (cost=0.15..8.17 rows=1 width=120)
+   Index Cond: (id = 1)
+(2 rows)
+```
+
+`EXPLAIN (ANALYZE, BUFFERS)` clause allows to view page access statistics.
+
+```sql
+# EXPLAIN (ANALYZE, BUFFERS)
+  SELECT * FROM blog_post ORDER BY published_at DESC LIMIT 10;
+                                                                       QUERY PLAN
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.29..0.54 rows=10 width=42) (actual time=0.100..0.210 rows=10 loops=1)
+   ->  Index Scan Backward using blog_post_published_at on blog_post  (cost=0.29..251.27 rows=9999 width=42) (actual time=0.097..0.202 rows=10 loops=1)
+ Planning:
+   Buffers: shared hit=35
+ Planning Time: 1.147 ms
+ Execution Time: 0.284 ms
+(6 rows)
+```
+
+## Advanced usage
+
+### Use OrioleDB tables by default
+
+If you want all your created tables use `orioledb` access method without explicitly specifying this each time at `CREATE
+TABLE`, add in your PostgreSQL config file:
+
+`default_table_access_method = 'orioledb'`
+
+NB: This doesn't affect system catalogs that can be only `heap`. Tables created before setting this parameter also
+retain their previous access method.
+
+### Collations
+
+OrioleDB tables support only ICU, C, and POSIX collations. So, make sure the cluster or database is set up with default collations that fall under those options, otherwise you have to write COLLATE for every "text" field of the table.
+
+ALTER COLLATION REFRESH VERSION is also disabled for collations that used for fields and indexes of orioledb tables.
+
+### Block-level data compression
+
+OrioleDB implements block-level compression. Compression levels are integer values from `-1` to `22`. Value of `-1` means no compression (default), values between 0 and 22 specified compression levels of zstd library.
+
+The following options control the compression level of a table:
+
+- `compress` – compression level for all table data structures (value of `-1` disables compression for the table, non-specifying makes `orioledb.default_compress` to be used),
+- `primary_compress` – compression level for the table primary key (in case of `-1` it's inherited from `compress` value for the table if it's positive, otherwise `orioledb.default_primary_compress` is used),
+- `toast_compress` – compression level for the table TOASTed values. (in case of `-1` it's inherited from `compress` value for the table if it's positive, otherwise `orioledb.default_toast_compress` is used)
+
+Individual indexes also have the `compress` option, which controls the compression level of a particular index, overriding the value of the table `compress` option.
+
+```sql
+CREATE TABLE compression_test
+(
+  id int8 NOT NULL,
+  value1 float8 NOT NULL,
+  value2 text NOT NULL,
+  PRIMARY KEY(id)
+)  USING orioledb
+   WITH (compress = 5, toast_compress = 10, primary_compress = -1);
+
+CREATE INDEX compression_test_value1_idx ON compression_test(value1)
+    WITH (compress = 22)
+CREATE INDEX compression_test_value2_idx ON compression_test(value2);
+```
+
+In this example primary key of `compression_test` table uses compression as specified by `orioledb.default_primary_compress` value, TOAST values are compressed with level of `10`, `compression_test_value1_idx` index is compressed with level of `22`, index `compression_test_value2_idx` is compressed with level of `5`.
+
+### Fillfactor
+
+OrioleDB tables and indices support `fillfactor` option similar to Postgres `heap` tables and indices [docs for
+heap](https://www.postgresql.org/docs/current/sql-createtable.html#RELOPTION-FILLFACTOR), [docs for
+index](https://www.postgresql.org/docs/current/sql-createindex.html#INDEX-RELOPTION-FILLFACTOR). Reasonably low
+fillfactor speeds up table data modifications at cost of reserving some extra place on disk. Setting it is recommended for tables where modification rate is expected to be significant.
+
+```sql
+CREATE TABLE o_test_fillfactor
+(
+	 f1 text,
+	 f2 varchar,
+	 f3 integer,
+	 PRIMARY KEY(f1)
+) USING orioledb WITH (fillfactor = 60);
+
+CREATE INDEX o_test_fillfactor_ix1 ON o_test_fillfactor(f2) WITH (fillfactor = 80);
+```
+
+In `heap` tables lower `fillfactor` mainly speeds up updates by allowing place for HOT-updated tuples and decreasing
+page locks at concurrent modifications by spreading them to bigger number of pages. In `orioledb` tables pages don't
+store old tuple versions and pages are divided into chunks so they already don't have these limitations. But with tables
+being index-organised OrioleDB inserts tuples into specific pages according to `btree` structure. In OrioleDB `fillfactor` speeds up both inserts and updates by decreasing the number of page-splits when a leaf page has no place to accommodate new tuples. It works in the same manner for the index and for the table.
+
+Fillfactor could be modified at any point of time
+
+```sql
+ALTER TABLE o_test_fillfactor SET (fillfactor = 20);
+ALTER INDEX o_test_fillfactor_ix1 SET (fillfactor = 50);
+```
+
+### Sequence caching
+
+OrioleDB optimizes performance by bypassing PostgreSQL's native transaction ID (XID) allocation and heap write-ahead logging (WAL) when operations are strictly confined to OrioleDB tables. However, because PostgreSQL sequences are implemented as `heap` relations, invoking `nextval()` modifies heap structures. This forces the assignment of a full PostgreSQL XID, negating OrioleDB's transaction optimizations.
+
+To prevent unnecessary XID allocations when using sequence-backed columns, configure sequences with a `CACHE` value:
+
+```sql
+CREATE SEQUENCE my_seq CACHE 100;
+```
+
+With caching enabled, only the initial `nextval()` call requires `heap` modification and XID allocation to fetch a block of values. Subsequent calls within the same session retrieve values from memory, preserving OrioleDB's optimized transaction handling.
+
+:::note
+This optimization is critical for workloads characterized by high volumes of small transactions. For large transactions, the performance penalty is negligible as the cost of XID allocation is heavily amortized.
+:::
+
+### Undo log size calculation
+
+OrioleDB stores some of the modifications data in temporary Undo logs. While this storage separate from relation
+files is more convenient and not prone to bloating, table and database size reported by Postgres functions won't
+count Undo logs size. Use special function to count Undo-related temporary data:
+
+```sql
+SELECT * FROM orioledb_undo_size();
+```
+
+Undo data is counted in three categories: system undo, user page-level undo and user row-level undo.
+
+### Data deletion
+
+OrioleDB automatically merges sparse pages. Therefore, when many rows are deleted, data pages are freed and available for future usage. Data files aren't currently shrunk in such a situation, but that would be implemented soon.
+
+### Checkpoints, WAL & recovery
+
+OrioleDB has its own recovery mechanism: copy-on-write checkpoints and row-level WAL. However, both OrioleDB's checkpoints and WAL are integrated into PostgreSQL. PostgreSQL checkpointer process handles OrioleDB's tables as well. PostgreSQL WAL stream contains both WAL-records of built-in PostgreSQL tables and row-level WAL-records of OrioleDB's tables.
+
+Recovery using row-level WAL records might require significant CPU resources. Therefore parallel recovery of OrioleDB's tables is implemented. OrioleDB launches its own pool of recovery workers, each of them responsible for replaying a particular part of WAL records.
+
+OrioleDB has its own pool background writer processes (the `orioledb.bgwriter_num_workers` GUC parameter defines the pool size). Usage of multiple background writers increases the effectiveness of IO-utilization on modern hardware.
+
+### Experimental support of the block devices
+
+OrioleDB implements experimental support of direct interaction with block devices mode. This mode removes the overhead of the filesystem.
+
+In this mode, the main part of table data is stored in the filesystem, but small metadata is still stored in the data directory.
+
+The current implementation of block devices support contains memory leaks, resulting in the error message `device file overflow` even if the actual data size is much less than block device size. In this case, only the re-initialization of the data directory could help.
+
+We plan to fix memory leaks soon and develop tools for monitoring free block device space.
+
+In order to activate block device mode, one should specify `orioledb.device_filename` and `orioledb.device_length` GUC parameters. When the `orioledb.use_mmap` GUC parameter is enabled, the block device is connected using `mmap`. This mode is optimal for NVRAM, which directly connects to the data bus. `mmap` mode is not recommended for regular devices because the current `mmap` implementation in Linux has very bug concurrency.
+
+### Experimental support of indexes other than btree
+
+OrioleDB has experimental support for indexes other than btree. It is implemented by an internal "bridge index" between non-btree index and OrioleDB table. Bridge index is automatically added when the first non-btree index is built. 
+
+```sql
+CREATE INDEX blog_post_title_gin_idx ON blog_post USING GIN (title);
+```
+
+Manual build of a bridge index for a table is not necessary but possible:
+```sql
+ALTER TABLE blog_post SET (index_bridging);
+```
+
+If all existing bridged indexes for a table were removed, the "bridge index" would not be removed automatically. If you don't plan to add non-btree indexes anymore you can delete unnecessary "bridge index" for this table:
+```sql
+ALTER TABLE blog_post RESET (index_bridging);
+```
+
+Note: btree index could also be built as a bridged index (use only for testing purposes, not recommended) 
+```sql
+CREATE INDEX blog_post_title_idx ON blog_post USING btree(title) with (orioledb_index = off);
+```
+
+## Current limitations
+
+OrioleDB is currently in the development stage. Therefore it has the following temporary limitations.
+
+1.  `pg_rewind` copies OrioleDB tables completely. Shortly OrioleDB will implement incremental copying of OrioleDB tables using `pg_rewind`.
+2.  OrioleDB supports parallel sequential scan, but not other types of scan.
+3.  OrioleDB doesn't support prepared transactions.
+4.  OrioleDB support of non-btree indexes is experimental yet.
+5.  OrioleDB supports bitmap scan only for int4, int8 and ctid primary keys.
+6.  Row-level concurrency in OrioleDB has some [differences](../architecture/row-level-concurrency.mdx).
+7.  OrioleDB doesn't support `CLUSTER` and `VACUUM FULL` commands yet, because we don't implement rewrite of the tables for these commands. And also `CLUSTER` doesn't really makes much sense for index-organized tables.
+8.  `REINDEX CONCURRENTLY` now is not supported.
+9.  OrioleDB tables don't support `Sample Scans` yet.
+10. OrioleDB does not implement true SERIALIZABLE Snapshot Isolation. The `orioledb.serializable` GUC controls how SERIALIZABLE transactions are handled:
+    - `table_lock` (default): every relation a SERIALIZABLE transaction touches is protected by a coarse heavyweight `ExclusiveLock`. Correct, but pessimistic — concurrent non-conflicting workloads degrade to serial execution.
+    - `error`: reject SERIALIZABLE transactions with `ERRCODE_FEATURE_NOT_SUPPORTED` (the legacy behavior).
+    - `repeatable_read`: treat SERIALIZABLE as `REPEATABLE READ` for OrioleDB tables only — no extra locks are taken, OrioleDB's CSN snapshot already provides per-transaction stable reads. Heap tables in the same transaction continue to use PG's SSI as usual.
+11. Backward fetches from a cursor is supported only when the cursor is declared with `SCROLL`.
+12. OrioleDB doesn't use checksums on data pages and initializing a database
+cluster with `-k` (`--data-checksums`) doesn't have effect on OrioleDB tables.
+13. PostgreSQL sequences are backed by heap relations. Accessing them (e.g., via `nextval()`) forces full PostgreSQL Transaction ID (XID) allocation, bypassing OrioleDB's optimized transaction mechanics unless sequence caching is utilized.
+
+## Links
+
+See [description of OrioleDB's settings](configuration.mdx), [experimental decoupled storage and compute mode](decoupled-storage.mdx), and [experimental undo-based rewind](rewind.mdx)

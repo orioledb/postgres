@@ -1,0 +1,587 @@
+CREATE SCHEMA createas;
+SET SESSION search_path = 'createas';
+CREATE MATERIALIZED VIEW test_matview AS SELECT 1;
+DROP MATERIALIZED VIEW test_matview;
+CREATE EXTENSION orioledb;
+CREATE TABLE o_test_create_as (order_id, item_id, quantity, price)
+	USING orioledb AS (VALUES (100, 1, 4, 100.00), (100, 3, 1, 200.00));
+SELECT orioledb_tbl_indices('o_test_create_as'::regclass);
+                      orioledb_tbl_indices                       
+-----------------------------------------------------------------
+ Index ctid_primary                                             +
+     Index type: primary, unique, ctid                          +
+     Leaf tuple size: 5, non-leaf tuple size: 1                 +
+     Non-leaf tuple fields: ctid                                +
+     Leaf tuple fields: ctid, order_id, item_id, quantity, price+
+ 
+(1 row)
+
+-- Should fail - exists
+CREATE TABLE o_test_create_as (order_id, item_id, quantity, price)
+	USING orioledb AS (VALUES (100, 1, 4, 100.00), (100, 3, 1, 200.00));
+ERROR:  relation "o_test_create_as" already exists
+SELECT * FROM o_test_create_as;
+ order_id | item_id | quantity | price  
+----------+---------+----------+--------
+      100 |       1 |        4 | 100.00
+      100 |       3 |        1 | 200.00
+(2 rows)
+
+BEGIN;
+CREATE TABLE o_test_create_as_abort (order_id, item_id, quantity, price)
+	USING orioledb AS (VALUES (100, 1, 4, 100.00), (100, 3, 1, 200.00));
+SELECT * FROM o_test_create_as_abort;
+ order_id | item_id | quantity | price  
+----------+---------+----------+--------
+      100 |       1 |        4 | 100.00
+      100 |       3 |        1 | 200.00
+(2 rows)
+
+ROLLBACK;
+CREATE TABLE o_test_create_as_less_atts (order_id, item_id)
+	USING orioledb AS (VALUES (100, 1, 4, 100.00), (100, 3, 1, 200.00));
+SELECT * FROM o_test_create_as_less_atts;
+ order_id | item_id | column3 | column4 
+----------+---------+---------+---------
+      100 |       1 |       4 |  100.00
+      100 |       3 |       1 |  200.00
+(2 rows)
+
+CREATE TABLE o_test_create_as_no_atts
+	USING orioledb AS (VALUES (100, 1, 4, 100.00), (100, 3, 1, 200.00));
+SELECT * FROM o_test_create_as_no_atts;
+ column1 | column2 | column3 | column4 
+---------+---------+---------+---------
+     100 |       1 |       4 |  100.00
+     100 |       3 |       1 |  200.00
+(2 rows)
+
+CREATE TABLE o_test_create_as_with_compress (order_id, item_id, quantity, price)
+	USING orioledb WITH (compress = 1) AS
+		(VALUES (100, 1, 4, 100.00), (100, 3, 1, 200.00));
+SELECT orioledb_tbl_indices('o_test_create_as_with_compress'::regclass);
+                      orioledb_tbl_indices                       
+-----------------------------------------------------------------
+ Index ctid_primary                                             +
+     Index type: primary, unique, compression = 1, ctid         +
+     Leaf tuple size: 5, non-leaf tuple size: 1                 +
+     Non-leaf tuple fields: ctid                                +
+     Leaf tuple fields: ctid, order_id, item_id, quantity, price+
+ 
+(1 row)
+
+SELECT * FROM o_test_create_as_with_compress;
+ order_id | item_id | quantity | price  
+----------+---------+----------+--------
+      100 |       1 |        4 | 100.00
+      100 |       3 |        1 | 200.00
+(2 rows)
+
+CREATE TABLE o_test_create_as_with_data (order_id, item_id, quantity, price)
+	USING orioledb AS (VALUES (100, 1, 4, 100.00), (100, 3, 1, 200.00))
+	WITH DATA;
+SELECT * FROM o_test_create_as_with_data;
+ order_id | item_id | quantity | price  
+----------+---------+----------+--------
+      100 |       1 |        4 | 100.00
+      100 |       3 |        1 | 200.00
+(2 rows)
+
+SELECT relname FROM orioledb_table_oids()
+	JOIN pg_class ON reloid = oid WHERE relname = 'o_test_create_as_with_data';
+          relname           
+----------------------------
+ o_test_create_as_with_data
+(1 row)
+
+DROP TABLE o_test_create_as_with_data;
+SELECT * FROM o_test_create_as_with_data;
+ERROR:  relation "o_test_create_as_with_data" does not exist
+LINE 1: SELECT * FROM o_test_create_as_with_data;
+                      ^
+SELECT relname FROM orioledb_table_oids()
+	JOIN pg_class ON reloid = oid WHERE relname = 'o_test_create_as_with_data';
+ relname 
+---------
+(0 rows)
+
+CREATE TABLE o_test_create_as_no_data (order_id, item_id, quantity, price)
+	USING orioledb AS (VALUES (100, 1, 4, 100.00), (100, 3, 1, 200.00))
+	WITH NO DATA;
+SELECT * FROM o_test_create_as_no_data;
+ order_id | item_id | quantity | price 
+----------+---------+----------+-------
+(0 rows)
+
+INSERT INTO o_test_create_as_no_data
+	VALUES (100, 1, 4, 100.00), (100, 3, 1, 200.00);
+SELECT * FROM o_test_create_as_no_data;
+ order_id | item_id | quantity | price  
+----------+---------+----------+--------
+      100 |       1 |        4 | 100.00
+      100 |       3 |        1 | 200.00
+(2 rows)
+
+-- EXPLAIN ANALYZE tests
+-- Wrapper function, which converts result of SQL query to the text
+CREATE OR REPLACE FUNCTION query_to_text(sql TEXT, out result text)
+	RETURNS SETOF TEXT AS $$
+	BEGIN
+		FOR result IN EXECUTE sql LOOP
+			RETURN NEXT;
+		END LOOP;
+	END $$
+LANGUAGE plpgsql;
+BEGIN;
+SET LOCAL default_table_access_method = 'orioledb';
+SELECT regexp_replace(t, '[\d\.]+', 'x', 'g')
+	FROM query_to_text($$
+		EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
+			SELECT * INTO tbl_into FROM generate_series(1,3) a; $$) as t;
+                       regexp_replace                       
+------------------------------------------------------------
+ Function Scan on generate_series a (actual rows=x loops=x)
+(1 row)
+
+COMMIT;
+BEGIN;
+SET LOCAL default_table_access_method = 'orioledb';
+SELECT regexp_replace(t, '[\d\.]+', 'x', 'g')
+	FROM query_to_text($$
+		EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
+			CREATE TABLE tbl_as_nodata (a)
+				AS SELECT generate_series(1,3) WITH NO DATA; $$) as t;
+        regexp_replace         
+-------------------------------
+ ProjectSet (never executed)
+   ->  Result (never executed)
+(2 rows)
+
+SELECT * FROM tbl_as_nodata;
+ a 
+---
+(0 rows)
+
+SELECT regexp_replace(t, '[\d\.]+', 'x', 'g')
+	FROM query_to_text($$
+		EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
+			CREATE TABLE tbl_as_nodata (a)
+				AS SELECT generate_series(1,3) WITH NO DATA; $$) as t;
+ERROR:  relation "tbl_as_nodata" already exists
+CONTEXT:  PL/pgSQL function query_to_text(text) line 3 at FOR over EXECUTE statement
+ROLLBACK;
+BEGIN;
+SET LOCAL default_table_access_method = 'orioledb';
+SELECT regexp_replace(t, '[\d\.]+', 'x', 'g')
+	FROM query_to_text($$
+		EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
+			CREATE TABLE tbl_as_nodata (a)
+				AS SELECT generate_series(1,3) WITH NO DATA; $$) as t;
+        regexp_replace         
+-------------------------------
+ ProjectSet (never executed)
+   ->  Result (never executed)
+(2 rows)
+
+COMMIT;
+BEGIN;
+SET LOCAL default_table_access_method = 'orioledb';
+SELECT regexp_replace(t, '[\d\.]+', 'x', 'g')
+	FROM query_to_text($$
+		EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
+			CREATE TABLE tbl_as_data (a)
+				AS SELECT generate_series(1,3) WITH DATA; $$) as t;
+            regexp_replace            
+--------------------------------------
+ ProjectSet (actual rows=x loops=x)
+   ->  Result (actual rows=x loops=x)
+(2 rows)
+
+SELECT * FROM tbl_as_data;
+ a 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+SELECT regexp_replace(t, '[\d\.]+', 'x', 'g')
+	FROM query_to_text($$
+		EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
+			CREATE TABLE tbl_as_data (a)
+				AS SELECT generate_series(1,3) WITH DATA; $$) as t;
+ERROR:  relation "tbl_as_data" already exists
+CONTEXT:  PL/pgSQL function query_to_text(text) line 3 at FOR over EXECUTE statement
+ROLLBACK;
+BEGIN;
+SET LOCAL default_table_access_method = 'orioledb';
+SELECT regexp_replace(t, '[\d\.]+', 'x', 'g')
+	FROM query_to_text($$
+		EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
+			CREATE TABLE tbl_as_data (a)
+				AS SELECT generate_series(1,3) WITH DATA; $$) as t;
+            regexp_replace            
+--------------------------------------
+ ProjectSet (actual rows=x loops=x)
+   ->  Result (actual rows=x loops=x)
+(2 rows)
+
+COMMIT;
+SELECT * FROM tbl_into;
+ a 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+SELECT * FROM tbl_as_nodata;
+ a 
+---
+(0 rows)
+
+SELECT * FROM tbl_as_data;
+ a 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+CREATE SEQUENCE o_matview_seq;
+CREATE MATERIALIZED VIEW o_test_matview (order_id, item_id, quantity, price)
+	USING orioledb AS (VALUES (100, 1, 'a',
+							   nextval('o_matview_seq'::regclass)),
+							  (100, 3, 'b',
+							   nextval('o_matview_seq'::regclass)));
+SELECT orioledb_tbl_indices('o_test_matview'::regclass);
+                      orioledb_tbl_indices                       
+-----------------------------------------------------------------
+ Index ctid_primary                                             +
+     Index type: primary, unique, ctid                          +
+     Leaf tuple size: 5, non-leaf tuple size: 1                 +
+     Non-leaf tuple fields: ctid                                +
+     Leaf tuple fields: ctid, order_id, item_id, quantity, price+
+ 
+(1 row)
+
+SELECT * FROM o_test_matview;
+ order_id | item_id | quantity | price 
+----------+---------+----------+-------
+      100 |       1 | a        |     1
+      100 |       3 | b        |     2
+(2 rows)
+
+SELECT * FROM o_test_matview;
+ order_id | item_id | quantity | price 
+----------+---------+----------+-------
+      100 |       1 | a        |     1
+      100 |       3 | b        |     2
+(2 rows)
+
+REFRESH MATERIALIZED VIEW o_test_matview;
+SELECT orioledb_tbl_indices('o_test_matview'::regclass);
+                      orioledb_tbl_indices                       
+-----------------------------------------------------------------
+ Index ctid_primary                                             +
+     Index type: primary, unique, ctid                          +
+     Leaf tuple size: 5, non-leaf tuple size: 1                 +
+     Non-leaf tuple fields: ctid                                +
+     Leaf tuple fields: ctid, order_id, item_id, quantity, price+
+ 
+(1 row)
+
+SELECT * FROM o_test_matview;
+ order_id | item_id | quantity | price 
+----------+---------+----------+-------
+      100 |       1 | a        |     3
+      100 |       3 | b        |     4
+(2 rows)
+
+SELECT * FROM o_test_matview;
+ order_id | item_id | quantity | price 
+----------+---------+----------+-------
+      100 |       1 | a        |     3
+      100 |       3 | b        |     4
+(2 rows)
+
+REFRESH MATERIALIZED VIEW o_test_matview;
+SELECT * FROM o_test_matview;
+ order_id | item_id | quantity | price 
+----------+---------+----------+-------
+      100 |       1 | a        |     5
+      100 |       3 | b        |     6
+(2 rows)
+
+SELECT * FROM o_test_matview;
+ order_id | item_id | quantity | price 
+----------+---------+----------+-------
+      100 |       1 | a        |     5
+      100 |       3 | b        |     6
+(2 rows)
+
+CREATE INDEX o_test_matview_ix1 ON o_test_matview (item_id DESC);
+SELECT orioledb_tbl_indices('o_test_matview'::regclass);
+                      orioledb_tbl_indices                       
+-----------------------------------------------------------------
+ Index ctid_primary                                             +
+     Index type: primary, unique, ctid                          +
+     Leaf tuple size: 5, non-leaf tuple size: 1                 +
+     Non-leaf tuple fields: ctid                                +
+     Leaf tuple fields: ctid, order_id, item_id, quantity, price+
+ Index o_test_matview_ix1                                       +
+     Index type: secondary                                      +
+     Leaf tuple size: 2, non-leaf tuple size: 2                 +
+     Non-leaf tuple fields: item_id, ctid                       +
+     Leaf tuple fields: item_id, ctid                           +
+ 
+(1 row)
+
+SET enable_seqscan = off;
+EXPLAIN (COSTS OFF) SELECT * FROM o_test_matview ORDER BY item_id DESC;
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Index Scan using o_test_matview_ix1 on o_test_matview
+(1 row)
+
+SELECT * FROM o_test_matview ORDER BY item_id DESC;
+ order_id | item_id | quantity | price 
+----------+---------+----------+-------
+      100 |       3 | b        |     6
+      100 |       1 | a        |     5
+(2 rows)
+
+REINDEX INDEX o_test_matview_ix1;
+EXPLAIN (COSTS OFF) SELECT * FROM o_test_matview ORDER BY item_id DESC;
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Index Scan using o_test_matview_ix1 on o_test_matview
+(1 row)
+
+SELECT * FROM o_test_matview ORDER BY item_id DESC;
+ order_id | item_id | quantity | price 
+----------+---------+----------+-------
+      100 |       3 | b        |     6
+      100 |       1 | a        |     5
+(2 rows)
+
+CREATE INDEX o_test_matview_ix2 ON o_test_matview (quantity);
+SELECT orioledb_tbl_indices('o_test_matview'::regclass);
+                      orioledb_tbl_indices                       
+-----------------------------------------------------------------
+ Index ctid_primary                                             +
+     Index type: primary, unique, ctid                          +
+     Leaf tuple size: 5, non-leaf tuple size: 1                 +
+     Non-leaf tuple fields: ctid                                +
+     Leaf tuple fields: ctid, order_id, item_id, quantity, price+
+ Index o_test_matview_ix1                                       +
+     Index type: secondary                                      +
+     Leaf tuple size: 2, non-leaf tuple size: 2                 +
+     Non-leaf tuple fields: item_id, ctid                       +
+     Leaf tuple fields: item_id, ctid                           +
+ Index o_test_matview_ix2                                       +
+     Index type: secondary                                      +
+     Leaf tuple size: 2, non-leaf tuple size: 2                 +
+     Non-leaf tuple fields: quantity, ctid                      +
+     Leaf tuple fields: quantity, ctid                          +
+ 
+(1 row)
+
+ALTER MATERIALIZED VIEW o_test_matview RENAME quantity TO quantity2;
+SELECT orioledb_tbl_indices('o_test_matview'::regclass);
+                       orioledb_tbl_indices                       
+------------------------------------------------------------------
+ Index ctid_primary                                              +
+     Index type: primary, unique, ctid                           +
+     Leaf tuple size: 5, non-leaf tuple size: 1                  +
+     Non-leaf tuple fields: ctid                                 +
+     Leaf tuple fields: ctid, order_id, item_id, quantity2, price+
+ Index o_test_matview_ix1                                        +
+     Index type: secondary                                       +
+     Leaf tuple size: 2, non-leaf tuple size: 2                  +
+     Non-leaf tuple fields: item_id, ctid                        +
+     Leaf tuple fields: item_id, ctid                            +
+ Index o_test_matview_ix2                                        +
+     Index type: secondary                                       +
+     Leaf tuple size: 2, non-leaf tuple size: 2                  +
+     Non-leaf tuple fields: quantity2, ctid                      +
+     Leaf tuple fields: quantity2, ctid                          +
+ 
+(1 row)
+
+SELECT orioledb_table_description('o_test_matview'::regclass);
+                orioledb_table_description                 
+-----------------------------------------------------------
+ Compress = -1, Primary compress = -1, TOAST compress = -1+
+     Column |    Type | Collation | Nullable | Droped     +
+   order_id | integer |    (null) |     true |  false     +
+    item_id | integer |    (null) |     true |  false     +
+  quantity2 |    text |   default |     true |  false     +
+      price |  bigint |    (null) |     true |  false     +
+ 
+(1 row)
+
+\d+ o_test_matview
+                         Materialized view "createas.o_test_matview"
+  Column   |  Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
+-----------+---------+-----------+----------+---------+----------+--------------+-------------
+ order_id  | integer |           |          |         | plain    |              | 
+ item_id   | integer |           |          |         | plain    |              | 
+ quantity2 | text    |           |          |         | extended |              | 
+ price     | bigint  |           |          |         | plain    |              | 
+Indexes:
+    "o_test_matview_ix1" btree (item_id DESC)
+    "o_test_matview_ix2" btree (quantity2)
+View definition:
+ SELECT "*VALUES*".column1 AS order_id,
+    "*VALUES*".column2 AS item_id,
+    "*VALUES*".column3 AS quantity2,
+    "*VALUES*".column4 AS price
+   FROM (VALUES (100,1,'a'::text,nextval('o_matview_seq'::regclass)), (100,3,'b'::text,nextval('o_matview_seq'::regclass))) "*VALUES*";
+
+EXPLAIN (COSTS OFF) SELECT * FROM o_test_matview ORDER BY quantity2;
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Index Scan using o_test_matview_ix2 on o_test_matview
+(1 row)
+
+SELECT * FROM o_test_matview ORDER BY quantity2;
+ order_id | item_id | quantity2 | price 
+----------+---------+-----------+-------
+      100 |       1 | a         |     5
+      100 |       3 | b         |     6
+(2 rows)
+
+REFRESH MATERIALIZED VIEW o_test_matview WITH NO DATA;
+SELECT * FROM o_test_matview;
+ERROR:  materialized view "o_test_matview" has not been populated
+HINT:  Use the REFRESH MATERIALIZED VIEW command.
+REFRESH MATERIALIZED VIEW o_test_matview;
+SELECT * FROM o_test_matview;
+ order_id | item_id | quantity2 | price 
+----------+---------+-----------+-------
+      100 |       1 | a         |     7
+      100 |       3 | b         |     8
+(2 rows)
+
+CREATE MATERIALIZED VIEW o_test_matview_no_data
+	(order_id, item_id, quantity, price) USING orioledb
+	AS (VALUES (100, 1, 4, nextval('o_matview_seq'::regclass)),
+			   (100, 3, 1, nextval('o_matview_seq'::regclass)))
+	WITH NO DATA;
+SELECT relname FROM orioledb_table_oids() JOIN pg_class ON reloid = oid
+	WHERE relname = 'o_test_matview_no_data';
+        relname         
+------------------------
+ o_test_matview_no_data
+(1 row)
+
+SELECT * FROM o_test_matview_no_data;
+ERROR:  materialized view "o_test_matview_no_data" has not been populated
+HINT:  Use the REFRESH MATERIALIZED VIEW command.
+REFRESH MATERIALIZED VIEW o_test_matview_no_data;
+SELECT * FROM o_test_matview_no_data;
+ order_id | item_id | quantity | price 
+----------+---------+----------+-------
+      100 |       1 |        4 |     9
+      100 |       3 |        1 |    10
+(2 rows)
+
+DROP MATERIALIZED VIEW o_test_matview_no_data;
+SELECT relname FROM orioledb_table_oids() JOIN pg_class ON reloid = oid
+	WHERE relname = 'o_test_matview_no_data';
+ relname 
+---------
+(0 rows)
+
+CREATE TABLE pg_test_refresh_tbl_instead_of_matview AS SELECT 1;
+REFRESH MATERIALIZED VIEW pg_test_refresh_tbl_instead_of_matview;
+ERROR:  "pg_test_refresh_tbl_instead_of_matview" is not a materialized view
+TABLE pg_test_refresh_tbl_instead_of_matview;
+ ?column? 
+----------
+        1
+(1 row)
+
+CREATE MATERIALIZED VIEW pg_test_refresh_matview_no_data AS SELECT 1;
+TABLE pg_test_refresh_matview_no_data;
+ ?column? 
+----------
+        1
+(1 row)
+
+REFRESH MATERIALIZED VIEW pg_test_refresh_matview_no_data;
+TABLE pg_test_refresh_matview_no_data;
+ ?column? 
+----------
+        1
+(1 row)
+
+REFRESH MATERIALIZED VIEW pg_test_refresh_matview_no_data WITH NO DATA;
+TABLE pg_test_refresh_matview_no_data;
+ERROR:  materialized view "pg_test_refresh_matview_no_data" has not been populated
+HINT:  Use the REFRESH MATERIALIZED VIEW command.
+REFRESH MATERIALIZED VIEW pg_test_refresh_matview_no_data;
+TABLE pg_test_refresh_matview_no_data;
+ ?column? 
+----------
+        1
+(1 row)
+
+RESET enable_seqscan;
+SET allow_in_place_tablespaces = true;
+CREATE TABLESPACE regress_tblspace LOCATION '';
+CREATE SEQUENCE o_test_mv_select_seq;
+CREATE TABLE o_test_mv_select_table USING orioledb
+	AS VALUES (nextval('o_test_mv_select_seq'::regclass)),
+			  (nextval('o_test_mv_select_seq'::regclass));
+EXPLAIN (COSTS OFF) SELECT * FROM o_test_mv_select_table;
+             QUERY PLAN             
+------------------------------------
+ Seq Scan on o_test_mv_select_table
+(1 row)
+
+SELECT * FROM o_test_mv_select_table;
+ column1 
+---------
+       1
+       2
+(2 rows)
+
+CREATE MATERIALIZED VIEW o_test_mv_select USING orioledb AS SELECT * FROM o_test_mv_select_table;
+ALTER MATERIALIZED VIEW o_test_mv_select SET TABLESPACE regress_tblspace;
+SELECT * FROM o_test_mv_select;
+ column1 
+---------
+       1
+       2
+(2 rows)
+
+DROP MATERIALIZED VIEW o_test_mv_select;
+SELECT orioledb_rewind_sync();
+ orioledb_rewind_sync 
+----------------------
+ 
+(1 row)
+
+DROP EXTENSION orioledb CASCADE;
+NOTICE:  drop cascades to 10 other objects
+DETAIL:  drop cascades to table o_test_create_as
+drop cascades to table o_test_create_as_less_atts
+drop cascades to table o_test_create_as_no_atts
+drop cascades to table o_test_create_as_with_compress
+drop cascades to table o_test_create_as_no_data
+drop cascades to table tbl_into
+drop cascades to table tbl_as_nodata
+drop cascades to table tbl_as_data
+drop cascades to materialized view o_test_matview
+drop cascades to table o_test_mv_select_table
+DROP SCHEMA createas CASCADE;
+NOTICE:  drop cascades to 5 other objects
+DETAIL:  drop cascades to function query_to_text(text)
+drop cascades to sequence o_matview_seq
+drop cascades to table pg_test_refresh_tbl_instead_of_matview
+drop cascades to materialized view pg_test_refresh_matview_no_data
+drop cascades to sequence o_test_mv_select_seq
+DROP TABLESPACE regress_tblspace;
+RESET search_path;

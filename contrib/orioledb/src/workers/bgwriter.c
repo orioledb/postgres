@@ -1,0 +1,227 @@
+/*-------------------------------------------------------------------------
+ *
+ * bgwriter.c
+ *		Routines for background writer process.
+ *
+ * Copyright (c) 2021-2026, Oriole DB Inc.
+ * Copyright (c) 2025-2026, Supabase Inc.
+ *
+ * IDENTIFICATION
+ *	  contrib/orioledb/src/workers/bgwriter.c
+ *
+ *-------------------------------------------------------------------------
+ */
+#include "postgres.h"
+
+#include "orioledb.h"
+
+#include "btree/undo.h"
+#include "s3/headers.h"
+#include "transam/undo.h"
+#include "utils/page_pool.h"
+#include "utils/ucm.h"
+#include "utils/stopevent.h"
+#include "workers/bgwriter.h"
+
+#include "miscadmin.h"
+#include "postmaster/bgworker.h"
+#include "postmaster/bgwriter.h"
+#include "postmaster/interrupt.h"
+#include "storage/bufmgr.h"
+#include "storage/latch.h"
+#include "storage/proc.h"
+#include "storage/procsignal.h"
+#include "storage/sinvaladt.h"
+#include "utils/memutils.h"
+#include "utils/snapmgr.h"
+#include "utils/syscache.h"
+#include "utils/timeout.h"
+
+#include "pgstat.h"
+
+bool		IsBGWriter = false;
+int			BGWriterNum = -1;
+
+void
+register_bgwriter(int num)
+{
+	BackgroundWorker worker;
+
+	/* Set up background worker parameters */
+	memset(&worker, 0, sizeof(worker));
+	worker.bgw_flags = BGWORKER_SHMEM_ACCESS;
+	worker.bgw_start_time = BgWorkerStart_PostmasterStart;
+	worker.bgw_restart_time = 0;
+	worker.bgw_main_arg = Int32GetDatum(num);
+	strcpy(worker.bgw_library_name, "orioledb");
+	strcpy(worker.bgw_function_name, "bgwriter_main");
+	pg_snprintf(worker.bgw_name, sizeof(worker.bgw_name),
+				"orioledb background writer %d", num);
+	strcpy(worker.bgw_type, "orioledb background writer");
+	RegisterBackgroundWorker(&worker);
+}
+
+void
+bgwriter_main(Datum main_arg)
+{
+	PagePool   *pool;
+	int			rc,
+				wake_events = WL_LATCH_SET | WL_POSTMASTER_DEATH | WL_TIMEOUT;
+	bool		need_eviction,
+				need_write;
+
+	char		appname[NAMEDATALEN];
+
+	BGWriterNum = DatumGetInt32(main_arg);
+
+	/* enable timeout for relation lock */
+	RegisterTimeout(DEADLOCK_TIMEOUT, CheckDeadLockAlert);
+
+	/* enable relation cache invalidation (remove old OTableDescr) */
+	RelationCacheInitialize();
+	InitCatalogCache();
+	SharedInvalBackendInit(false);
+
+	/* show the bgwriter in pg_stat_activity, used for tests */
+	InitializeSessionUserIdStandalone();
+	pgstat_beinit();
+	pgstat_bestart();
+
+	/* Expose worker number to tests; ps title is unreliable under Valgrind. */
+	pg_snprintf(appname, sizeof(appname),
+				"orioledb background writer %d", BGWriterNum);
+	pgstat_report_appname(appname);
+
+	SetProcessingMode(NormalProcessing);
+
+	/* catch SIGTERM signal for reason to not interupt background writing */
+	pqsignal(SIGTERM, SignalHandlerForShutdownRequest);
+	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
+	BackgroundWorkerUnblockSignals();
+
+	elog(LOG, "orioledb background writer %d started", BGWriterNum);
+	IsBGWriter = true;
+
+	if (debug_disable_bgwriter)
+	{
+		elog(LOG, "orioledb background writer %d stopped: orioledb.debug_disable_bgwriter = True",
+			 BGWriterNum);
+		return;
+	}
+
+	CurTransactionContext = AllocSetContextCreate(TopMemoryContext,
+												  "orioledb bgwriter current transaction context",
+												  ALLOCSET_DEFAULT_SIZES);
+	TopTransactionContext = AllocSetContextCreate(TopMemoryContext,
+												  "orioledb bgwriter top transaction context",
+												  ALLOCSET_DEFAULT_SIZES);
+
+	ResetLatch(MyLatch);
+
+	PG_TRY();
+	{
+		MemoryContextSwitchTo(CurTransactionContext);
+		while (true)
+		{
+			OPagePoolType poolType;
+			UndoLocation lastUsedLocation;
+			UndoLocation writeInProgressLocation;
+			int			j;
+
+			if (ShutdownRequestPending)
+				break;
+
+			/*
+			 * Sleep until we are signaled or it's time for another
+			 * checkpoint.
+			 */
+			rc = WaitLatch(MyLatch, wake_events,
+						   BgWriterDelay,
+						   WAIT_EVENT_BGWRITER_MAIN);
+			ResetLatch(MyLatch);
+
+			if (rc & WL_POSTMASTER_DEATH)
+				ShutdownRequestPending = true;
+
+			CHECK_FOR_INTERRUPTS();
+
+			for (poolType = 0; poolType < OPagePoolTypesCount && !ShutdownRequestPending; poolType++)
+			{
+				pool = get_ppool(poolType);
+				need_eviction = ppool_free_pages_count(pool) < ppool_size(pool) / 20;
+				need_write = ppool_dirty_pages_count(pool) > ppool_size(pool) / 2;
+
+				if (need_eviction || need_write)
+				{
+					int			i = 0;
+
+					while (need_eviction || need_write)
+					{
+						/* Should not run maintenance for local page pool */
+						ppool_run_maintenance(pool, need_eviction, &ShutdownRequestPending);
+						i++;
+
+						if (i >= bgwriter_lru_maxpages * (BLCKSZ / ORIOLEDB_BLCKSZ))
+							break;
+
+						if (ShutdownRequestPending)
+							break;
+
+						need_eviction = ppool_free_pages_count(pool) < ppool_size(pool) / 20;
+						need_write = ppool_dirty_pages_count(pool) > ppool_size(pool) / 2;
+					}
+
+					MemoryContextReset(CurTransactionContext);
+					MemoryContextReset(TopTransactionContext);
+				}
+
+			}
+
+			for (j = 0; j < (int) UndoLogsCount; j++)
+			{
+				UndoMeta   *undo_meta = get_undo_meta_by_type((UndoLogType) j);
+
+				writeInProgressLocation = pg_atomic_read_u64(&undo_meta->writeInProgressLocation);
+				lastUsedLocation = pg_atomic_read_u64(&undo_meta->lastUsedLocation);
+				if (writeInProgressLocation + undo_circular_buffer_size <
+					lastUsedLocation + undo_circular_buffer_size / 20)
+				{
+					UndoLocation minProcReservedLocation = pg_atomic_read_u64(&undo_meta->minProcReservedLocation);
+					UndoLocation targetLocation = lastUsedLocation - (19 * undo_circular_buffer_size) / 20;
+
+					if (targetLocation < minProcReservedLocation)
+						evict_undo_to_disk((UndoLogType) j, targetLocation,
+										   minProcReservedLocation, true);
+				}
+				else
+				{
+					/*
+					 * Even when eviction is not needed, update min undo
+					 * locations to allow cleanup of undo files.  Without
+					 * this, minProcRetainLocation set during recovery may
+					 * never be advanced on a synced replica. Only first
+					 * bgwriter does this to avoid unnecessary concurrency.
+					 */
+					Assert(BGWriterNum >= 0);
+
+					if (BGWriterNum == 0)
+						update_min_undo_locations((UndoLogType) j, false, true);
+				}
+			}
+
+			check_pending_truncates();
+
+			if (orioledb_s3_mode)
+				s3_headers_try_eviction_cycle();
+
+			ResetLatch(MyLatch);
+		}
+		elog(LOG, "orioledb bgwriter %d is shut down", BGWriterNum);
+	}
+	PG_CATCH();
+	{
+		LockReleaseSession(DEFAULT_LOCKMETHOD);
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+}

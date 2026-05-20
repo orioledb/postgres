@@ -1,0 +1,584 @@
+/*-------------------------------------------------------------------------
+ *
+ * orioledb.h
+ *		Common declarations for orioledb engine.
+ *
+ * Copyright (c) 2021-2026, Oriole DB Inc.
+ * Copyright (c) 2025-2026, Supabase Inc.
+ *
+ * IDENTIFICATION
+ *	  contrib/orioledb/include/orioledb.h
+ *
+ *-------------------------------------------------------------------------
+ */
+#ifndef __ORIOLEDB_H__
+#define __ORIOLEDB_H__
+
+#include "access/nbtree.h"
+#include "access/reloptions.h"
+#include "access/xact.h"
+#include "access/xlog.h"
+#include "common/int.h"
+#include "nodes/extensible.h"
+#include "miscadmin.h"
+#include "port/atomics.h"
+#include "storage/bufpage.h"
+#include "storage/fd.h"
+#include "storage/lock.h"
+#include "storage/procarray.h"
+#include "storage/spin.h"
+#include "utils/builtins.h"
+#include "utils/jsonb.h"
+#include "utils/typcache.h"
+#include "utils/rel.h"
+#include "utils/relcache.h"
+
+#if defined __has_include
+#if __has_include ("sanitizer/asan_interface.h")
+#include "sanitizer/asan_interface.h"
+#endif
+#endif
+
+#ifndef ASAN_UNPOISON_MEMORY_REGION
+#define ASAN_UNPOISON_MEMORY_REGION(addr, size) \
+  ((void)(addr), (void)(size))
+#endif
+
+/*
+ * Currently OrioleDB has the following version-related values:
+ *
+ * Reference-only value:
+ *
+ * - ORIOLEDB_VERSION - is an external text value meaning the current release.
+ *
+ * ORIOLEDB_VERSION is output by orioledb_version() SQL function and its change doesn't mean any
+ * changes in the code that can introduce incompatibilities. But if values for compatibility (below)
+ * should be bumped, it's enough to do this once before next release. I.e. compatibility is
+ * neecessary between releases, not between different commits belonging to one release.
+ *
+ * Values to reflect incompatibilities and limitations:
+ *
+ * - ORIOLEDB_WAL_VERSION - Version of OrioleDB WAL format (see include/recovery/wal.h)
+ *
+ * ORIOLEDB_WAL_VERSION is used for on-the fly conversion of WAL. As WAL can be transferred between
+ * different clusters ORIOLEDB_WAL_VERSION compatibility is not limited to the same
+ * ORIOLEDB_BINARY_VERSION (see below). Compatibility is only one-way, if read versions are lower
+ * than current, WAL will be converted seamlessly at its reading. But if read versions are greater
+ * than current there is a difference for WAL used in recovery and WAL used for logical decoding:
+ * For recovery: Cluster will shut down (recovery failed)
+ * For logical decoding: Logical decoding will fail and throw error. Cluster will continue working.
+ *
+ * - ORIOLEDB_CHECKPOINT_CONTROL_VERSION - Version of OrioleDB control file format
+ *   (seeinclude/checkpoint/control.h)
+ *
+ * ORIOLEDB_CHECKPOINT_CONTROL_VERSION is intended for on-the fly conversion of CheckpointControl
+ * structure. Compatibility is only one-way, if read versions are lower than current
+ * CheckpointControl will be converted seamlessly. Otherwise cluster will refuse to start with
+ * error. Note that CheckpointControl structure is used for reading cluster's
+ * ORIOLEDB_BINARY_VERSION(see below). (As now we have only one ORIOLEDB_CHECKPOINT_CONTROL_VERSION
+ * only check is implemented yet, no conversion)
+ *
+ * - ORIOLEDB_BINARY_VERSION - Clusters with different ORIOLEDB_BINARY_VERSION are binarily
+ *   incompatible.
+ *
+ * ORIOLEDB_BINARY_VERSION of a cluster is written to a checkpoint control file. At start OrioleDB
+ * will check if current ORIOLEDB_BINARY_VERSION is equal to what is in the control file. Otherwise
+ *  the cluster will refuse to start. (We don't go to the following versions checks in this case)
+ *
+ * - ORIOLEDB_SYS_TREE_VERSION - Version of OrioleDB system trees format
+ * - ORIOLEDB_PAGE_VERSION - Version of OrioleDB page format
+ * - ORIOLEDB_COMPRESS_VERSION - Version of OrioleDB page compression format
+ *
+ * These ORIOLEDB_SYS_TREE_VERSION, ORIOLEDB_PAGE_VERSION, ORIOLEDB_COMPRESS_VERSION reflect
+ * incompatibilities that could be converted on-the-fly. Compatibility is only one-way: if read
+ * versions are greater than current, cluster will shut down with error. If read version is lower
+ * than current - seamless conversion will occur at the first reading.
+ *
+ * As said above, these values are not checked if ORIOLEDB_BINARY_VERSION is different, so each of
+ * these values makes sense only within one ORIOLEDB_BINARY_VERSION value.
+ */
+#define ORIOLEDB_VERSION "OrioleDB pre-2 beta 16"
+#define ORIOLEDB_BINARY_VERSION 9
+#define ORIOLEDB_SYS_TREE_VERSION	1	/* Version of system catalog */
+#define ORIOLEDB_PAGE_VERSION		1	/* Version of binary page format */
+#define ORIOLEDB_COMPRESS_VERSION	1	/* Version of page compression (only
+										 * for compressed pages) */
+
+#define ORIOLEDB_DATA_DIR "orioledb_data"
+#define ORIOLEDB_UNDO_DIR "orioledb_undo"
+#define ORIOLEDB_RMGR_ID (129)
+#define ORIOLEDB_XLOG_CONTAINER (0x00)
+
+/*
+ * perform_page_split() removes a key data from first right page downlink.
+ * But the data can be useful for debug. The macro controls this behavior.
+ *
+ * See usage in perform_page_split().
+ */
+#define ORIOLEDB_CUT_FIRST_KEY 1
+/* max a BTree depth */
+#define ORIOLEDB_MAX_DEPTH		32
+/* size of OrioleDB BTree page */
+#define ORIOLEDB_BLCKSZ		8192
+/* size of on disk compressed page chunk */
+#define ORIOLEDB_COMP_BLCKSZ	512
+/* size of data file segment */
+#define ORIOLEDB_SEGMENT_SIZE	(1024 * 1024 * 1024)
+/* size of S3 data file part */
+#define ORIOLEDB_S3_PART_SIZE	(1024 * 1024)
+
+#define GetMaxBackends() MaxBackends
+
+/*
+ * Number of orioledb page.
+ * If high bit is set, it means the page is in the local memory.
+ */
+typedef uint32 OInMemoryBlkno;
+#define OInvalidInMemoryBlkno		((OInMemoryBlkno) 0xFFFFFFFF)
+#define OInMemoryBlknoIsValid(blockNumber) \
+	((bool) ((OInMemoryBlkno) (blockNumber) != OInvalidInMemoryBlkno))
+#define ORootPageIsValid(desc) (OInMemoryBlknoIsValid((desc)->rootInfo.rootPageBlkno))
+#define OMetaPageIsValid(desc) (OInMemoryBlknoIsValid((desc)->rootInfo.metaPageBlkno))
+
+/* Undo log location */
+typedef uint64 UndoLocation;
+#define	InvalidUndoLocation		UINT64CONST(0x2000000000000000)
+#define	MaxUndoLocation			UINT64CONST(0x1FFFFFFFFFFFFFFE)
+#define	UndoLocationValueMask	UINT64CONST(0x1FFFFFFFFFFFFFFF)
+#define UndoLocationIsValid(loc)	(((loc) & InvalidUndoLocation) == 0)
+#define UndoLocationGetValue(loc)	((loc) & UndoLocationValueMask)
+
+/*
+ * Sentinel for ODBProcData.pendingSkUndoLoc.  Set by the PK btree_modify
+ * when no undo record was produced because the table was created in the
+ * current transaction (see the self-created shortcut in
+ * o_btree_modify_internal()).  The checkpointer treats this as "wait
+ * until this backend leaves the PK-applied/SK-pending window" instead of
+ * recording a fix-up entry: a self-created table is private to the
+ * in-progress txn, so no other backend can stall the SK btree_modify and
+ * the wait is bounded.  Distinguishable from InvalidUndoLocation by the
+ * low bit, while still failing UndoLocationIsValid().
+ */
+#define WaitingSkUndoLoc		UINT64CONST(0x2000000000000001)
+
+/* Identifier for orioledb transaction */
+typedef uint64 OXid;
+#define	InvalidOXid					UINT64CONST(0x7FFFFFFFFFFFFFFF)
+#define OXidIsValid(oxid)			((oxid) != InvalidOXid)
+#define LXID_NORMAL_FROM			(1)
+
+/* Index number */
+typedef uint16 OIndexNumber;
+
+/* Index type */
+typedef enum
+{
+	oIndexInvalid = 0,
+	oIndexToast = 1,
+	oIndexBridge = 2,
+	oIndexPrimary = 3,
+	oIndexUnique = 4,
+	oIndexRegular = 5,
+	oIndexExclusion = 6,
+} OIndexType;
+
+static inline OIndexType
+o_index_rel_get_ix_type(Relation index)
+{
+	OIndexType	ix_type;
+
+	if (index->rd_index->indisprimary)
+		ix_type = oIndexPrimary;
+	else if (index->rd_index->indisunique)
+		ix_type = oIndexUnique;
+	else if (index->rd_index->indisexclusion)
+		ix_type = oIndexExclusion;
+	else
+		ix_type = oIndexRegular;
+	return ix_type;
+}
+
+#define PROC_XID_ARRAY_SIZE	32
+
+typedef enum
+{
+	/* Invalid value. */
+	UndoLogNone = -1,
+
+	/*
+	 * Undo log for row-level record of modifications of user data.
+	 */
+	UndoLogRegular = 0,
+
+	/*
+	 * Undo log for page-level record of modifications of user data.
+	 */
+	UndoLogRegularPageLevel = 1,
+
+	/*
+	 * Undo log for modification of system trees.
+	 */
+	UndoLogSystem = 2,
+
+	UndoLogsCount = 3
+} UndoLogType;
+
+#define GET_PAGE_LEVEL_UNDO_TYPE(undoType) \
+	(((undoType) == UndoLogRegular) ? UndoLogRegularPageLevel : (undoType))
+
+typedef struct
+{
+	OXid		oxid;
+	VirtualTransactionId vxid;
+} XidVXidMapElement;
+
+typedef struct
+{
+	pg_atomic_uint64 location;
+	pg_atomic_uint64 branchLocation;
+	pg_atomic_uint64 subxactLocation;
+	pg_atomic_uint64 onCommitLocation;
+} UndoStackSharedLocations;
+
+typedef struct
+{
+	pg_atomic_uint64 reservedUndoLocation;
+	pg_atomic_uint64 transactionUndoRetainLocation;
+	pg_atomic_uint64 snapshotRetainUndoLocation;
+} UndoRetainSharedLocations;
+
+typedef struct
+{
+	UndoRetainSharedLocations undoRetainLocations[(int) UndoLogsCount];
+	pg_atomic_uint64 commitInProgressXlogLocation;
+	int			autonomousNestingLevel;
+	LWLock		undoStackLocationsFlushLock;
+	bool		flushUndoLocations;
+	bool		waitingForOxid;
+	pg_atomic_uint64 xmin;
+
+	/*
+	 * Undo location of the most recent PK modification whose secondary-index
+	 * counterparts are still pending.  Set after the PK btree_modify and
+	 * before the WAL write, cleared by tuple_complete_modification.  Always
+	 * refers to UndoLogRegular; the other undo types do not participate in
+	 * PK/SK recovery fix-up.
+	 */
+	pg_atomic_uint64 pendingSkUndoLoc;
+	UndoStackSharedLocations undoStackLocations[PROC_XID_ARRAY_SIZE][(int) UndoLogsCount];
+	XidVXidMapElement vxids[PROC_XID_ARRAY_SIZE];
+} ODBProcData;
+
+typedef struct
+{
+	Oid			datoid;
+	Oid			reloid;
+	Oid			relnode;
+} ORelOids;
+
+typedef uint64 S3TaskLocation;
+
+typedef RelFileLocator RelFileNode;
+#define PG_FUNCNAME_MACRO   __func__
+#define ORelOidsSetFromRel(oids, rel) \
+	do { \
+		(oids).datoid = MyDatabaseId; \
+		(oids).reloid = (rel)->rd_id; \
+		(oids).relnode = (rel)->rd_locator.relNumber; \
+	} while (0)
+#define RelIsInMyDatabase(rel) ((rel)->rd_locator.dbOid == MyDatabaseId)
+#define RelGetNode(rel) ((rel)->rd_locator)
+#define RelFileNodeGetNode(node) ((node)->relNumber)
+#define IndexStmtGetOldNode(stmt) ((stmt)->oldNumber)
+#define RelationSetNewRelfilenode(relation, persistence) \
+		RelationSetNewRelfilenumber(relation, persistence)
+
+#define ORelOidsIsValid(oids) (OidIsValid((oids).datoid) && OidIsValid((oids).reloid) && OidIsValid((oids).relnode))
+#define ORelOidsIsEqual(l, r) ((l).datoid == (r).datoid && (l).reloid == (r).reloid && (l).relnode == (r).relnode)
+#define ORelOidsSetInvalid(oids) \
+	((oids).datoid = (oids).reloid = (oids).relnode = InvalidOid)
+
+#if PG_VERSION_NUM >= 170000
+
+#define LXID vxid.lxid
+#define REORDER_BUFFER_TUPLE_TYPE HeapTuple
+/* Renaming */
+#define	TRANSAM_VARIABLES TransamVariables
+#define WAIT_EVENT_MQ_PUT_MESSAGE WAIT_EVENT_MESSAGE_QUEUE_PUT_MESSAGE
+#define vacuum_is_relation_owner vacuum_is_permitted_for_relation
+#define ResourceOwnerEnlargeCatCacheRefs ResourceOwnerEnlarge
+#define ResourceOwnerEnlargeCatCacheListRefs ResourceOwnerEnlarge
+/* Join BackendId and ProcNumber */
+#define BACKENDID procNumber
+#define PROCBACKENDID vxid.procNumber
+#define MYPROCNUMBER MyProcNumber
+#define MyBackendId MyProcNumber
+#define	PROCNUMBER(proc) GetNumberFromPGProc(proc)
+/* Deprecated */
+#define palloc0fast palloc0
+
+#else
+
+#define LXID lxid
+#define REORDER_BUFFER_TUPLE_TYPE ReorderBufferTupleBuf *
+/* Before renaming */
+#define	TRANSAM_VARIABLES ShmemVariableCache
+/* BackendId and ProcNumber were separate */
+#define BACKENDID backendId
+#define PROCBACKENDID backendId
+#define MYPROCNUMBER MyProc->pgprocno
+#define PROCNUMBER(proc) ((proc)->pgprocno)
+
+#endif
+
+typedef struct
+{
+	uint64		len:16,
+				off:48;
+} FileExtent;
+
+/*
+ * Should be used as a beginning of header in all orioledb shared in-memory pages:
+ * BTree pages, Meta-pages, SeqBuf pages, etc.
+ *
+ * At writing page to disk:
+ * - OrioleDBPageHeader is replaced by OrioleDBOndiskPageHeader of the same size.
+ * - Necessary information related to checkpoint moved to OrioleDBOndiskPageHeader.
+ * - All other information (related to compression and page format version) is initialized as needed.
+ *
+ * At reading page from disk:
+ * - Necessary information (related to checkpoint and compression) is extracted from OrioleDBOndiskPageHeader.
+ * - Сompression info and page format version is used for checks and decompression (if needed)
+ * - OrioleDBPageHeader from decompressed page is redundant and it is not used (but we check checkpointNum in it just in case)
+ * - Page header is replaced by empty OrioleDBPageHeader of the same size.
+ * - Necessary information related to checkpoint is restored to OrioleDBPageHeader.
+ */
+typedef struct
+{
+	pg_atomic_uint64 state;
+	uint32		pageChangeCount;
+	uint32		checkpointNum;
+} OrioleDBPageHeader;
+
+/*
+ * Should be used as a beginning of header in all orioledb disk pages.
+ * (See extensive comment to OrioleDBPageHeader above)
+ */
+typedef struct
+{
+	/*
+	 * We save number of chunks inside downlinks instead of size of compressed
+	 * data because it helps us to avoid too often setup dirty flag for parent
+	 * if page is changed.
+	 *
+	 * The header of compressed data contains compressed data length.
+	 */
+	uint32		checkpointNum;	/* Checkpoint number for both compressed and
+								 * not compressed pages */
+	uint16		compress_page_size; /* Reserved for compressed pages. Empty
+									 * for non-compressed */
+	uint8		compress_version;	/* Reserved for compressed pages. Empty
+									 * for non-compressed */
+
+	/*
+	 * Version of binary page format for possible conversion. For compressed
+	 * pages it should be used for conversion of uncompressed images
+	 */
+	uint8		page_version;
+	uint32		reserved1;
+	uint32		reserved2;
+} OrioleDBOndiskPageHeader;
+
+StaticAssertDecl(sizeof(OrioleDBPageHeader) == sizeof(OrioleDBOndiskPageHeader),
+				 "sizes of OrioleDBPageHeader and OrioleDBOndiskPageHeader are not equal");
+#define O_PAGE_HEADER_SIZE		sizeof(OrioleDBPageHeader)
+#define O_PAGE_HEADER(page)	((OrioleDBPageHeader *)(page))
+
+#define O_PAGE_CHANGE_COUNT_MAX		(0x7FFFFFFF)
+#define InvalidOPageChangeCount		(O_PAGE_CHANGE_COUNT_MAX)
+#define O_PAGE_CHANGE_COUNT_INC(page) \
+	if (O_PAGE_HEADER(page)->pageChangeCount >= O_PAGE_CHANGE_COUNT_MAX) \
+		O_PAGE_HEADER(page)->pageChangeCount = 0; \
+	else \
+		O_PAGE_HEADER(page)->pageChangeCount++;
+#define O_PAGE_GET_CHANGE_COUNT(p) (O_PAGE_HEADER(p)->pageChangeCount)
+
+#define S3_OFFSET_MASK		(0x00FFFFFFFF)
+#define S3_CHKP_NUM_MASK	(0xFF00000000)
+#define S3_CHKP_NUM_SHIFT	(32)
+#define S3_GET_CHKP_NUM(offset) (((offset) & S3_CHKP_NUM_MASK) >> S3_CHKP_NUM_SHIFT)
+
+#define InvalidFileExtentLen (0)
+#define InvalidFileExtentOff (UINT64CONST(0xFFFFFFFFFFFF))
+#define FileExtentLenIsValid(len) ((len) != InvalidFileExtentLen)
+#define FileExtentOffIsValid(off) ((off) < InvalidFileExtentOff)
+#define FileExtentIsValid(extent) (FileExtentLenIsValid((extent).len) && FileExtentOffIsValid((extent).off))
+#define CompressedSize(page_size) ((page_size) == ORIOLEDB_BLCKSZ \
+										? ORIOLEDB_BLCKSZ \
+										: ((page_size) + sizeof(OrioleDBOndiskPageHeader) + ORIOLEDB_COMP_BLCKSZ - 1))
+#define FileExtentLen(page_size) (CompressedSize(page_size) / ORIOLEDB_COMP_BLCKSZ)
+
+typedef struct
+{
+	ORelOids	oids;
+	int			ionum;
+	FileExtent	fileExtent;
+	uint32		flags:4,
+				type:28;
+	OInMemoryBlkno leftBlkno;
+} OrioleDBPageDesc;
+
+/* orioledb.c */
+extern Size orioledb_buffers_size;
+extern Size orioledb_buffers_count;
+extern Size orioledb_temp_buffers_count;
+extern Size undo_circular_buffer_size;
+extern uint32 undo_buffers_count;
+extern Size xid_circular_buffer_size;
+extern Size rewind_circular_buffer_size;
+extern double regular_block_undo_circular_buffer_fraction;
+extern double system_undo_circular_buffer_fraction;
+extern uint32 xid_buffers_count;
+extern uint32 rewind_buffers_count;
+extern Pointer o_shared_buffers;
+extern ODBProcData *oProcData;
+extern int	max_procs;
+extern Page *local_ppool_pages;
+extern OrioleDBPageDesc *page_descs;
+extern OrioleDBPageDesc *local_ppool_page_descs;
+extern bool remove_old_checkpoint_files;
+extern bool skip_unmodified_trees;
+extern bool debug_disable_bgwriter;
+extern MemoryContext btree_insert_context;
+extern MemoryContext btree_seqscan_context;
+extern double o_checkpoint_completion_ratio;
+extern int	max_io_concurrency;
+extern bool use_mmap;
+extern bool use_device;
+extern bool orioledb_use_sparse_files;
+extern int	device_fd;
+extern char *device_filename;
+extern Pointer mmap_data;
+extern Size device_length;
+extern int	default_compress;
+extern int	default_primary_compress;
+extern int	default_toast_compress;
+extern bool orioledb_table_description_compress;
+extern BlockNumber max_bridge_ctid_blkno;
+extern bool orioledb_s3_mode;
+extern int	s3_num_workers;
+extern int	s3_desired_size;
+extern int	s3_queue_size_guc;
+extern char *s3_host;
+extern bool s3_use_https;
+extern char *s3_region;
+extern char *s3_prefix;
+extern char *s3_accesskey;
+extern char *s3_secretkey;
+extern char *s3_cainfo;
+extern bool enable_rewind;
+extern int	rewind_max_time;
+extern int	rewind_max_transactions;
+extern int	logical_xid_buffers_guc;
+extern bool orioledb_strict_mode;
+extern XLogRecPtr replay_until_lsn;
+
+/* For page eviction/read checkpoint test only */
+extern uint32 min_read_page_checkpoint;
+extern uint32 max_read_page_checkpoint;
+
+#define GET_CUR_PROCDATA() \
+	(AssertMacro(MYPROCNUMBER >= 0 && \
+				 MYPROCNUMBER < max_procs), \
+	 &oProcData[MYPROCNUMBER])
+/* Needed to get blkno without high bit that defines if page is local or not */
+#define O_BLKNO_MASK ((OInMemoryBlkno) 0x7FFFFFFF)
+#define O_PAGE_IS_LOCAL(blkno) ((blkno) >> 31 != 0)
+#define O_GET_IN_MEMORY_PAGE(blkno) \
+	(AssertMacro(OInMemoryBlknoIsValid(blkno)), \
+	 (O_PAGE_IS_LOCAL(blkno) ? local_ppool_pages[(blkno) & O_BLKNO_MASK] : \
+	  (Page)(o_shared_buffers + (((uint64) ((blkno) & O_BLKNO_MASK)) * ((uint64) ORIOLEDB_BLCKSZ)))))
+#define O_GET_IN_MEMORY_PAGEDESC(blkno) \
+	(AssertMacro(OInMemoryBlknoIsValid(blkno)), \
+     (O_PAGE_IS_LOCAL(blkno) ? local_ppool_page_descs + ((blkno) & O_BLKNO_MASK) : \
+      page_descs + ((blkno) & O_BLKNO_MASK)))
+#define O_GET_IN_MEMORY_PAGE_CHANGE_COUNT(blkno) \
+	(O_PAGE_GET_CHANGE_COUNT(O_GET_IN_MEMORY_PAGE(blkno)))
+
+extern void orioledb_check_shmem(void);
+
+typedef int OCompress;
+#define O_COMPRESS_DEFAULT (10)
+#define InvalidOCompress (-1)
+#define OCompressIsValid(compress) ((compress) != InvalidOCompress)
+
+typedef struct ORelOptions
+{
+	StdRdOptions std_options;
+	int			compress_offset;
+	int			primary_compress_offset;
+	int			toast_compress_offset;
+	bool		index_bridging;
+} ORelOptions;
+
+typedef struct OBTOptions
+{
+	BTOptions	bt_options;
+	int			compress_offset;
+	bool		orioledb_index;
+} OBTOptions;
+
+extern int16 o_parse_compress(const char *value);
+extern void o_invalidate_oids(ORelOids oids);
+
+#define EXPR_ATTNUM (FirstLowInvalidHeapAttributeNumber - 1)
+
+/* orioledb.c */
+typedef enum OPagePoolType
+{
+	OPagePoolMain = 0,
+	OPagePoolFreeTree = 1,
+	OPagePoolCatalog = 2
+} OPagePoolType;
+#define OPagePoolTypesCount 3
+
+typedef struct PagePool PagePool;
+typedef struct LocalPagePool LocalPagePool;
+struct BTreeDescr;
+
+extern LocalPagePool local_ppool;
+
+extern void o_verify_dir_exists_or_create(char *dirname, bool *created, bool *found);
+extern uint64 orioledb_device_alloc(struct BTreeDescr *descr, uint32 size);
+extern PagePool *get_ppool(OPagePoolType type);
+extern PagePool *get_ppool_by_blkno(OInMemoryBlkno blkno);
+extern OInMemoryBlkno get_dirty_pages_count_sum(void);
+extern void jsonb_push_key(JsonbParseState **state, char *key);
+extern void jsonb_push_null_key(JsonbParseState **state, char *key);
+extern void jsonb_push_bool_key(JsonbParseState **state, char *key, bool value);
+extern void jsonb_push_int8_key(JsonbParseState **state, char *key, int64 value);
+extern void jsonb_push_string_key(JsonbParseState **state, const char *key, const char *value);
+extern bool is_bump_memory_context(MemoryContext mxct);
+extern void o_page_desc_init(OrioleDBPageDesc *desc);
+
+extern CheckPoint_hook_type next_CheckPoint_hook;
+
+/* tableam_handler.c */
+extern bool is_orioledb_rel(Relation rel);
+
+typedef struct OTableDescr OTableDescr;
+typedef struct OIndexDescr OIndexDescr;
+
+/* ddl.c */
+extern List *reindex_list;
+extern IndexBuildResult o_pkey_result;
+extern bool o_in_add_column;
+
+extern void orioledb_setup_ddl_hooks(void);
+extern void o_ddl_cleanup(void);
+extern void o_drop_table(ORelOids oids);
+
+/* scan.c */
+extern CustomScanMethods o_scan_methods;
+
+#endif							/* __ORIOLEDB_H__ */

@@ -1,0 +1,100 @@
+# Exclude files and directories to minimize
+# the Docker build context size.
+# This practice limits the scope of COPY commands in the Dockerfile.
+# When not using multi-layer builds, it can effectively reduce the final image size.
+
+# The first part of this file is should be the same as the .gitignore file
+# The second part is the extra not needed content for .dockerignore
+
+########################################################
+# first part: .gitignore contents
+########################################################
+
+# Global excludes across all subdirectories
+**/*.o
+**/*.obj
+**/*.bc
+**/*.so
+**/*.so.[0-9]
+**/*.so.[0-9].[0-9]
+**/*.so.[0-9].[0-9][0-9]
+**/*.sl
+**/*.sl.[0-9]
+**/*.sl.[0-9].[0-9]
+**/*.sl.[0-9].[0-9][0-9]
+**/*.dylib
+**/*.dll
+**/*.exp
+**/*.a
+**/*.mo
+**/*.pot
+**/objfiles.txt
+**/.deps/
+**/*.gcno
+**/*.gcda
+**/*.gcov
+**/*.gcov.out
+**/lcov*.info
+**/coverage/
+**/coverage-html-stamp
+**/*.vcproj
+**/*.vcxproj
+**/win32ver.rc
+**/*.exe
+**/lib*dll.def
+**/lib*.pc
+
+# Local excludes in root directory
+test/t/__pycache__/
+test/__pycache__/
+test/log/
+log_docker_build/
+test/results/
+test/tmp_check/
+test/tmp_check_iso/
+test/output_iso/
+include/utils/stopevents_defs.h
+include/utils/stopevents_data.h
+orioledb.typedefs
+ci/antithesis
+
+# Ignore generated scripts
+sql/orioledb--1.0.sql
+sql/orioledb--1.4--1.5.sql
+sql/orioledb--1.5--1.6.sql
+sql/orioledb--1.6--1.7.sql
+
+#######################################################
+# second part: extra .dockerignore contents
+#######################################################
+
+# Exclude version control and continuous integration (CI) directories
+.git
+.github
+.gitattributes
+.gitignore
+.style.yapf
+
+# Exclude Dockerfiles
+docker/Dockerfile
+docker/Dockerfile.ubuntu
+
+# Exclude OrioleDB Docker test definitions and code
+# as they are not needed inside the Docker image.
+test/
+ci/local_docker_matrix.sh
+ci/docker_matrix.sh
+
+# Documentation files, which are not needed inside the Docker image.
+doc/
+**/*.md
+
+# Exclude some files that are not needed inside the Docker image.
+# but sometimes left in the directory
+docker-postgis
+wal2json*
+**/*.log
+**/_*.*
+
+# Misc
+make.flags
