@@ -934,29 +934,6 @@ typedef struct TableAmRoutine
 								  BlockNumber *totalpages);
 
 	bytea	   *(*reloptions) (char relkind, Datum reloptions, bool validate);
-
-	/* ------------------------------------------------------------------------
-	 * amcheck-style corruption check.
-	 * ------------------------------------------------------------------------
-	 */
-
-	/*
-	 * Optional callback used by contrib/amcheck verify_heapam() and pg_amcheck
-	 * to verify a relation for corruption.
-	 *
-	 * `thorough_check` requests a deeper, potentially more expensive check
-	 * (AM-specific meaning).
-	 *
-	 * In case of errors output tuplestore should be non-empty and contain error
-	 * messages. Block-related fields for non-heap relations could be left NULLed
-	 * as amcheck lacks mechanism to process them anyway (besides reporting
-	 * errors)
-	 */
-	void		(*verify_tableam) (Relation rel,
-								   Tuplestorestate *tupstore,
-								   TupleDesc tupdesc,
-								   bool on_error_stop,
-								   bool thorough_check);
 } TableAmRoutine;
 
 
