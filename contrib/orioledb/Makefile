@@ -89,6 +89,7 @@ OBJS = src/btree/btree.o \
 	   src/workers/interrupt.o \
 	   src/utils/compress.o \
 	   src/utils/o_buffers.o \
+	   src/utils/orphaned.o \
 	   src/utils/page_pool.o \
 	   src/utils/planner.o \
 	   src/utils/seq_buf.o \
@@ -182,6 +183,7 @@ TESTGRESCHECKS_PART_1 = test/t/checkpointer_test.py \
 						test/t/incomplete_split_test.py \
 						test/t/merge_test.py \
 						test/t/o_tables_test.py \
+						test/t/orphaned_test.py \
 						test/t/o_tables_2_test.py \
 						test/t/recovery_test.py \
 						test/t/recovery_opclass_test.py \
