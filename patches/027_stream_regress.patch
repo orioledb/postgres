@@ -52,7 +52,7 @@ index 4b506f16c56..33bd9c3a45b 100644
  is($rc, 0, 'regression tests pass');
  
  # Clobber all sequences with their next value, so that we don't have
-@@ -122,10 +131,14 @@ command_ok(
+@@ -122,10 +131,15 @@ command_ok(
  		'--port' => $node_standby_1->port,
  	],
  	'dump standby server');
@@ -68,6 +68,7 @@ index 4b506f16c56..33bd9c3a45b 100644
 +		"$ENV{top_builddir}/../orioledb/ci/filter_stream_regress_diff.py",
 +		'--diff', "$outputdir/primary_vs_standby.diff"
 +	],
++	'compare primary and standby dumps');
  
  # Likewise for the catalogs of the regression database, after disabling
  # autovacuum to make fields like relpages stop changing.
