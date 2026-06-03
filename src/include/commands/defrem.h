@@ -36,6 +36,16 @@ extern ObjectAddress DefineIndex(Oid tableId,
 								 bool skip_build,
 								 bool quiet);
 extern void ExecReindex(ParseState *pstate, const ReindexStmt *stmt, bool isTopLevel);
+
+/*
+ * Hook for an extension to skip individual indexes from REINDEX TABLE
+ * CONCURRENTLY's iteration.  Returning true emits a NOTICE and drops the
+ * index from the list of indexes to rebuild; returning false leaves the
+ * standard behavior unchanged.
+ */
+typedef bool (*ReindexConcurrentlySkipHook_type) (Relation heapRelation,
+												  Relation indexRelation);
+extern PGDLLIMPORT ReindexConcurrentlySkipHook_type ReindexConcurrentlySkipHook;
 extern char *makeObjectName(const char *name1, const char *name2,
 							const char *label);
 extern char *ChooseRelationName(const char *name1, const char *name2,
