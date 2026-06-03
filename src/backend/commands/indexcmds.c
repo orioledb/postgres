@@ -74,6 +74,15 @@
 
 GetDefaultOpClass_hook_type GetDefaultOpClass_hook = NULL;
 
+/*
+ * Hook that lets a table AM extension skip indexes of REINDEX TABLE
+ * CONCURRENTLY's list-walk.  Returning true causes a NOTICE-with-skip;
+ * returning false leaves the standard path unchanged.  Used by OrioleDB to
+ * skip the primary key (which in OrioleDB is the table itself and cannot be
+ * rebuilt concurrently).
+ */
+ReindexConcurrentlySkipHook_type ReindexConcurrentlySkipHook = NULL;
+
 /* non-export function prototypes */
 static bool CompareOpclassOptions(const Datum *opts1, const Datum *opts2, int natts);
 static void CheckPredicate(Expr *predicate);
@@ -3689,6 +3698,13 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 						ereport(WARNING,
 								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 								 errmsg("cannot reindex exclusion constraint index \"%s.%s\" concurrently, skipping",
+										get_namespace_name(get_rel_namespace(cellOid)),
+										get_rel_name(cellOid))));
+					else if (ReindexConcurrentlySkipHook != NULL &&
+							 (*ReindexConcurrentlySkipHook) (heapRelation,
+															 indexRelation))
+						ereport(NOTICE,
+								(errmsg("skipping reindex of index \"%s.%s\" concurrently",
 										get_namespace_name(get_rel_namespace(cellOid)),
 										get_rel_name(cellOid))));
 					else
