@@ -27,16 +27,20 @@ static const PgAioHandleCallbacks aio_invalid_cb = {0};
 
 typedef struct PgAioHandleCallbacksEntry
 {
-	const PgAioHandleCallbacks *const cb;
-	const char *const name;
+	const PgAioHandleCallbacks *cb;
+	const char *name;
 } PgAioHandleCallbacksEntry;
 
 /*
  * Callback definition for the callbacks that can be registered on an IO
  * handle.  See PgAioHandleCallbackID's definition for an explanation for why
  * callbacks are not identified by a pointer.
+ *
+ * Extension slots (PGAIO_HCB_FIRST_EXTENSION .. PGAIO_HCB_LAST_EXTENSION) are
+ * populated by pgaio_register_handle_callbacks() during _PG_init() of the
+ * registering extension.
  */
-static const PgAioHandleCallbacksEntry aio_handle_cbs[] = {
+static PgAioHandleCallbacksEntry aio_handle_cbs[PGAIO_HCB_MAX + 1] = {
 #define CALLBACK_ENTRY(id, callback)  [id] = {.cb = &callback, .name = #callback}
 	CALLBACK_ENTRY(PGAIO_HCB_INVALID, aio_invalid_cb),
 
@@ -183,6 +187,34 @@ pgaio_result_report(PgAioResult result, const PgAioTargetData *target_data, int 
 			 result.id, ce->name);
 
 	ce->cb->report(result, target_data, elevel);
+}
+
+/*
+ * Register a callback descriptor for an extension-reserved slot.
+ *
+ * Extensions call this from _PG_init().  Under EXEC_BACKEND each backend
+ * re-runs _PG_init() and must register the same id with the same callback
+ * pointer, since only the id is stored in shared memory.
+ */
+void
+pgaio_register_handle_callbacks(PgAioHandleCallbackID cb_id,
+								const PgAioHandleCallbacks *cb,
+								const char *name)
+{
+	if (cb_id < PGAIO_HCB_FIRST_EXTENSION || cb_id > PGAIO_HCB_LAST_EXTENSION)
+		elog(ERROR, "AIO callback id %d is outside the extension-reserved range",
+			 cb_id);
+	if (cb == NULL)
+		elog(ERROR, "AIO callback for id %d cannot be NULL", cb_id);
+	if (cb->complete_shared == NULL && cb->complete_local == NULL)
+		elog(ERROR, "AIO callback for id %d must have a completion callback",
+			 cb_id);
+	if (aio_handle_cbs[cb_id].cb != NULL && aio_handle_cbs[cb_id].cb != cb)
+		elog(ERROR, "AIO callback id %d is already registered to a different callback",
+			 cb_id);
+
+	aio_handle_cbs[cb_id].cb = cb;
+	aio_handle_cbs[cb_id].name = name;
 }
 
 
