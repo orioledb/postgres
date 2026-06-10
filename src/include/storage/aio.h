@@ -112,15 +112,29 @@ typedef enum PgAioOp
  *
  * PgAioTargetID specific behaviour should be implemented in
  * aio_target.c.
+ *
+ * Extensions may claim a slot from PGAIO_TID_EXT_1 .. PGAIO_TID_EXT_4 by
+ * calling pgaio_register_target() during _PG_init().  Because PgAioHandle
+ * lives in shared memory and IDs are stored in it (not pointers), every
+ * backend (including those started via EXEC_BACKEND) must register the same
+ * id with the same PgAioTargetInfo.
  */
 typedef enum PgAioTargetID
 {
 	/* intentionally the zero value, to help catch zeroed memory etc */
 	PGAIO_TID_INVALID = 0,
 	PGAIO_TID_SMGR,
+
+	/* slots reserved for extensions */
+	PGAIO_TID_EXT_1,
+	PGAIO_TID_EXT_2,
+	PGAIO_TID_EXT_3,
+	PGAIO_TID_EXT_4,
 } PgAioTargetID;
 
-#define PGAIO_TID_COUNT (PGAIO_TID_SMGR + 1)
+#define PGAIO_TID_COUNT				(PGAIO_TID_EXT_4 + 1)
+#define PGAIO_TID_FIRST_EXTENSION	PGAIO_TID_EXT_1
+#define PGAIO_TID_LAST_EXTENSION	PGAIO_TID_EXT_4
 
 
 /*
@@ -198,9 +212,20 @@ typedef enum PgAioHandleCallbackID
 	PGAIO_HCB_SHARED_BUFFER_READV,
 
 	PGAIO_HCB_LOCAL_BUFFER_READV,
+
+	/*
+	 * Slots reserved for extensions; see comment on PgAioTargetID for
+	 * EXEC_BACKEND considerations.
+	 */
+	PGAIO_HCB_EXT_1,
+	PGAIO_HCB_EXT_2,
+	PGAIO_HCB_EXT_3,
+	PGAIO_HCB_EXT_4,
 } PgAioHandleCallbackID;
 
-#define PGAIO_HCB_MAX	PGAIO_HCB_LOCAL_BUFFER_READV
+#define PGAIO_HCB_MAX				PGAIO_HCB_EXT_4
+#define PGAIO_HCB_FIRST_EXTENSION	PGAIO_HCB_EXT_1
+#define PGAIO_HCB_LAST_EXTENSION	PGAIO_HCB_EXT_4
 StaticAssertDecl(PGAIO_HCB_MAX < (1 << PGAIO_RESULT_ID_BITS),
 				 "PGAIO_HCB_MAX is too big for PGAIO_RESULT_ID_BITS");
 
@@ -306,6 +331,7 @@ extern void pgaio_io_set_target(PgAioHandle *ioh, PgAioTargetID targetid);
 extern bool pgaio_io_has_target(PgAioHandle *ioh);
 extern PgAioTargetData *pgaio_io_get_target_data(PgAioHandle *ioh);
 extern char *pgaio_io_get_target_description(PgAioHandle *ioh);
+extern void pgaio_register_target(PgAioTargetID id, const PgAioTargetInfo *info);
 
 /* functions in aio_callback.c */
 extern void pgaio_io_register_callbacks(PgAioHandle *ioh, PgAioHandleCallbackID cb_id,
@@ -313,6 +339,9 @@ extern void pgaio_io_register_callbacks(PgAioHandle *ioh, PgAioHandleCallbackID 
 extern void pgaio_io_set_handle_data_64(PgAioHandle *ioh, uint64 *data, uint8 len);
 extern void pgaio_io_set_handle_data_32(PgAioHandle *ioh, uint32 *data, uint8 len);
 extern uint64 *pgaio_io_get_handle_data(PgAioHandle *ioh, uint8 *len);
+extern void pgaio_register_handle_callbacks(PgAioHandleCallbackID cb_id,
+											const PgAioHandleCallbacks *cb,
+											const char *name);
 
 
 

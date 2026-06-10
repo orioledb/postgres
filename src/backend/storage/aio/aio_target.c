@@ -19,13 +19,19 @@
 #include "storage/smgr.h"
 
 
+static const PgAioTargetInfo pgaio_target_info_invalid = {
+	.name = "invalid",
+};
+
 /*
  * Registry for entities that can be the target of AIO.
+ *
+ * Built-in slots are initialized statically.  Extension slots
+ * (PGAIO_TID_FIRST_EXTENSION .. PGAIO_TID_LAST_EXTENSION) are populated by
+ * pgaio_register_target() during _PG_init() of the registering extension.
  */
-static const PgAioTargetInfo *pgaio_target_info[] = {
-	[PGAIO_TID_INVALID] = &(PgAioTargetInfo) {
-		.name = "invalid",
-	},
+static const PgAioTargetInfo *pgaio_target_info[PGAIO_TID_COUNT] = {
+	[PGAIO_TID_INVALID] = &pgaio_target_info_invalid,
 	[PGAIO_TID_SMGR] = &aio_smgr_target_info,
 };
 
@@ -73,6 +79,28 @@ PgAioTargetData *
 pgaio_io_get_target_data(PgAioHandle *ioh)
 {
 	return &ioh->target_data;
+}
+
+/*
+ * Register a target descriptor for an extension-reserved slot.
+ *
+ * Extensions call this from _PG_init().  Under EXEC_BACKEND each backend
+ * re-runs _PG_init() and must register the same id with the same info, since
+ * only the id is stored in shared memory (PgAioHandle.target).
+ */
+void
+pgaio_register_target(PgAioTargetID id, const PgAioTargetInfo *info)
+{
+	if (id < PGAIO_TID_FIRST_EXTENSION || id > PGAIO_TID_LAST_EXTENSION)
+		elog(ERROR, "AIO target id %d is outside the extension-reserved range",
+			 id);
+	if (info == NULL || info->name == NULL)
+		elog(ERROR, "AIO target info for id %d must provide a name", id);
+	if (pgaio_target_info[id] != NULL && pgaio_target_info[id] != info)
+		elog(ERROR, "AIO target id %d is already registered to a different info",
+			 id);
+
+	pgaio_target_info[id] = info;
 }
 
 /*
