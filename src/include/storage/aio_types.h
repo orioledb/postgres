@@ -69,6 +69,14 @@ typedef union PgAioTargetData
 		bool		is_temp:1;	/* proc can be inferred by owning AIO */
 		bool		skip_fsync:1;
 	}			smgr;
+
+	/*
+	 * Opaque scratch space for extension-defined targets (see
+	 * pgaio_register_target() and PgAioTargetID extension slots).  The
+	 * registering extension is free to overlay its own struct on top of
+	 * this storage; it must fit in extension_bytes.
+	 */
+	uint8		extension_bytes[24];
 } PgAioTargetData;
 
 
