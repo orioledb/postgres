@@ -6623,6 +6623,16 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 	}
 
 	/*
+	 * slot_getsysattr(RowIdAttributeNumber) returns an owning palloc'd copy.
+	 * afterTriggerAddEvent() copies rowids into its event chunk, so these
+	 * temporary copies don't need to live until PortalContext reset.
+	 */
+	if (rowId1)
+		pfree(rowId1);
+	if (rowId2 && rowId2 != rowId1)
+		pfree(rowId2);
+
+	/*
 	 * Finally, spool any foreign tuple(s).  The tuplestore squashes them to
 	 * minimal tuples, so this loses any system columns.  The executor lost
 	 * those columns before us, for an unrelated reason, so this is fine.
