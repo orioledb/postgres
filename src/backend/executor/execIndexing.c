@@ -525,6 +525,10 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 		}
 	}
 
+	if (table_get_row_ref_type(heapRelation) == ROW_REF_ROWID &&
+		DatumGetPointer(tupleidDatum) != NULL)
+		pfree(DatumGetPointer(tupleidDatum));
+
 	return result;
 }
 
@@ -747,6 +751,10 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 							 indexUnchanged,	/* UPDATE without logical change? */
 							 indexInfo);	/* index AM may need this */
 
+			if (table_get_row_ref_type(heapRelation) == ROW_REF_ROWID &&
+				DatumGetPointer(oldTupleidDatum) != NULL)
+				pfree(DatumGetPointer(oldTupleidDatum));
+
 		}
 		else
 		{
@@ -819,6 +827,10 @@ ExecUpdateIndexTuples(ResultRelInfo *resultRelInfo,
 				*specConflict = true;
 		}
 	}
+
+	if (table_get_row_ref_type(heapRelation) == ROW_REF_ROWID &&
+		DatumGetPointer(tupleidDatum) != NULL)
+		pfree(DatumGetPointer(tupleidDatum));
 
 	return result;
 }
@@ -927,6 +939,10 @@ ExecDeleteIndexTuples(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 					 heapRelation,	/* heap relation */
 					 indexInfo);	/* index AM may need this */
 	}
+
+	if (table_get_row_ref_type(heapRelation) == ROW_REF_ROWID &&
+		DatumGetPointer(tupleid) != NULL)
+		pfree(DatumGetPointer(tupleid));
 }
 
 /* ----------------------------------------------------------------
@@ -1273,11 +1289,16 @@ retry:
 			{
 				bool	isnull;
 				Datum existing_rowid;
+				bool	is_self;
 
 				existing_rowid = slot_getsysattr(existing_slot, RowIdAttributeNumber, &isnull);
 				Assert(!isnull);
 
-				if (table_row_ref_equals(heap, tupleidDatum, existing_rowid))
+				is_self = table_row_ref_equals(heap, tupleidDatum, existing_rowid);
+				if (DatumGetPointer(existing_rowid) != NULL)
+					pfree(DatumGetPointer(existing_rowid));
+
+				if (is_self)
 				{
 					if (found_self)		/* should not happen */
 						elog(ERROR, "found self tuple multiple times in index \"%s\"",
