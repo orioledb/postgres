@@ -2649,6 +2649,9 @@ ExecOnConflictUpdate(ModifyTableContext *context,
 
 	if (!ExecQual(onConflictSetWhere, econtext))
 	{
+		if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID &&
+			DatumGetPointer(tupleid) != NULL)
+			pfree(DatumGetPointer(tupleid));
 		ExecClearTuple(existing);	/* see return below */
 		InstrCountFiltered1(&mtstate->ps, 1);
 		return true;			/* done with the tuple */
@@ -2704,6 +2707,10 @@ ExecOnConflictUpdate(ModifyTableContext *context,
 	if (*returning != NULL &&
 		resultRelInfo->ri_projectReturning->pi_state.flags & EEO_FLAG_HAS_OLD)
 		ExecMaterializeSlot(*returning);
+
+	if (table_get_row_ref_type(resultRelInfo->ri_RelationDesc) == ROW_REF_ROWID &&
+		DatumGetPointer(tupleid) != NULL)
+		pfree(DatumGetPointer(tupleid));
 
 	ExecClearTuple(existing);
 
