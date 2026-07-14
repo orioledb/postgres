@@ -278,7 +278,7 @@ static struct USERCACHECALLBACK
 {
 	UsercacheCallbackFunction function;
 	Datum		arg;
-}			usercache_callback_list[MAX_RELCACHE_CALLBACKS];
+}			usercache_callback_list[MAX_USERCACHE_CALLBACKS];
 
 static int	usercache_callback_count = 0;
 
