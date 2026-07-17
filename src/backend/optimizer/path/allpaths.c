@@ -773,10 +773,11 @@ set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 	 */
 	required_outer = rel->lateral_relids;
 
-	if (!set_plain_rel_pathlist_hook ||
-		set_plain_rel_pathlist_hook(root, rel, rte))
-		/* Consider sequential scan */
-		add_path(rel, create_seqscan_path(root, rel, required_outer, 0));
+	if (set_plain_rel_pathlist_hook)
+		set_plain_rel_pathlist_hook(root, rel, rte);
+
+	/* Consider sequential scan */
+	add_path(rel, create_seqscan_path(root, rel, required_outer, 0));
 
 	/* If appropriate, consider parallel sequential scan */
 	if (rel->consider_parallel && required_outer == NULL)
