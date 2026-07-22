@@ -33,6 +33,7 @@
 #include <sys/file.h>
 #include <unistd.h>
 
+#include "access/amapi.h"
 #include "access/tableam.h"
 #include "access/xloginsert.h"
 #include "access/xlogutils.h"
@@ -3589,6 +3590,17 @@ RelationGetNumberOfBlocksInFork(Relation relation, ForkNumber forkNum)
 	}
 	else if (RELKIND_HAS_STORAGE(relation->rd_rel->relkind))
 	{
+		if (relation->rd_rel->relkind == RELKIND_INDEX &&
+			relation->rd_indam != NULL &&
+			relation->rd_indam->amnblocks != NULL)
+		{
+			BlockNumber nblocks;
+
+			nblocks = relation->rd_indam->amnblocks(relation, forkNum);
+			if (BlockNumberIsValid(nblocks))
+				return nblocks;
+		}
+
 		return smgrnblocks(RelationGetSmgr(relation), forkNum);
 	}
 	else
