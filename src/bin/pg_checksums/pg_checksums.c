@@ -313,6 +313,11 @@ scan_directory(const char *basedir, const char *subdir, bool sizeonly)
 	struct dirent *de;
 
 	snprintf(path, sizeof(path), "%s/%s", basedir, subdir);
+
+	/* OrioleDB data isn't pg_checksums' format; see orioledb_checksums. */
+	if (strcmp(subdir, "orioledb_data") == 0)
+		return 0;
+
 	dir = opendir(path);
 	if (!dir)
 		pg_fatal("could not open directory \"%s\": %m", path);
