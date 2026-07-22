@@ -241,6 +241,10 @@ typedef void (*aminitparallelscan_function) (void *target);
 /* (re)start parallel index scan */
 typedef void (*amparallelrescan_function) (IndexScanDesc scan);
 
+/* report number of index blocks */
+typedef BlockNumber (*amnblocks_function) (Relation indexRelation,
+										   ForkNumber forkNum);
+
 /*
  * API struct for an index AM.  Note this must be stored in a single palloc'd
  * chunk of memory.
@@ -333,6 +337,9 @@ typedef struct IndexAmRoutine
 	amestimateparallelscan_function amestimateparallelscan; /* can be NULL */
 	aminitparallelscan_function aminitparallelscan; /* can be NULL */
 	amparallelrescan_function amparallelrescan; /* can be NULL */
+
+	/* report number of index blocks, can be NULL */
+	amnblocks_function amnblocks;	/* can be NULL */
 } IndexAmRoutine;
 
 
