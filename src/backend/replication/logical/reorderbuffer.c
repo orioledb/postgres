@@ -794,7 +794,8 @@ ReorderBufferProcessPartialChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 	if (ReorderBufferCanStartStreaming(rb) &&
 		!(rbtxn_has_partial_change(toptxn)) &&
 		rbtxn_is_serialized(txn) &&
-		rbtxn_has_streamable_change(toptxn))
+		rbtxn_has_streamable_change(toptxn) &&
+		!rbtxn_no_streaming(toptxn))
 		ReorderBufferStreamTXN(rb, toptxn);
 }
 
@@ -3753,7 +3754,7 @@ ReorderBufferLargestStreamableTopTXN(ReorderBuffer *rb)
 
 		if ((largest == NULL || txn->total_size > largest_size) &&
 			(txn->total_size > 0) && !(rbtxn_has_partial_change(txn)) &&
-			rbtxn_has_streamable_change(txn))
+			rbtxn_has_streamable_change(txn) && !rbtxn_no_streaming(txn))
 		{
 			largest = txn;
 			largest_size = txn->total_size;
