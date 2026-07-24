@@ -1999,6 +1999,20 @@ SetupCheckXidLive(TransactionId xid)
 	 * setup CheckXidAlive if it's not committed yet.  We don't check if the
 	 * xid is aborted.  That will happen during catalog access.
 	 */
+	if (decoding_xid_status_hook)
+	{
+		DecodingXidStatus status = decoding_xid_status_hook(xid);
+
+		if (status != DECODING_XID_NOT_HANDLED)
+		{
+			if (status == DECODING_XID_COMMITTED)
+				CheckXidAlive = InvalidTransactionId;
+			else
+				CheckXidAlive = xid;
+			return;
+		}
+	}
+
 	if (!TransactionIdDidCommit(xid))
 		CheckXidAlive = xid;
 	else

@@ -84,6 +84,24 @@ extern PGDLLIMPORT int synchronous_commit;
 
 /* used during logical streaming of a transaction */
 extern PGDLLIMPORT TransactionId CheckXidAlive;
+
+/*
+ * Status of a decoded transaction id as reported by a storage engine whose
+ * transactions carry logical-only xids (no clog backing).  Consulted by the
+ * concurrent-abort detection during streamed logical decoding instead of
+ * TransactionIdIsInProgress()/TransactionIdDidCommit(), which would attempt
+ * a clog lookup for an xid that no transam machinery ever assigned.
+ */
+typedef enum DecodingXidStatus
+{
+	DECODING_XID_NOT_HANDLED,	/* not a logical-only xid; use clog paths */
+	DECODING_XID_IN_PROGRESS,
+	DECODING_XID_COMMITTED,
+	DECODING_XID_ABORTED
+} DecodingXidStatus;
+
+typedef DecodingXidStatus (*decoding_xid_status_hook_type) (TransactionId xid);
+extern PGDLLIMPORT decoding_xid_status_hook_type decoding_xid_status_hook;
 extern PGDLLIMPORT bool bsysscan;
 
 /*
