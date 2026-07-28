@@ -305,10 +305,21 @@ typedef struct
 #define VARDATA_SHORT(PTR)					VARDATA_1B(PTR)
 
 #define VARTAG_EXTERNAL(PTR)				VARTAG_1B_E(PTR)
+
+static inline uint16
+varsize_external_orioledb_len(const void *ptr)
+{
+	uint16		len;
+
+	memcpy(&len, VARDATA_1B_E(ptr), sizeof(uint16));
+	return len;
+}
+
 #define VARSIZE_EXTERNAL(PTR)				(VARHDRSZ_EXTERNAL + VARTAG_SIZE(VARTAG_EXTERNAL(PTR)) \
-											+ (VARATT_IS_EXTERNAL_ORIOLEDB(PTR) ? \
-											   *((uint16 *) VARDATA_1B_E(PTR)) \
-											   : 0))
+												+ (VARATT_IS_EXTERNAL_ORIOLEDB(PTR) ? \
+												  varsize_external_orioledb_len((const void *)(PTR)) \
+												  : 0))
+
 #define VARDATA_EXTERNAL(PTR)				VARDATA_1B_E(PTR)
 
 #define VARATT_IS_COMPRESSED(PTR)			VARATT_IS_4B_C(PTR)
