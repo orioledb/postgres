@@ -165,7 +165,7 @@ lnext:
 		}
 		else
 		{
-			Assert(erm->refType = ROW_REF_ROWID);
+			Assert(erm->refType == ROW_REF_ROWID);
 			datum = datumCopy(datum, false, -1);
 		}
 		switch (erm->markType)
