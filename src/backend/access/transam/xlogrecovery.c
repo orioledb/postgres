@@ -2663,9 +2663,11 @@ recoveryStopsBefore(XLogReaderState *record)
 							timestamptz_to_str(recoveryStopTime))));
 			return true;
 		}
+		return false;
 	}
+
 	/* Otherwise we only consider stopping before COMMIT or ABORT records. */
-	else if (XLogRecGetRmid(record) != RM_XACT_ID)
+	if (XLogRecGetRmid(record) != RM_XACT_ID)
 		return false;
 
 	xact_info = XLogRecGetInfo(record) & XLOG_XACT_OPMASK;
