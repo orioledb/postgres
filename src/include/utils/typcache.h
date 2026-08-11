@@ -211,5 +211,7 @@ typedef void (*load_typcache_tupdesc_hook_type)(TypeCacheEntry *typentry);
 extern PGDLLIMPORT load_typcache_tupdesc_hook_type load_typcache_tupdesc_hook;
 typedef void (*load_enum_cache_data_hook_type)(TypeCacheEntry *tcache);
 extern PGDLLIMPORT load_enum_cache_data_hook_type load_enum_cache_data_hook;
+typedef void (*load_domaintype_info_hook_type)(TypeCacheEntry *typentry);
+extern PGDLLIMPORT load_domaintype_info_hook_type load_domaintype_info_hook;
 
 #endif							/* TYPCACHE_H */
