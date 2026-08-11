@@ -294,6 +294,7 @@ static int32 NextRecordTypmod = 0;	/* number of entries used */
 static uint64 tupledesc_id_counter = INVALID_TUPLEDESC_IDENTIFIER;
 load_typcache_tupdesc_hook_type load_typcache_tupdesc_hook = NULL;
 load_enum_cache_data_hook_type load_enum_cache_data_hook = NULL;
+load_domaintype_info_hook_type load_domaintype_info_hook = NULL;
 
 static void load_typcache_tupdesc(TypeCacheEntry *typentry);
 static void load_rangetype_info(TypeCacheEntry *typentry);
@@ -994,6 +995,11 @@ load_multirangetype_info(TypeCacheEntry *typentry)
 static void
 load_domaintype_info(TypeCacheEntry *typentry)
 {
+	if (load_domaintype_info_hook)
+	{
+		load_domaintype_info_hook(typentry);
+		return;
+	}
 	Oid			typeOid = typentry->type_id;
 	DomainConstraintCache *dcc;
 	bool		notNull = false;
