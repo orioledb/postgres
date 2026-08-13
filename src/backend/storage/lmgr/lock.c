@@ -1266,18 +1266,68 @@ LockAcquireExtended(const LOCKTAG *locktag,
 			DeadLockReport();
 			/* DeadLockReport() will not return */
 		}
-		else if (!(proclock->holdMask & LOCKBIT_ON(lockmode)))
+		else
 		{
+			PROCLOCKTAG proclocktag;
+			bool		granted;
+
 			/*
-			 * We've been removed from the queue without obtaining a lock.
-			 * That's OK, we're going to return LOCKACQUIRE_NOT_AVAIL.
+			 * Whether the lock was granted has to be re-read from the lock
+			 * table, not from the proclock pointer we captured before going
+			 * to sleep.  A wake-up driven by RemoveFromWaitQueue() -- which
+			 * is how orioledb's oxid_notify_all() releases waiters, reporting
+			 * PROC_WAIT_STATUS_OK afterwards -- runs CleanUpLock(), and that
+			 * frees the proclock whenever it holds nothing else, which is
+			 * always so for a pure waiter.  Reading holdMask through the
+			 * freed element yields whatever the next owner of that dynahash
+			 * slot has put there; a stray set bit makes us believe in a grant
+			 * that never happened, and the release that follows underflows
+			 * the request counts and removes a proclock that is no longer in
+			 * the table ("proclock table corrupted").
+			 *
+			 * The lock itself can be gone too -- CleanUpLock() drops it once
+			 * nRequested reaches zero -- so start from the locktag.
 			 */
-			AbortStrongLockAcquire();
-			if (locallock->nLocks == 0)
-				RemoveLocalLock(locallock);
-			if (locallockp)
-				*locallockp = NULL;
-			return LOCKACQUIRE_NOT_AVAIL;
+			LWLockAcquire(partitionLock, LW_SHARED);
+			lock = (LOCK *) hash_search_with_hash_value(LockMethodLockHash,
+														locktag,
+														hashcode,
+														HASH_FIND,
+														NULL);
+			proclock = NULL;
+			if (lock != NULL)
+			{
+				proclocktag.myLock = lock;
+				proclocktag.myProc = MyProc;
+				proclock = (PROCLOCK *)
+					hash_search_with_hash_value(LockMethodProcLockHash,
+												&proclocktag,
+												ProcLockHashCode(&proclocktag,
+																 hashcode),
+												HASH_FIND,
+												NULL);
+			}
+			granted = (proclock != NULL &&
+					   (proclock->holdMask & LOCKBIT_ON(lockmode)) != 0);
+			LWLockRelease(partitionLock);
+
+			if (!granted)
+			{
+				/*
+				 * We've been removed from the queue without obtaining a lock.
+				 * That's OK, we're going to return LOCKACQUIRE_NOT_AVAIL.
+				 */
+				AbortStrongLockAcquire();
+				if (locallock->nLocks == 0)
+					RemoveLocalLock(locallock);
+				if (locallockp)
+					*locallockp = NULL;
+				return LOCKACQUIRE_NOT_AVAIL;
+			}
+
+			/* Keep the local lock's cached pointers in step. */
+			locallock->lock = lock;
+			locallock->proclock = proclock;
 		}
 	}
 	else
