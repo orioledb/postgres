@@ -1160,16 +1160,62 @@ LockAcquireExtended(const LOCKTAG *locktag,
 		 */
 
 		/*
-		 * Check the proclock entry status, in case something in the ipc
-		 * communication doesn't work correctly.
+		 * Whether the lock was granted has to be re-read from the lock table,
+		 * not from the proclock pointer we captured before going to sleep.  A
+		 * wake-up driven by RemoveFromWaitQueue() -- which is how orioledb's
+		 * oxid_notify_all() releases waiters, reporting PROC_WAIT_STATUS_OK
+		 * afterwards -- runs CleanUpLock(), and that frees the proclock
+		 * whenever it holds nothing else, which is always so for a pure
+		 * waiter.  Reading holdMask through the freed element yields whatever
+		 * the next owner of that dynahash slot has put there; a stray set bit
+		 * makes us believe in a grant that never happened, and the release
+		 * that follows underflows the request counts and removes a proclock
+		 * that is no longer in the table ("proclock table corrupted").
+		 *
+		 * The lock itself can be gone too -- CleanUpLock() drops it once
+		 * nRequested reaches zero -- so start from the locktag.  Unlike the
+		 * PG18 version of this fix, the partition lock is still held here:
+		 * ProcSleep() takes it at entry and holds it at exit.
 		 */
-		if (!(proclock->holdMask & LOCKBIT_ON(lockmode)))
+		{
+			PROCLOCKTAG proclocktag;
+
+			lock = (LOCK *) hash_search_with_hash_value(LockMethodLockHash,
+														locktag,
+														hashcode,
+														HASH_FIND,
+														NULL);
+			proclock = NULL;
+			if (lock != NULL)
+			{
+				proclocktag.myLock = lock;
+				proclocktag.myProc = MyProc;
+				proclock = (PROCLOCK *)
+					hash_search_with_hash_value(LockMethodProcLockHash,
+												&proclocktag,
+												ProcLockHashCode(&proclocktag,
+																 hashcode),
+												HASH_FIND,
+												NULL);
+			}
+		}
+
+		/*
+		 * Check the proclock entry status, in case something in the ipc
+		 * communication doesn't work correctly, or we were released from the
+		 * queue by RemoveFromWaitQueue().
+		 */
+		if (proclock == NULL ||
+			!(proclock->holdMask & LOCKBIT_ON(lockmode)))
 		{
 			int		i;
 
 			AbortStrongLockAcquire();
-			PROCLOCK_PRINT("LockAcquire: INCONSISTENT", proclock);
-			LOCK_PRINT("LockAcquire: INCONSISTENT", lock, lockmode);
+			if (proclock != NULL)
+			{
+				PROCLOCK_PRINT("LockAcquire: INCONSISTENT", proclock);
+				LOCK_PRINT("LockAcquire: INCONSISTENT", lock, lockmode);
+			}
 			/* Should we retry ? */
 			LWLockRelease(partitionLock);
 			/*
@@ -1195,6 +1241,10 @@ LockAcquireExtended(const LOCKTAG *locktag,
 			return LOCKACQUIRE_NOT_AVAIL;
 
 		}
+		/* Keep the local lock's cached pointers in step. */
+		locallock->lock = lock;
+		locallock->proclock = proclock;
+
 		PROCLOCK_PRINT("LockAcquire: granted", proclock);
 		LOCK_PRINT("LockAcquire: granted", lock, lockmode);
 	}
