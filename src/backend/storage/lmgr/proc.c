@@ -778,8 +778,19 @@ LockErrorCleanup(void)
 		 * granted us the lock, or perhaps they detected a deadlock. If they
 		 * did grant us the lock, we'd better remember it in our local lock
 		 * table.
+		 *
+		 * PROC_WAIT_STATUS_OK is not by itself proof of a grant.  orioledb
+		 * releases waiters from oxid_notify_all() with RemoveFromWaitQueue()
+		 * and reports OK afterwards, and RemoveFromWaitQueue() ->
+		 * CleanUpLock() has deleted our proclock by then -- always, for a
+		 * pure waiter such as the ShareLock a VirtualXactLock() sleeps on.
+		 * Recording a grant we never got would leave the local lock table
+		 * holding a freed proclock, and LockReleaseAll() would then OR a
+		 * releaseMask bit into whichever backend has since been handed that
+		 * dynahash slot.  So ask the lock table; we hold the partition lock.
 		 */
-		if (MyProc->waitStatus == PROC_WAIT_STATUS_OK)
+		if (MyProc->waitStatus == PROC_WAIT_STATUS_OK &&
+			AwaitedLockIsGranted())
 			GrantAwaitedLock();
 	}
 
