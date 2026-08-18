@@ -1882,6 +1882,46 @@ AbortStrongLockAcquire(void)
 }
 
 /*
+ * AwaitedLockIsGranted -- does the shared lock table show the lock we went to
+ *		sleep for as held by us?
+ *
+ * Only meaningful while awaitedLock is set, and the caller must hold that
+ * lock's partition lock.  The lock object itself can be gone -- CleanUpLock()
+ * drops it once nRequested reaches zero -- so the lookup starts from the tag.
+ */
+bool
+AwaitedLockIsGranted(void)
+{
+	LOCK	   *lock;
+	PROCLOCK   *proclock;
+	PROCLOCKTAG proclocktag;
+
+	Assert(awaitedLock != NULL);
+
+	lock = (LOCK *) hash_search_with_hash_value(LockMethodLockHash,
+												&awaitedLock->tag.lock,
+												awaitedLock->hashcode,
+												HASH_FIND,
+												NULL);
+	if (lock == NULL)
+		return false;
+
+	proclocktag.myLock = lock;
+	proclocktag.myProc = MyProc;
+	proclock = (PROCLOCK *)
+		hash_search_with_hash_value(LockMethodProcLockHash,
+									&proclocktag,
+									ProcLockHashCode(&proclocktag,
+													 awaitedLock->hashcode),
+									HASH_FIND,
+									NULL);
+	if (proclock == NULL)
+		return false;
+
+	return (proclock->holdMask & LOCKBIT_ON(awaitedLock->tag.mode)) != 0;
+}
+
+/*
  * GrantAwaitedLock -- call GrantLockLocal for the lock we are doing
  *		WaitOnLock on.
  *
