@@ -2371,6 +2371,14 @@ CommitTransaction(void)
 	 * RecordTransactionCommit.
 	 */
 	MyProc->lastCommittedCSN = s->csn;
+
+	/*
+	 * Give callbacks the chance to publish their own commit state while we are
+	 * still in progress for other backends.  Anything they make visible here
+	 * cannot be seen out of order with our own visibility flip just below.
+	 */
+	CallXactCallbacks(XACT_EVENT_PRE_PROC_ARRAY);
+
 	ProcArrayEndTransaction(MyProc, latestXid);
 	s->csn = MyProc->lastCommittedCSN;
 
