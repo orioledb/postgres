@@ -132,7 +132,18 @@ typedef enum
 	XACT_EVENT_PREPARE,
 	XACT_EVENT_PRE_COMMIT,
 	XACT_EVENT_PARALLEL_PRE_COMMIT,
-	XACT_EVENT_PRE_PREPARE
+	XACT_EVENT_PRE_PREPARE,
+
+	/*
+	 * Fired from CommitTransaction() immediately before
+	 * ProcArrayEndTransaction(), that is, in the last moment at which the
+	 * transaction is still in progress for everybody else.  The commit is
+	 * already durable by then, so a callback must not fail and must not do
+	 * anything that could: no catalog access, no allocation that may throw,
+	 * no WAL.  It is meant for publishing commit state that has to become
+	 * visible together with the transaction's own visibility.
+	 */
+	XACT_EVENT_PRE_PROC_ARRAY
 } XactEvent;
 
 typedef void (*XactCallback) (XactEvent event, void *arg);
