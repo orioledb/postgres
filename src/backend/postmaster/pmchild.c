@@ -107,7 +107,6 @@ InitPostmasterChildSlots(void)
 	 * There can be only one of each of these running at a time.  They each
 	 * get their own pool of just one entry.
 	 */
-	pmchild_pools[B_SYSTEM_BG_WORKER].size = 1;
 	pmchild_pools[B_AUTOVAC_LAUNCHER].size = 1;
 	pmchild_pools[B_SLOTSYNC_WORKER].size = 1;
 	pmchild_pools[B_ARCHIVER].size = 1;
@@ -252,6 +251,14 @@ ReleasePostmasterChildSlot(PMChild *pmchild)
 		/* WAL senders start out as regular backends, and share the pool */
 		if (pmchild->bkend_type == B_WAL_SENDER)
 			pool = &pmchild_pools[B_BACKEND];
+
+		/*
+		 * System background workers are allocated from the regular bgworker
+		 * pool and retyped in do_start_bgworker(), so their slots must be
+		 * returned to that pool.
+		 */
+		else if (pmchild->bkend_type == B_SYSTEM_BG_WORKER)
+			pool = &pmchild_pools[B_BG_WORKER];
 		else
 			pool = &pmchild_pools[pmchild->bkend_type];
 
