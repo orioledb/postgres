@@ -797,6 +797,22 @@ make_new_heap(Oid OIDOldHeap, Oid NewTableSpace, Oid NewAccessMethod,
 		ReleaseSysCache(tuple);
 	}
 
+	/*
+	 * Give a table AM that manages its own physical storage (e.g. orioledb) a
+	 * chance to prepare the new heap's storage before the caller fills it.
+	 * make_new_heap() is the single chokepoint for all rewrite callers
+	 * (cluster, REFRESH MATERIALIZED VIEW, ALTER TABLE rewrite), so an AM that
+	 * needs, for example, a primary index tree to exist before the native fill
+	 * can create it here.  Heap AM leaves this callback unset (no-op).
+	 */
+	{
+		Relation	newheap;
+
+		newheap = table_open(OIDNewHeap, NoLock);
+		table_relation_begin_heap_rewrite(OldHeap, newheap);
+		table_close(newheap, NoLock);
+	}
+
 	table_close(OldHeap, NoLock);
 
 	return OIDNewHeap;
@@ -1474,38 +1490,48 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 		CacheInvalidateCatalog(OIDOldHeap);
 
 	/*
-	 * Rebuild each index on the relation (but not the toast table, which is
-	 * all-new at this point).  It is important to do this before the DROP
-	 * step because if we are processing a system catalog that will be used
-	 * during DROP, we want to have its indexes available.  There is no
-	 * advantage to the other order anyway because this is all transactional,
-	 * so no chance to reclaim disk space before commit.  We do not need a
-	 * final CommandCounterIncrement() because reindex_relation does it.
-	 *
-	 * Note: because index_build is called via reindex_relation, it will never
-	 * set indcheckxmin true for the indexes.  This is OK even though in some
-	 * sense we are building new indexes rather than rebuilding existing ones,
-	 * because the new heap won't contain any HOT chains at all, let alone
-	 * broken ones, so it can't be necessary to set indcheckxmin.
+	 * Give a table AM that manages its own physical storage (e.g. orioledb)
+	 * a chance to perform its own post-swap rebuild of the relation and its
+	 * indexes.  If the AM reports that it handled the swap, skip the default
+	 * reindex_relation(): the AM rebuilt the indexes itself, and the default
+	 * heap-oriented reindex would only build unwanted bridged indexes on top
+	 * of the AM's own storage.
 	 */
-	reindex_flags = REINDEX_REL_SUPPRESS_INDEX_USE;
-	if (check_constraints)
-		reindex_flags |= REINDEX_REL_CHECK_CONSTRAINTS;
+	{
+		Relation	oldrel = table_open(OIDOldHeap, NoLock);
+		Relation	newrel = table_open(OIDNewHeap, NoLock);
+		bool		am_handled;
 
-	/*
-	 * Ensure that the indexes have the same persistence as the parent
-	 * relation.
-	 */
-	if (newrelpersistence == RELPERSISTENCE_UNLOGGED)
-		reindex_flags |= REINDEX_REL_FORCE_INDEXES_UNLOGGED;
-	else if (newrelpersistence == RELPERSISTENCE_PERMANENT)
-		reindex_flags |= REINDEX_REL_FORCE_INDEXES_PERMANENT;
+		am_handled = table_relation_finish_heap_swap(oldrel, newrel,
+													 swap_toast_by_content,
+													 is_internal, frozenXid,
+													 cutoffMulti,
+													 newrelpersistence);
+		table_close(oldrel, NoLock);
+		table_close(newrel, NoLock);
+
+		if (am_handled)
+		{
+			reindex_flags = 0;		/* skip reindex_relation() below */
+		}
+		else
+		{
+			reindex_flags = REINDEX_REL_SUPPRESS_INDEX_USE;
+			if (check_constraints)
+				reindex_flags |= REINDEX_REL_CHECK_CONSTRAINTS;
+			if (newrelpersistence == RELPERSISTENCE_UNLOGGED)
+				reindex_flags |= REINDEX_REL_FORCE_INDEXES_UNLOGGED;
+			else if (newrelpersistence == RELPERSISTENCE_PERMANENT)
+				reindex_flags |= REINDEX_REL_FORCE_INDEXES_PERMANENT;
+		}
+	}
 
 	/* Report that we are now reindexing relations */
 	pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE,
 								 PROGRESS_CLUSTER_PHASE_REBUILD_INDEX);
 
-	reindex_relation(NULL, OIDOldHeap, reindex_flags, &reindex_params);
+	if (reindex_flags != 0)
+		reindex_relation(NULL, OIDOldHeap, reindex_flags, &reindex_params);
 
 	/* Report that we are now doing clean up */
 	pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE,
