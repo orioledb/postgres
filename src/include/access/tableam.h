@@ -714,6 +714,41 @@ typedef struct TableAmRoutine
 									BufferAccessStrategy bstrategy);
 
 	/*
+	 * See table_relation_finish_heap_swap().
+	 *
+	 * Invoked by finish_heap_swap() after swap_relation_files() for a table AM
+	 * that manages its own physical storage separate from the relfilenode
+	 * (e.g. orioledb).  It lets the AM perform its own post-swap rebuild of the
+	 * moved/rewritten relation's storage and indexes, and skip the default
+	 * reindex_relation()/new-heap-drop logic.  Returns true if the AM handled
+	 * the swap fully (so the caller skips the default reindex_relation and
+	 * new-heap performDeletion).  Heap AM returns false (default behavior).
+	 */
+	bool		(*relation_finish_heap_swap) (Relation oldrel,
+											  Relation newrel,
+											  bool swap_toast_by_content,
+											  bool is_internal,
+											  TransactionId frozenXid,
+											  MultiXactId cutoffMulti,
+											  char newrelpersistence);
+
+	/*
+	 * See table_relation_begin_heap_rewrite().
+	 *
+	 * Invoked by make_new_heap() right after the transient new heap (and its
+	 * toast table, if any) has been created, before the caller fills it with
+	 * rewritten/copied data.  It lets a table AM that manages its own physical
+	 * storage separate from the relfilenode (e.g. orioledb) prepare that
+	 * storage -- in particular create the AM's own primary index tree on the
+	 * new heap -- so that the subsequent native fill (ATRewriteTable for ALTER
+	 * COLUMN TYPE, the transient-relation DestReceiver for REFRESH
+	 * MATERIALIZED VIEW) writes tuples into the AM's storage.  Heap AM leaves
+	 * this NULL (default behavior: the heap needs no preparation).
+	 */
+	void		(*relation_begin_heap_rewrite) (Relation oldrel,
+											   Relation newrel);
+
+	/*
 	 * Prepare to analyze block `blockno` of `scan`. The scan has been started
 	 * with table_beginscan_analyze().  See also
 	 * table_scan_analyze_next_block().
@@ -1802,6 +1837,49 @@ table_relation_vacuum(Relation rel, struct VacuumParams *params,
 					  BufferAccessStrategy bstrategy)
 {
 	rel->rd_tableam->relation_vacuum(rel, params, bstrategy);
+}
+
+/*
+ * Finish a heap swap (CLUSTER, VACUUM FULL, ALTER TABLE rewrite).  This is
+ * invoked by finish_heap_swap() after swap_relation_files().  It lets a table
+ * AM that manages its own physical storage separate from the relfilenode
+ * (e.g. orioledb) perform its own post-swap rebuild and skip the default
+ * reindex_relation()/new-heap-drop.  Returns true if the AM handled the swap
+ * fully; the caller then skips the default reindex_relation and new-heap
+ * performDeletion.  Heap AM returns false (default behavior).
+ */
+static inline bool
+table_relation_finish_heap_swap(Relation oldrel, Relation newrel,
+								bool swap_toast_by_content,
+								bool is_internal,
+								TransactionId frozenXid,
+								MultiXactId cutoffMulti,
+								char newrelpersistence)
+{
+	if (oldrel->rd_tableam && oldrel->rd_tableam->relation_finish_heap_swap)
+		return oldrel->rd_tableam->relation_finish_heap_swap(oldrel, newrel,
+															 swap_toast_by_content,
+															 is_internal,
+															 frozenXid,
+															 cutoffMulti,
+															 newrelpersistence);
+	return false;
+}
+
+/*
+ * Begin a heap rewrite.  Invoked by make_new_heap() right after the transient
+ * new heap (and its toast table, if any) has been created, before the caller
+ * fills it.  It lets a table AM that manages its own physical storage separate
+ * from the relfilenode (e.g. orioledb) prepare that storage -- in particular
+ * create the AM's own primary index tree on the new heap -- so that the
+ * subsequent native fill writes tuples into the AM's storage.  Heap AM leaves
+ * this NULL (default: no preparation needed).
+ */
+static inline void
+table_relation_begin_heap_rewrite(Relation oldrel, Relation newrel)
+{
+	if (oldrel->rd_tableam && oldrel->rd_tableam->relation_begin_heap_rewrite)
+		oldrel->rd_tableam->relation_begin_heap_rewrite(oldrel, newrel);
 }
 
 /*
