@@ -24,8 +24,94 @@
 struct AlterTableUtilityContext;	/* avoid including tcop/utility.h here */
 
 
+/* --------------------------------------------------------------------
+ * ALTER TABLE phase machinery.
+ *
+ * The pending-work queue for an ALTER TABLE is a List of AlteredTableInfo
+ * structs, one for each table modified by the operation.  This struct is
+ * exposed here so that table access methods (via the
+ * relation_alter_table_finish callback in TableAmRoutine) can inspect the
+ * cumulative effect of a whole ALTER TABLE command.  The fields use only
+ * types from public headers; List cells for constraints/newvals are opaque
+ * pointers (NewConstraint/NewColumnValue stay private to tablecmds.c).
+ * --------------------------------------------------------------------
+ */
+typedef enum AlterTablePass
+{
+	AT_PASS_UNSET = -1,			/* UNSET will cause ERROR */
+	AT_PASS_DROP,				/* DROP (all flavors) */
+	AT_PASS_ALTER_TYPE,			/* ALTER COLUMN TYPE */
+	AT_PASS_ADD_COL,			/* ADD COLUMN */
+	AT_PASS_SET_EXPRESSION,		/* ALTER SET EXPRESSION */
+	AT_PASS_OLD_INDEX,			/* re-add existing indexes */
+	AT_PASS_OLD_CONSTR,			/* re-add existing constraints */
+	/* We could support a RENAME COLUMN pass here, but not currently used */
+	AT_PASS_ADD_CONSTR,			/* ADD constraints (initial examination) */
+	AT_PASS_COL_ATTRS,			/* set column attributes, eg NOT NULL */
+	AT_PASS_ADD_INDEXCONSTR,	/* ADD index-based constraints */
+	AT_PASS_ADD_INDEX,			/* ADD indexes */
+	AT_PASS_ADD_OTHERCONSTR,	/* ADD other constraints, defaults */
+	AT_PASS_MISC,				/* other stuff */
+} AlterTablePass;
+
+#define AT_NUM_PASSES			(AT_PASS_MISC + 1)
+
+typedef struct AlteredTableInfo
+{
+	/* Information saved before any work commences: */
+	Oid			relid;			/* Relation to work on */
+	char		relkind;		/* Its relkind */
+	TupleDesc	oldDesc;		/* Pre-modification tuple descriptor */
+
+	/*
+	 * Transiently set during Phase 2, normally set to NULL.
+	 *
+	 * ATRewriteCatalogs sets this when it starts, and closes when ATExecCmd
+	 * returns control.  This can be exploited by ATExecCmd subroutines to
+	 * close/reopen across transaction boundaries.
+	 */
+	Relation	rel;
+
+	/* Information saved by Phase 1 for Phase 2: */
+	List	   *subcmds[AT_NUM_PASSES]; /* Lists of AlterTableCmd */
+	/* Information saved by Phases 1/2 for Phase 3: */
+	List	   *constraints;	/* List of NewConstraint */
+	List	   *newvals;		/* List of NewColumnValue */
+	List	   *afterStmts;		/* List of utility command parsetrees */
+	bool		verify_new_notnull; /* T if we should recheck NOT NULL */
+	int			rewrite;		/* Reason for forced rewrite, if any */
+	bool		chgAccessMethod;	/* T if SET ACCESS METHOD is used */
+	Oid			newAccessMethod;	/* new access method; 0 means no change,
+									 * if above is true */
+	Oid			newTableSpace;	/* new tablespace; 0 means no change */
+	bool		chgPersistence; /* T if SET LOGGED/UNLOGGED is used */
+	char		newrelpersistence;	/* if above is true */
+	Expr	   *partition_constraint;	/* for attach partition validation */
+	/* true, if validating default due to some other attach/detach */
+	bool		validate_default;
+	/* Objects to rebuild after completing ALTER TYPE operations */
+	List	   *changedConstraintOids;	/* OIDs of constraints to rebuild */
+	List	   *changedConstraintDefs;	/* string definitions of same */
+	List	   *changedIndexOids;	/* OIDs of indexes to rebuild */
+	List	   *changedIndexDefs;	/* string definitions of same */
+	char	   *replicaIdentityIndex;	/* index to reset as REPLICA IDENTITY */
+	char	   *clusterOnIndex; /* index to use for CLUSTER */
+	List	   *changedStatisticsOids;	/* OIDs of statistics to rebuild */
+	List	   *changedStatisticsDefs;	/* string definitions of same */
+} AlteredTableInfo;
+
+
 extern ObjectAddress DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 									ObjectAddress *typaddress, const char *queryString);
+
+/*
+ * LookupAlteredTableInfo - return the AlteredTableInfo for `relid` from the
+ * ALTER TABLE phase-2 work queue currently being executed, or NULL if no
+ * ALTER TABLE phase 2 is in progress (or `relid` is not one of its targets).
+ * Intended for in-process table AMs whose object_access_hook callbacks fire
+ * during phase 2 and need PG's own cumulative state (e.g. tab->rewrite).
+ */
+extern AlteredTableInfo *LookupAlteredTableInfo(Oid relid);
 
 extern TupleDesc BuildDescForRelation(const List *columns);
 

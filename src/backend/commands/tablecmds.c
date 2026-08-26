@@ -129,87 +129,24 @@ typedef struct OnCommitItem
 
 static List *on_commits = NIL;
 
+/*
+ * The ALTER TABLE phase-2 work queue, made available to in-process table
+ * access methods via LookupAlteredTableInfo() so they can read PG's own
+ * rewrite verdict (tab->rewrite) and other cumulative state while their
+ * object_access_hook callbacks fire during phase 2.  Set while
+ * ATRewriteCatalogs() runs, NULL otherwise.
+ */
+static List *AlterTablePhase2Wqueue = NIL;
+
 
 /*
  * State information for ALTER TABLE
  *
- * The pending-work queue for an ALTER TABLE is a List of AlteredTableInfo
- * structs, one for each table modified by the operation (the named table
- * plus any child tables that are affected).  We save lists of subcommands
- * to apply to this table (possibly modified by parse transformation steps);
- * these lists will be executed in Phase 2.  If a Phase 3 step is needed,
- * necessary information is stored in the constraints and newvals lists.
- *
- * Phase 2 is divided into multiple passes; subcommands are executed in
- * a pass determined by subcommand type.
+ * AlteredTableInfo and AlterTablePass are now defined in commands/tablecmds.h
+ * so that table AMs can inspect them via the relation_alter_table_finish
+ * callback.  The following types remain private to this file.
  */
 
-typedef enum AlterTablePass
-{
-	AT_PASS_UNSET = -1,			/* UNSET will cause ERROR */
-	AT_PASS_DROP,				/* DROP (all flavors) */
-	AT_PASS_ALTER_TYPE,			/* ALTER COLUMN TYPE */
-	AT_PASS_ADD_COL,			/* ADD COLUMN */
-	AT_PASS_SET_EXPRESSION,		/* ALTER SET EXPRESSION */
-	AT_PASS_OLD_INDEX,			/* re-add existing indexes */
-	AT_PASS_OLD_CONSTR,			/* re-add existing constraints */
-	/* We could support a RENAME COLUMN pass here, but not currently used */
-	AT_PASS_ADD_CONSTR,			/* ADD constraints (initial examination) */
-	AT_PASS_COL_ATTRS,			/* set column attributes, eg NOT NULL */
-	AT_PASS_ADD_INDEXCONSTR,	/* ADD index-based constraints */
-	AT_PASS_ADD_INDEX,			/* ADD indexes */
-	AT_PASS_ADD_OTHERCONSTR,	/* ADD other constraints, defaults */
-	AT_PASS_MISC,				/* other stuff */
-} AlterTablePass;
-
-#define AT_NUM_PASSES			(AT_PASS_MISC + 1)
-
-typedef struct AlteredTableInfo
-{
-	/* Information saved before any work commences: */
-	Oid			relid;			/* Relation to work on */
-	char		relkind;		/* Its relkind */
-	TupleDesc	oldDesc;		/* Pre-modification tuple descriptor */
-
-	/*
-	 * Transiently set during Phase 2, normally set to NULL.
-	 *
-	 * ATRewriteCatalogs sets this when it starts, and closes when ATExecCmd
-	 * returns control.  This can be exploited by ATExecCmd subroutines to
-	 * close/reopen across transaction boundaries.
-	 */
-	Relation	rel;
-
-	/* Information saved by Phase 1 for Phase 2: */
-	List	   *subcmds[AT_NUM_PASSES]; /* Lists of AlterTableCmd */
-	/* Information saved by Phases 1/2 for Phase 3: */
-	List	   *constraints;	/* List of NewConstraint */
-	List	   *newvals;		/* List of NewColumnValue */
-	List	   *afterStmts;		/* List of utility command parsetrees */
-	bool		verify_new_notnull; /* T if we should recheck NOT NULL */
-	int			rewrite;		/* Reason for forced rewrite, if any */
-	bool		chgAccessMethod;	/* T if SET ACCESS METHOD is used */
-	Oid			newAccessMethod;	/* new access method; 0 means no change,
-									 * if above is true */
-	Oid			newTableSpace;	/* new tablespace; 0 means no change */
-	bool		chgPersistence; /* T if SET LOGGED/UNLOGGED is used */
-	char		newrelpersistence;	/* if above is true */
-	Expr	   *partition_constraint;	/* for attach partition validation */
-	/* true, if validating default due to some other attach/detach */
-	bool		validate_default;
-	/* Objects to rebuild after completing ALTER TYPE operations */
-	List	   *changedConstraintOids;	/* OIDs of constraints to rebuild */
-	List	   *changedConstraintDefs;	/* string definitions of same */
-	List	   *changedIndexOids;	/* OIDs of indexes to rebuild */
-	List	   *changedIndexDefs;	/* string definitions of same */
-	char	   *replicaIdentityIndex;	/* index to reset as REPLICA IDENTITY */
-	char	   *clusterOnIndex; /* index to use for CLUSTER */
-	List	   *changedStatisticsOids;	/* OIDs of statistics to rebuild */
-	List	   *changedStatisticsDefs;	/* string definitions of same */
-} AlteredTableInfo;
-
-/* Struct describing one new constraint to check in Phase 3 scan */
-/* Note: new not-null constraints are handled elsewhere */
 typedef struct NewConstraint
 {
 	char	   *name;			/* Constraint name, or NULL if none */
@@ -5171,6 +5108,20 @@ ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode,
 	ListCell   *ltab;
 
 	/*
+	 * Expose the work queue to in-process table AMs (e.g. orioledb) so their
+	 * object_access_hook callbacks fired below can look up the cumulative
+	 * AlteredTableInfo for the relation being altered -- in particular PG's
+	 * own rewrite verdict (tab->rewrite), finalized in phase 1.
+	 *
+	 * Wrap the phase-2 body in PG_TRY so the pointer is always cleared, even
+	 * when a subcommand raises an ERROR (longjmp) mid-phase-2: otherwise the
+	 * dangling pointer would be dereenced by a later command's OAT fire via
+	 * LookupAlteredTableInfo().
+	 */
+	AlterTablePhase2Wqueue = *wqueue;
+	PG_TRY();
+	{
+	/*
 	 * We process all the tables "in parallel", one pass at a time.  This is
 	 * needed because we may have to propagate work from one table to another
 	 * (specifically, ALTER TYPE on a foreign key's PK has to dispatch the
@@ -5233,6 +5184,44 @@ ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode,
 			tab->relkind == RELKIND_MATVIEW)
 			AlterTableCreateToastTable(tab->relid, (Datum) 0, lockmode);
 	}
+	}
+	PG_CATCH();
+	{
+		AlterTablePhase2Wqueue = NIL;
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	AlterTablePhase2Wqueue = NIL;
+}
+
+/*
+ * LookupAlteredTableInfo - return the AlteredTableInfo for `relid` from the
+ * ALTER TABLE phase-2 work queue currently being executed, or NULL if no
+ * ALTER TABLE is in progress (or `relid` is not one of its targets).
+ *
+ * Intended for in-process table access methods (e.g. orioledb) whose
+ * object_access_hook callbacks fire during phase 2 and need to read PG's own
+ * cumulative state for the relation -- in particular tab->rewrite, PG's
+ * rewrite verdict finalized in phase 1, instead of the AM re-deriving it.
+ * Only valid while ATRewriteCatalogs() is running.
+ */
+AlteredTableInfo *
+LookupAlteredTableInfo(Oid relid)
+{
+	ListCell   *ltab;
+
+	if (AlterTablePhase2Wqueue == NIL)
+		return NULL;
+
+	foreach(ltab, AlterTablePhase2Wqueue)
+	{
+		AlteredTableInfo *tab = (AlteredTableInfo *) lfirst(ltab);
+
+		if (tab->relid == relid)
+			return tab;
+	}
+	return NULL;
 }
 
 /*
