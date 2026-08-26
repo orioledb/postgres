@@ -15388,6 +15388,21 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	foreach(lc, reltoastidxids)
 		ATExecSetTableSpace(lfirst_oid(lc), newTableSpace, lockmode);
 
+	/*
+	 * Let the table AM finish SET-TABLESPACE now that the table, its toast
+	 * table and all toast indexes have all been moved (each had its
+	 * SetRelationTableSpace + CommandCounterIncrement applied above).  Only
+	 * relations with a table AM get the callback; indexes went through
+	 * index_copy_data and have no table-AM storage to relocate.  No-op for
+	 * AMs that leave the optional relation_set_tablespace_finish hook NULL.
+	 */
+	if (RELKIND_HAS_TABLE_AM(get_rel_relkind(tableOid)))
+	{
+		rel = relation_open(tableOid, lockmode);
+		table_relation_set_tablespace_finish(rel, &newrlocator, newTableSpace);
+		relation_close(rel, NoLock);
+	}
+
 	/* Clean up */
 	list_free(reltoastidxids);
 }

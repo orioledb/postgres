@@ -682,6 +682,22 @@ typedef struct TableAmRoutine
 	void		(*relation_copy_data) (Relation rel,
 									   const RelFileLocator *newrlocator);
 
+	/*
+	 * See table_relation_set_tablespace_finish().  Optional (NULL = the AM
+	 * needs no post-SET-TABLESPACE action beyond the storage copy done in
+	 * relation_copy_data).  Invoked by ATExecSetTableSpace() after the table,
+	 * its toast table and all toast indexes have been moved
+	 * (SetRelationTableSpace + CommandCounterIncrement applied for each), so
+	 * every new relnode is visible in pg_class.  Lets an AM that manages its
+	 * own physical storage separate from the relfilenode (e.g. orioledb)
+	 * relocate that storage now that all the new relnodes are known.
+	 * `newrlocator` and `newTableSpace` are the table's own NEW relfilenode
+	 * and tablespace.
+	 */
+	void		(*relation_set_tablespace_finish) (Relation rel,
+												   const RelFileLocator *newrlocator,
+												   Oid newTableSpace);
+
 	/* See table_relation_copy_for_cluster() */
 	void		(*relation_copy_for_cluster) (Relation OldTable,
 											  Relation NewTable,
@@ -1780,6 +1796,21 @@ static inline void
 table_relation_copy_data(Relation rel, const RelFileLocator *newrlocator)
 {
 	rel->rd_tableam->relation_copy_data(rel, newrlocator);
+}
+
+/*
+ * Notify the table AM that an ALTER TABLE ... SET TABLESPACE has finished for
+ * `rel` (table, its toast table and all toast indexes moved).  No-op for an AM
+ * that does not provide the optional relation_set_tablespace_finish callback.
+ */
+static inline void
+table_relation_set_tablespace_finish(Relation rel,
+									 const RelFileLocator *newrlocator,
+									 Oid newTableSpace)
+{
+	if (rel->rd_tableam && rel->rd_tableam->relation_set_tablespace_finish)
+		rel->rd_tableam->relation_set_tablespace_finish(rel, newrlocator,
+														newTableSpace);
 }
 
 /*
