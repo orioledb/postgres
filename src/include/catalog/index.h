@@ -119,7 +119,8 @@ extern ObjectAddress index_constraint_create(Relation heapRelation,
 											 bool allow_system_table_mods,
 											 bool is_internal);
 
-extern void index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode);
+extern void index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode,
+					   int flags);
 
 extern IndexInfo *BuildIndexInfo(Relation index);
 

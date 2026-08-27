@@ -2108,7 +2108,7 @@ index_constraint_create(Relation heapRelation,
  * CONCURRENTLY.
  */
 void
-index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
+index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode, int flags)
 {
 	Oid			heapId;
 	Relation	userHeapRelation;
@@ -2301,10 +2301,20 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	}
 
 	/*
-	 * Schedule physical removal of the files (if any)
+	 * Schedule physical removal of the files (if any).  Give an index AM
+	 * that manages its own storage separate from the relfilenode (e.g.
+	 * orioledb) a single chokepoint to drop that storage, with the real
+	 * PERFORM_DELETION_* flags so it can distinguish internal/cascade/
+	 * concurrent drops.  Heap/btree/... leave amdrop NULL (no-op).
 	 */
 	if (RELKIND_HAS_STORAGE(userIndexRelation->rd_rel->relkind))
+	{
+		IndexAmRoutine *amroutine = userIndexRelation->rd_indam;
+
+		if (amroutine && amroutine->amdrop)
+			amroutine->amdrop(userIndexRelation, flags);
 		RelationDropStorage(userIndexRelation);
+	}
 
 	/* ensure that stats are dropped if transaction commits */
 	pgstat_drop_relation(userIndexRelation);

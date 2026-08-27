@@ -1398,7 +1398,8 @@ doDeletion(const ObjectAddress *object, int flags)
 					bool		concurrent_lock_mode = ((flags & PERFORM_DELETION_CONCURRENT_LOCK) != 0);
 
 					Assert(object->objectSubId == 0);
-					index_drop(object->objectId, concurrent, concurrent_lock_mode);
+					index_drop(object->objectId, concurrent, concurrent_lock_mode,
+							   flags);
 				}
 				else
 				{
