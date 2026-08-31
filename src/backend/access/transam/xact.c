@@ -95,6 +95,8 @@ int			synchronous_commit = SYNCHRONOUS_COMMIT_ON;
  * concurrent aborts only in systable_* APIs.
  */
 TransactionId CheckXidAlive = InvalidTransactionId;
+
+decoding_xid_status_hook_type decoding_xid_status_hook = NULL;
 bool		bsysscan = false;
 
 /*

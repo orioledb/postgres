@@ -794,7 +794,8 @@ ReorderBufferProcessPartialChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 	if (ReorderBufferCanStartStreaming(rb) &&
 		!(rbtxn_has_partial_change(toptxn)) &&
 		rbtxn_is_serialized(txn) &&
-		rbtxn_has_streamable_change(toptxn))
+		rbtxn_has_streamable_change(toptxn) &&
+		!rbtxn_no_streaming(toptxn))
 		ReorderBufferStreamTXN(rb, toptxn);
 }
 
@@ -1999,6 +2000,20 @@ SetupCheckXidLive(TransactionId xid)
 	 * setup CheckXidAlive if it's not committed yet.  We don't check if the
 	 * xid is aborted.  That will happen during catalog access.
 	 */
+	if (decoding_xid_status_hook)
+	{
+		DecodingXidStatus status = decoding_xid_status_hook(xid);
+
+		if (status != DECODING_XID_NOT_HANDLED)
+		{
+			if (status == DECODING_XID_COMMITTED)
+				CheckXidAlive = InvalidTransactionId;
+			else
+				CheckXidAlive = xid;
+			return;
+		}
+	}
+
 	if (!TransactionIdDidCommit(xid))
 		CheckXidAlive = xid;
 	else
@@ -3739,7 +3754,7 @@ ReorderBufferLargestStreamableTopTXN(ReorderBuffer *rb)
 
 		if ((largest == NULL || txn->total_size > largest_size) &&
 			(txn->total_size > 0) && !(rbtxn_has_partial_change(txn)) &&
-			rbtxn_has_streamable_change(txn))
+			rbtxn_has_streamable_change(txn) && !rbtxn_no_streaming(txn))
 		{
 			largest = txn;
 			largest_size = txn->total_size;

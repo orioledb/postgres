@@ -170,6 +170,10 @@ typedef struct ReorderBufferChange
 #define RBTXN_HAS_STREAMABLE_CHANGE		0x0100
 #define RBTXN_DISTR_INVAL_OVERFLOWED	0x0200
 #define RBTXN_DISTR_SKIP_CLEANUP		0x0400
+#define RBTXN_NO_STREAMING				0x0800
+
+/* Has a storage engine marked this transaction as not streamable? */
+#define rbtxn_no_streaming(txn) ( 	((txn)->txn_flags & RBTXN_NO_STREAMING) != 0 )
 
 /* Does the transaction have catalog changes? */
 #define rbtxn_has_catalog_changes(txn) \

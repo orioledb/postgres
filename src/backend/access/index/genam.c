@@ -483,8 +483,22 @@ systable_beginscan(Relation heapRelation,
 static inline void
 HandleConcurrentAbort()
 {
-	if (TransactionIdIsValid(CheckXidAlive) &&
-		!TransactionIdIsInProgress(CheckXidAlive) &&
+	if (!TransactionIdIsValid(CheckXidAlive))
+		return;
+
+	if (decoding_xid_status_hook)
+	{
+		DecodingXidStatus status = decoding_xid_status_hook(CheckXidAlive);
+
+		if (status == DECODING_XID_ABORTED)
+			ereport(ERROR,
+					(errcode(ERRCODE_TRANSACTION_ROLLBACK),
+					 errmsg("transaction aborted during system catalog scan")));
+		if (status != DECODING_XID_NOT_HANDLED)
+			return;
+	}
+
+	if (!TransactionIdIsInProgress(CheckXidAlive) &&
 		!TransactionIdDidCommit(CheckXidAlive))
 		ereport(ERROR,
 				(errcode(ERRCODE_TRANSACTION_ROLLBACK),
