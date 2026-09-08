@@ -27,6 +27,7 @@ typedef uint64 XLogRecPtr;
  */
 #define InvalidXLogRecPtr	0
 #define XLogRecPtrIsInvalid(r)	((r) == InvalidXLogRecPtr)
+#define XLogRecPtrIsValid(r)	((r) != InvalidXLogRecPtr)
 
 /*
  * First LSN to use for "fake" LSNs.
