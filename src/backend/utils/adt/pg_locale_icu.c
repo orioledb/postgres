@@ -248,7 +248,7 @@ init_pg_locale_icu(pg_locale_t loc, const char *iculocstr,
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 			 errmsg("ICU is not supported in this build")));
 
-	return NULL;
+	return;
 #endif
 }
 

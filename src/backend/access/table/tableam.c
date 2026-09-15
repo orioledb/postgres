@@ -648,7 +648,7 @@ table_block_relation_size(Relation rel, ForkNumber forkNumber, uint8 method)
 	else
 		nblocks = smgrnblocks(RelationGetSmgr(rel), forkNumber);
 
-	return (int64) nblocks * BLCKSZ;
+	return (uint64) nblocks * BLCKSZ;
 }
 
 /*

@@ -347,7 +347,7 @@ register_o_detoast_func(ToastFunc func)
 }
 
 void
-deregister_o_detoast_func()
+deregister_o_detoast_func(void)
 {
 	o_detoast_func = NULL;
 }

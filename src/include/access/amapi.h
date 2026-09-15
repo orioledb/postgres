@@ -316,7 +316,7 @@ typedef struct IndexAmRoutine
 	bool		amusemaintenanceworkmem;
 	/* does AM store tuple information only at block granularity? */
 	bool		amsummarizing;
-	/* does AM can provide MVCC */
+	/* can AM provide MVCC? */
 	bool		ammvccaware;
 	/* OR of parallel vacuum flags.  See vacuum.h for flags. */
 	uint8		amparallelvacuumoptions;

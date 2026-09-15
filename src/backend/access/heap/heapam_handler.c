@@ -626,6 +626,7 @@ heapam_tuple_insert_with_arbiter(ResultRelInfo *resultRelInfo,
 		if (specConflict)
 		{
 			list_free(recheckIndexes);
+			recheckIndexes = NIL;
 			CHECK_FOR_INTERRUPTS();
 			continue;
 		}

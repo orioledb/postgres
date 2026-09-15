@@ -684,15 +684,6 @@ TransactionIdSetStatusBit(TransactionId xid, XidStatus status, XLogRecPtr lsn, i
 		curval == TRANSACTION_STATUS_COMMITTED)
 		return;
 
-	/*
-	 * Current state change should be from 0 or subcommitted to target state
-	 * or we should already be there when replaying changes during recovery.
-	 */
-//	Assert(curval == 0 ||
-//		   (curval == TRANSACTION_STATUS_SUB_COMMITTED &&
-//			status != TRANSACTION_STATUS_IN_PROGRESS) ||
-//		   curval == status);
-
 	/* note this assumes exclusive access to the clog page */
 	byteval = *byteptr;
 	byteval &= ~(((1 << CLOG_BITS_PER_XACT) - 1) << bshift);
