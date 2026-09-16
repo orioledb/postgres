@@ -42,6 +42,7 @@
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
+#include "utils/catcache.h"
 #include "utils/formatting.h"
 #include "utils/guc_hooks.h"
 #include "utils/lsyscache.h"
@@ -1224,7 +1225,14 @@ pg_newlocale_from_collation(Oid collid)
 	if (!OidIsValid(collid))
 		elog(ERROR, "cache lookup failed for collation %u", collid);
 
-	if (!RecoveryInProgress())
+	/*
+	 * An extension that serves catcache lookups itself does not open
+	 * pg_collation here -- orioledb answers them from its own system trees --
+	 * so the transaction requirement does not apply to it.  Its background
+	 * processes (the checkpointer above all) compare index keys and therefore
+	 * need a collation, with no transaction to run in.
+	 */
+	if (!RecoveryInProgress() && SearchCatCacheInternal_hook == NULL)
 		AssertCouldGetRelation();
 
 	if (last_collation_cache_oid == collid)
