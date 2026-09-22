@@ -4660,11 +4660,16 @@ XLogRecPtr
 GetEffectiveXlogReplayRecPtr(void)
 {
 	XLogRecPtr	recptr = InvalidXLogRecPtr;
-	bool		useHook = GetReplayXlogPtrHook != NULL && RecoveryInProgress();
+
+	if (GetReplayXlogPtrHook)
+	{
+		recptr = GetReplayXlogPtrHook();
+
+		if (XLogRecPtrIsValid(recptr))
+			return recptr;
+	}
 
 	SpinLockAcquire(&XLogRecoveryCtl->info_lck);
-	if (useHook)
-		recptr = GetReplayXlogPtrHook();
 	if (recptr == InvalidXLogRecPtr)
 		recptr = XLogRecoveryCtl->lastReplayedEndRecPtr;
 	SpinLockRelease(&XLogRecoveryCtl->info_lck);
