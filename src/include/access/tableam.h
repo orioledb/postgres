@@ -853,6 +853,12 @@ typedef struct TableAmRoutine
 	 */
 	Oid			(*relation_toast_am) (Relation rel);
 
+	/* Notify the AM after a newly created TOAST relation is fully linked. */
+	void		(*relation_toast_created) (Relation rel, Relation toastrel);
+
+	/* Notify the AM after a logical CREATE TABLE definition is complete. */
+	void		(*relation_create_finish) (Relation rel);
+
 	/*
 	 * This callback is invoked when detoasting a value stored in a toast
 	 * table implemented by this AM.  See table_relation_fetch_toast_slice()
@@ -2095,6 +2101,24 @@ static inline Oid
 table_relation_toast_am(Relation rel)
 {
 	return rel->rd_tableam->relation_toast_am(rel);
+}
+
+/* Notify the table AM that a TOAST relation has been created and linked. */
+static inline void
+table_relation_toast_created(Relation rel, Relation toastrel)
+{
+	if (rel->rd_tableam->relation_toast_created)
+		rel->rd_tableam->relation_toast_created(rel, toastrel);
+}
+
+/* Notify the table AM that a logical CREATE TABLE operation is complete. */
+static inline void
+table_relation_create_finish(Relation rel)
+{
+	if ((rel->rd_rel->relkind == RELKIND_RELATION ||
+		 rel->rd_rel->relkind == RELKIND_MATVIEW) &&
+		rel->rd_tableam && rel->rd_tableam->relation_create_finish)
+		rel->rd_tableam->relation_create_finish(rel);
 }
 
 /*

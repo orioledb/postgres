@@ -139,6 +139,13 @@ create_ctas_internal(List *attrList, IntoClause *into)
 		CommandCounterIncrement();
 	}
 
+	{
+		Relation	rel = table_open(intoRelationAddr.objectId, NoLock);
+
+		table_relation_create_finish(rel);
+		table_close(rel, NoLock);
+	}
+
 	return intoRelationAddr;
 }
 

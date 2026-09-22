@@ -391,6 +391,13 @@ create_toast_table(Relation rel, Oid toastOid, Oid toastIndexOid,
 	 */
 	CommandCounterIncrement();
 
+	if (!IsBootstrapProcessingMode())
+	{
+		toast_rel = table_open(toast_relid, ShareLock);
+		table_relation_toast_created(rel, toast_rel);
+		table_close(toast_rel, ShareLock);
+	}
+
 	return true;
 }
 
