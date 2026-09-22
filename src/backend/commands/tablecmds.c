@@ -357,6 +357,9 @@ static void ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode,
 static void ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 					  AlterTableCmd *cmd, LOCKMODE lockmode, AlterTablePass cur_pass,
 					  AlterTableUtilityContext *context);
+static void ATExecTableAmCmd(Relation rel, AlteredTableInfo *tab,
+							 AlterTableCmd *cmd, AlterTablePass cur_pass,
+							 const ObjectAddress *address);
 static AlterTableCmd *ATParseTransformCmd(List **wqueue, AlteredTableInfo *tab,
 										  Relation rel, AlterTableCmd *cmd,
 										  bool recurse, LOCKMODE lockmode,
@@ -425,11 +428,12 @@ static ObjectAddress ATExecSetStorage(Relation rel, const char *colName,
 static void ATPrepDropColumn(List **wqueue, Relation rel, bool recurse, bool recursing,
 							 AlterTableCmd *cmd, LOCKMODE lockmode,
 							 AlterTableUtilityContext *context);
-static ObjectAddress ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
+static ObjectAddress ATExecDropColumn(List **wqueue, Relation rel, AlterTableCmd *cmd,
+									  AlterTablePass cur_pass, const char *colName,
 									  DropBehavior behavior,
 									  bool recurse, bool recursing,
 									  bool missing_ok, LOCKMODE lockmode,
-									  ObjectAddresses *addrs);
+									  ObjectAddresses *addrs, List **dropped);
 static ObjectAddress ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 									IndexStmt *stmt, bool is_rebuild, LOCKMODE lockmode);
 static ObjectAddress ATExecAddStatistics(AlteredTableInfo *tab, Relation rel,
@@ -5304,10 +5308,10 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 										   lockmode);
 			break;
 		case AT_DropColumn:		/* DROP COLUMN */
-			address = ATExecDropColumn(wqueue, rel, cmd->name,
+			address = ATExecDropColumn(wqueue, rel, cmd, cur_pass, cmd->name,
 									   cmd->behavior, cmd->recurse, false,
 									   cmd->missing_ok, lockmode,
-									   NULL);
+									   NULL, NULL);
 			break;
 		case AT_AddIndex:		/* ADD INDEX */
 			address = ATExecAddIndex(tab, rel, (IndexStmt *) cmd->def, false,
@@ -5555,6 +5559,31 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 	 * can see the changes so far
 	 */
 	CommandCounterIncrement();
+
+	/* ADD/DROP COLUMN fire at their recursive per-relation completion sites. */
+	if (cmd && cmd->subtype != AT_AddColumn &&
+		cmd->subtype != AT_AddColumnToView && cmd->subtype != AT_DropColumn &&
+		(rel->rd_rel->relkind == RELKIND_RELATION ||
+		 rel->rd_rel->relkind == RELKIND_MATVIEW) && rel->rd_tableam &&
+		rel->rd_tableam->relation_alter_table_cmd)
+	{
+		table_relation_alter_table_cmd(rel, tab, cmd, cur_pass, &address);
+		CommandCounterIncrement();
+	}
+}
+
+static void
+ATExecTableAmCmd(Relation rel, AlteredTableInfo *tab, AlterTableCmd *cmd,
+				 AlterTablePass cur_pass, const ObjectAddress *address)
+{
+	if ((rel->rd_rel->relkind == RELKIND_RELATION ||
+		 rel->rd_rel->relkind == RELKIND_MATVIEW) && rel->rd_tableam &&
+		rel->rd_tableam->relation_alter_table_cmd)
+	{
+		CommandCounterIncrement();
+		table_relation_alter_table_cmd(rel, tab, cmd, cur_pass, address);
+		CommandCounterIncrement();
+	}
 }
 
 /*
@@ -7110,6 +7139,8 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			/* Make the child column change visible */
 			CommandCounterIncrement();
 
+			ATExecTableAmCmd(rel, tab, *cmd, cur_pass,
+							 &InvalidObjectAddress);
 			return InvalidObjectAddress;
 		}
 	}
@@ -7118,6 +7149,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	if (!check_for_column_name_collision(rel, colDef->colname, if_not_exists))
 	{
 		table_close(attrdesc, RowExclusiveLock);
+		ATExecTableAmCmd(rel, tab, *cmd, cur_pass, &InvalidObjectAddress);
 		return InvalidObjectAddress;
 	}
 
@@ -7386,6 +7418,9 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	add_column_datatype_dependency(myrelid, newattnum, attribute->atttypid);
 	add_column_collation_dependency(myrelid, newattnum, attribute->attcollation);
 
+	ObjectAddressSubSet(address, RelationRelationId, myrelid, newattnum);
+	ATExecTableAmCmd(rel, tab, *cmd, cur_pass, &address);
+
 	/*
 	 * Propagate to children as appropriate.  Unlike most other ALTER
 	 * routines, we have to do this one level of recursion at a time; we can't
@@ -7435,7 +7470,6 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		table_close(childrel, NoLock);
 	}
 
-	ObjectAddressSubSet(address, RelationRelationId, myrelid, newattnum);
 	return address;
 }
 
@@ -8986,11 +9020,12 @@ ATPrepDropColumn(List **wqueue, Relation rel, bool recurse, bool recursing,
  * checked recursively.
  */
 static ObjectAddress
-ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
+ATExecDropColumn(List **wqueue, Relation rel, AlterTableCmd *cmd,
+				 AlterTablePass cur_pass, const char *colName,
 				 DropBehavior behavior,
 				 bool recurse, bool recursing,
 				 bool missing_ok, LOCKMODE lockmode,
-				 ObjectAddresses *addrs)
+				 ObjectAddresses *addrs, List **dropped)
 {
 	HeapTuple	tuple;
 	Form_pg_attribute targetatt;
@@ -8998,6 +9033,7 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
 	List	   *children;
 	ObjectAddress object;
 	bool		is_expr;
+	List	   *top_dropped = NIL;
 
 	/* At top level, permission check was done in ATPrepCmd, else do it */
 	if (recursing)
@@ -9010,7 +9046,10 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
 	check_stack_depth();
 
 	if (!recursing)
+	{
 		addrs = new_object_addresses();
+		dropped = &top_dropped;
+	}
 
 	/*
 	 * get the number of the attribute
@@ -9123,9 +9162,9 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
 				if (childatt->attinhcount == 1 && !childatt->attislocal)
 				{
 					/* Time to delete this child column, too */
-					ATExecDropColumn(wqueue, childrel, colName,
+					ATExecDropColumn(wqueue, childrel, cmd, cur_pass, colName,
 									 behavior, true, true,
-									 false, lockmode, addrs);
+									 false, lockmode, addrs, dropped);
 				}
 				else
 				{
@@ -9166,12 +9205,33 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
 	object.objectId = RelationGetRelid(rel);
 	object.objectSubId = attnum;
 	add_exact_object_address(&object, addrs);
+	{
+		ObjectAddress *dropped_address = palloc(sizeof(ObjectAddress));
+
+		*dropped_address = object;
+		*dropped = lappend(*dropped, dropped_address);
+	}
 
 	if (!recursing)
 	{
+		ListCell   *lc;
 		/* Recursion has ended, drop everything that was collected */
 		performMultipleDeletions(addrs, behavior, 0);
 		free_object_addresses(addrs);
+
+		foreach(lc, top_dropped)
+		{
+			ObjectAddress *dropped_address = lfirst(lc);
+			Relation	dropped_rel;
+			AlteredTableInfo *dropped_tab;
+
+			dropped_rel = table_open(dropped_address->objectId, NoLock);
+			dropped_tab = ATGetQueueEntry(wqueue, dropped_rel);
+			ATExecTableAmCmd(dropped_rel, dropped_tab, cmd, cur_pass,
+							 &*dropped_address);
+			table_close(dropped_rel, NoLock);
+		}
+		list_free_deep(top_dropped);
 	}
 
 	return object;

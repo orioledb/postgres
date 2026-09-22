@@ -38,7 +38,10 @@ extern PGDLLIMPORT bool synchronize_seqscans;
 
 
 struct BulkInsertStateData;
+struct AlteredTableInfo;
+struct AlterTableCmd;
 struct IndexInfo;
+struct ObjectAddress;
 struct SampleScanState;
 struct TBMIterateResult;
 struct VacuumParams;
@@ -858,6 +861,13 @@ typedef struct TableAmRoutine
 
 	/* Notify the AM after a logical CREATE TABLE definition is complete. */
 	void		(*relation_create_finish) (Relation rel);
+
+	/* Notify the AM after one ALTER TABLE phase-2 subcommand completes. */
+	void		(*relation_alter_table_cmd) (Relation rel,
+										 const struct AlteredTableInfo *tab,
+										 const struct AlterTableCmd *cmd,
+										 int pass,
+										 const struct ObjectAddress *address);
 
 	/*
 	 * This callback is invoked when detoasting a value stored in a toast
@@ -2119,6 +2129,21 @@ table_relation_create_finish(Relation rel)
 		 rel->rd_rel->relkind == RELKIND_MATVIEW) &&
 		rel->rd_tableam && rel->rd_tableam->relation_create_finish)
 		rel->rd_tableam->relation_create_finish(rel);
+}
+
+/* Notify the table AM after one ALTER TABLE phase-2 subcommand. */
+static inline void
+table_relation_alter_table_cmd(Relation rel,
+							   const struct AlteredTableInfo *tab,
+							   const struct AlterTableCmd *cmd,
+							   int pass,
+							   const struct ObjectAddress *address)
+{
+	if ((rel->rd_rel->relkind == RELKIND_RELATION ||
+		 rel->rd_rel->relkind == RELKIND_MATVIEW) &&
+		rel->rd_tableam && rel->rd_tableam->relation_alter_table_cmd)
+		rel->rd_tableam->relation_alter_table_cmd(rel, tab, cmd, pass,
+											 address);
 }
 
 /*
