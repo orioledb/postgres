@@ -17,6 +17,7 @@
 #include "postgres.h"
 
 #include "access/reloptions.h"
+#include "access/table.h"
 #include "access/twophase.h"
 #include "access/xact.h"
 #include "access/xlog.h"
@@ -1135,6 +1136,7 @@ ProcessUtilitySlow(ParseState *pstate,
 				{
 					List	   *stmts;
 					RangeVar   *table_rv = NULL;
+					Oid			created_relid = InvalidOid;
 
 					/* Run parse analysis ... */
 					stmts = transformCreateStmt((CreateStmt *) parsetree,
@@ -1165,6 +1167,7 @@ ProcessUtilitySlow(ParseState *pstate,
 													 RELKIND_RELATION,
 													 InvalidOid, NULL,
 													 queryString);
+							created_relid = address.objectId;
 							EventTriggerCollectSimpleCommand(address,
 															 secondaryObject,
 															 stmt);
@@ -1255,6 +1258,14 @@ ProcessUtilitySlow(ParseState *pstate,
 						/* Need CCI between commands */
 						if (stmts != NIL)
 							CommandCounterIncrement();
+					}
+
+					if (OidIsValid(created_relid))
+					{
+						Relation	rel = table_open(created_relid, NoLock);
+
+						table_relation_create_finish(rel);
+						table_close(rel, NoLock);
 					}
 
 					/*
