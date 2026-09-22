@@ -2282,6 +2282,7 @@ RelationReloadIndexInfo(Relation relation)
 	bool		indexOK;
 	HeapTuple	pg_class_tuple;
 	Form_pg_class relp;
+	IndexAmRoutine *amroutine;
 
 	/* Should be called only for invalidated, live indexes */
 	Assert((relation->rd_rel->relkind == RELKIND_INDEX ||
@@ -2321,6 +2322,22 @@ RelationReloadIndexInfo(Relation relation)
 			 RelationGetRelid(relation));
 	relp = (Form_pg_class) GETSTRUCT(pg_class_tuple);
 	memcpy(relation->rd_rel, relp, CLASS_TUPLE_SIZE);
+
+	/*
+	 * IndexAMRoutineHook can select a routine using the parent table's AM.
+	 * SET ACCESS METHOD changes that dependency without changing this index's
+	 * own catalog rows, so a requested index relcache reload must refresh the
+	 * routine before reparsing AM-specific reloptions.
+	 *
+	 * Hook implementations are required to preserve the index AM's structural
+	 * properties (strategy/support counts and opclass layout), allowing the
+	 * existing support caches to remain valid across this callback refresh.
+	 */
+	amroutine = GetIndexAmRoutineExtended(relation->rd_id,
+									  relation->rd_amhandler);
+	memcpy(relation->rd_indam, amroutine, sizeof(IndexAmRoutine));
+	pfree(amroutine);
+
 	/* Reload reloptions in case they changed */
 	if (relation->rd_options)
 		pfree(relation->rd_options);

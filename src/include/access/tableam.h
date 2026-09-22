@@ -758,8 +758,10 @@ typedef struct TableAmRoutine
 	 * storage -- in particular create the AM's own primary index tree on the
 	 * new heap -- so that the subsequent native fill (ATRewriteTable for ALTER
 	 * COLUMN TYPE, the transient-relation DestReceiver for REFRESH
-	 * MATERIALIZED VIEW) writes tuples into the AM's storage.  Heap AM leaves
-	 * this NULL (default behavior: the heap needs no preparation).
+	 * MATERIALIZED VIEW) writes tuples into the AM's storage.  The callback is
+	 * selected from newrel because SET ACCESS METHOD can change the AM during
+	 * the rewrite.  Heap AM leaves this NULL (default behavior: the heap needs
+	 * no preparation).
 	 */
 	void		(*relation_begin_heap_rewrite) (Relation oldrel,
 											   Relation newrel);
@@ -1903,14 +1905,16 @@ table_relation_finish_heap_swap(Relation oldrel, Relation newrel,
  * fills it.  It lets a table AM that manages its own physical storage separate
  * from the relfilenode (e.g. orioledb) prepare that storage -- in particular
  * create the AM's own primary index tree on the new heap -- so that the
- * subsequent native fill writes tuples into the AM's storage.  Heap AM leaves
- * this NULL (default: no preparation needed).
+	 * subsequent native fill writes tuples into the AM's storage.  Dispatch is
+	 * based on the destination relation, because a SET ACCESS METHOD rewrite can
+	 * have different source and destination AMs.  Heap AM leaves this NULL
+	 * (default: no preparation needed).
  */
 static inline void
 table_relation_begin_heap_rewrite(Relation oldrel, Relation newrel)
 {
-	if (oldrel->rd_tableam && oldrel->rd_tableam->relation_begin_heap_rewrite)
-		oldrel->rd_tableam->relation_begin_heap_rewrite(oldrel, newrel);
+	if (newrel->rd_tableam && newrel->rd_tableam->relation_begin_heap_rewrite)
+		newrel->rd_tableam->relation_begin_heap_rewrite(oldrel, newrel);
 }
 
 /*

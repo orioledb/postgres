@@ -353,6 +353,12 @@ extern IndexAmRoutine *GetIndexAmRoutine(Oid amhandler);
 extern IndexAmRoutine *GetIndexAmRoutineExtended(Oid indoid, Oid amhandler);
 extern IndexAmRoutine *GetIndexAmRoutineByAmId(Oid indoid, Oid amoid, bool noerror);
 
+/*
+ * A hook may replace operational callbacks according to the parent table AM,
+ * but must preserve the underlying index AM's structural properties, including
+ * strategy/support counts and opclass layout.  Relcache can refresh the hook's
+ * result after SET ACCESS METHOD without rebuilding those support caches.
+ */
 typedef IndexAmRoutine *(*IndexAMRoutineHookType) (Oid tamoid, Oid amhandler);
 
 extern IndexAMRoutineHookType IndexAMRoutineHook;

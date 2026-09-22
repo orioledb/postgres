@@ -1501,6 +1501,11 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 		Relation	oldrel = table_open(OIDOldHeap, NoLock);
 		Relation	newrel = table_open(OIDNewHeap, NoLock);
 		bool		am_handled;
+		List	   *am_changed_indexes = NIL;
+		ListCell   *lc;
+
+		if (oldrel->rd_rel->relam != newrel->rd_rel->relam)
+			am_changed_indexes = RelationGetIndexList(oldrel);
 
 		am_handled = table_relation_finish_heap_swap(oldrel, newrel,
 													 swap_toast_by_content,
@@ -1509,6 +1514,18 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 													 newrelpersistence);
 		table_close(oldrel, NoLock);
 		table_close(newrel, NoLock);
+
+		/*
+		 * An index relcache entry contains an IndexAmRoutine selected using its
+		 * parent table's AM.  SET ACCESS METHOD changes that selection without
+		 * changing the index's own pg_class row, so explicitly invalidate each
+		 * index after the swapped relations have been closed and before reindex.
+		 */
+		foreach(lc, am_changed_indexes)
+			CacheInvalidateRelcacheByRelid(lfirst_oid(lc));
+		if (am_changed_indexes != NIL)
+			CommandCounterIncrement();
+		list_free(am_changed_indexes);
 
 		if (am_handled)
 		{
