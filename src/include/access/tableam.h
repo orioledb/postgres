@@ -870,6 +870,35 @@ typedef struct TableAmRoutine
 										 const struct ObjectAddress *address);
 
 	/*
+	 * Plan a table-AM-owned index rebuild batch for a non-rewrite ALTER TYPE.
+	 *
+	 * Fired from ATPostAlterTypeCleanup after every TryReuseIndex() verdict is
+	 * recorded in tab->am_rebuild_index_oids/am_rebuild_index_reused and
+	 * before the old indexes and constraints are deleted.  The AM may claim
+	 * the queued index recreations (e.g. a non-reusable primary implies its
+	 * native secondaries must be rebuilt against the new primary layout) and
+	 * publish its intent in tab->am_rebuild_plan.  While the batch is active,
+	 * index creation must not invoke ordinary per-index AM builds, and the
+	 * completion callback below is responsible for one rebuild pass over the
+	 * preserved source data.  Optional; when absent the AM sees the ordinary
+	 * per-index drop/create flow.
+	 */
+	void		(*relation_alter_type_rebuild_plan) (Relation rel,
+										 struct AlteredTableInfo *tab);
+
+	/*
+	 * Complete a table-AM-owned index rebuild batch planned by the callback
+	 * above.  Fired from ATRewriteCatalogs at the end of the AT_PASS_OLD_INDEX
+	 * work-queue entry that recreates the indexes, when every recreated index
+	 * catalog entry is visible and before later ALTER passes consume it.  This
+	 * can be a partition parent's entry for a physical child relation.  The AM
+	 * must replace the old index metadata with the final definitions and
+	 * rebuild the claimed trees in one pass.  Optional.
+	 */
+	void		(*relation_alter_type_rebuild_finish) (Relation rel,
+										 struct AlteredTableInfo *tab);
+
+	/*
 	 * This callback is invoked when detoasting a value stored in a toast
 	 * table implemented by this AM.  See table_relation_fetch_toast_slice()
 	 * for more details.
@@ -2144,6 +2173,31 @@ table_relation_alter_table_cmd(Relation rel,
 		rel->rd_tableam && rel->rd_tableam->relation_alter_table_cmd)
 		rel->rd_tableam->relation_alter_table_cmd(rel, tab, cmd, pass,
 											 address);
+}
+
+/*
+ * Let the table AM plan a table-AM-owned index rebuild batch for a
+ * non-rewrite ALTER TYPE (see TableAmRoutine for the contract).
+ */
+static inline void
+table_relation_alter_type_rebuild_plan(Relation rel, struct AlteredTableInfo *tab)
+{
+	if ((rel->rd_rel->relkind == RELKIND_RELATION ||
+		 rel->rd_rel->relkind == RELKIND_MATVIEW) &&
+		rel->rd_tableam && rel->rd_tableam->relation_alter_type_rebuild_plan)
+		rel->rd_tableam->relation_alter_type_rebuild_plan(rel, tab);
+}
+
+/*
+ * Complete a table-AM-owned index rebuild batch planned above.
+ */
+static inline void
+table_relation_alter_type_rebuild_finish(Relation rel, struct AlteredTableInfo *tab)
+{
+	if ((rel->rd_rel->relkind == RELKIND_RELATION ||
+		 rel->rd_rel->relkind == RELKIND_MATVIEW) &&
+		rel->rd_tableam && rel->rd_tableam->relation_alter_type_rebuild_finish)
+		rel->rd_tableam->relation_alter_type_rebuild_finish(rel, tab);
 }
 
 /*
