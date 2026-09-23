@@ -100,7 +100,6 @@ static TypeCacheEntry *firstDomainTypeEntry = NULL;
 #define TCFLAGS_HAVE_FIELD_COMPARE			0x010000
 #define TCFLAGS_HAVE_FIELD_HASHING			0x020000
 #define TCFLAGS_HAVE_FIELD_EXTENDED_HASHING	0x040000
-#define TCFLAGS_CHECKED_DOMAIN_CONSTRAINTS	0x080000
 #define TCFLAGS_DOMAIN_BASE_IS_COMPOSITE	0x100000
 
 /* The flags associated with equality/comparison/hashing are all but these: */
@@ -292,6 +291,7 @@ static int32 NextRecordTypmod = 0;	/* number of entries used */
 static uint64 tupledesc_id_counter = INVALID_TUPLEDESC_IDENTIFIER;
 load_typcache_tupdesc_hook_type load_typcache_tupdesc_hook = NULL;
 load_enum_cache_data_hook_type load_enum_cache_data_hook = NULL;
+load_domaintype_info_hook_type load_domaintype_info_hook = NULL;
 
 static void load_typcache_tupdesc(TypeCacheEntry *typentry);
 static void load_rangetype_info(TypeCacheEntry *typentry);
@@ -1008,6 +1008,12 @@ load_domaintype_info(TypeCacheEntry *typentry)
 		dcc = typentry->domainData;
 		typentry->domainData = NULL;
 		decr_dcc_refcount(dcc);
+	}
+
+	if (load_domaintype_info_hook)
+	{
+		load_domaintype_info_hook(typentry);
+		return;
 	}
 
 	/*
