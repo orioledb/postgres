@@ -3516,7 +3516,17 @@ XLogSendLogical(void)
 
 	/* If EndRecPtr is still past our flushPtr, it means we caught up. */
 	if (logical_decoding_ctx->reader->EndRecPtr >= flushPtr)
+	{
 		WalSndCaughtUp = true;
+
+		/*
+		 * Everything written so far is decoded, so what is left to read will
+		 * be written from here on.  Whatever an extension keeps behind
+		 * decoding only has to be retained from this point -- older than
+		 * that nothing can ask for any more.
+		 */
+		ReplicationSlotUpdateExtRetainLocation(MyReplicationSlot);
+	}
 
 	/*
 	 * If we're caught up and have been requested to stop, have WalSndLoop()
