@@ -111,6 +111,73 @@ static void RestoreSlotFromDisk(const char *name);
 static void CreateSlotOnDisk(ReplicationSlot *slot);
 static void SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel);
 
+slot_ext_retain_hook_type slot_ext_retain_hook = NULL;
+
+/*
+ * Ask the extension what this slot has to retain from now on, and remember
+ * the answer -- but never move it forward past what the slot already needs.
+ * Called when a slot is created and whenever it has caught up with WAL.
+ */
+void
+ReplicationSlotUpdateExtRetainLocation(ReplicationSlot *slot)
+{
+	uint64		location;
+
+	if (slot_ext_retain_hook == NULL)
+		return;
+
+	location = (*slot_ext_retain_hook) (slot);
+	if (location == 0)
+		return;
+
+	SpinLockAcquire(&slot->mutex);
+	if (slot->ext_retain_location < location)
+		slot->ext_retain_location = location;
+	SpinLockRelease(&slot->mutex);
+}
+
+/*
+ * The least position any logical slot still needs in the extension's log.
+ *
+ * PG_UINT64_MAX when no logical slot is in use -- nothing to retain.  Zero
+ * when one of them has not been able to tell us yet, which the extension is
+ * expected to read as "keep what you have".
+ */
+uint64
+ReplicationSlotsComputeMinExtRetainLocation(void)
+{
+	uint64		result = PG_UINT64_MAX;
+	int			i;
+
+	Assert(ReplicationSlotCtl != NULL);
+
+	LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+	for (i = 0; i < max_replication_slots; i++)
+	{
+		ReplicationSlot *s = &ReplicationSlotCtl->replication_slots[i];
+		uint64		location;
+
+		if (!s->in_use || s->data.database == InvalidOid)
+			continue;
+
+		SpinLockAcquire(&s->mutex);
+		location = s->ext_retain_location;
+		SpinLockRelease(&s->mutex);
+
+		if (location == 0)
+		{
+			result = 0;
+			break;
+		}
+
+		if (location < result)
+			result = location;
+	}
+	LWLockRelease(ReplicationSlotControlLock);
+
+	return result;
+}
+
 /*
  * Report shared-memory space needed by ReplicationSlotsShmemInit.
  */
@@ -350,6 +417,15 @@ ReplicationSlotCreate(const char *name, bool db_specific,
 	slot->candidate_xmin_lsn = InvalidXLogRecPtr;
 	slot->candidate_restart_valid = InvalidXLogRecPtr;
 	slot->candidate_restart_lsn = InvalidXLogRecPtr;
+	slot->ext_retain_location = 0;
+
+	/*
+	 * Whatever an extension keeps behind logical decoding has to be kept from
+	 * here on: this slot will be asked to decode what is written from now,
+	 * and reading that may reach back to what the log holds right now.
+	 */
+	if (db_specific)
+		ReplicationSlotUpdateExtRetainLocation(slot);
 
 	/*
 	 * Create the slot on disk.  We haven't actually marked the slot allocated
@@ -2174,6 +2250,15 @@ RestoreSlotFromDisk(const char *name)
 		slot->candidate_xmin_lsn = InvalidXLogRecPtr;
 		slot->candidate_restart_lsn = InvalidXLogRecPtr;
 		slot->candidate_restart_valid = InvalidXLogRecPtr;
+
+		/*
+		 * Left at zero when the extension has nothing to say yet -- this runs
+		 * early in startup.  Zero means "unknown", and the extension is
+		 * expected to read that as "keep what you have".
+		 */
+		slot->ext_retain_location = 0;
+		if (slot->data.database != InvalidOid)
+			ReplicationSlotUpdateExtRetainLocation(slot);
 
 		slot->in_use = true;
 		slot->active_pid = 0;
