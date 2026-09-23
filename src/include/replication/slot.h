@@ -196,6 +196,18 @@ typedef struct ReplicationSlot
 	XLogRecPtr	candidate_restart_lsn;
 
 	/*
+	 * Position in a log kept by an extension -- OrioleDB's undo log -- that
+	 * this slot still needs in order to decode what is ahead of it.  The
+	 * value is opaque to us: it comes from slot_ext_retain_hook, installed by
+	 * the extension that owns the log, and the extension is the only one that
+	 * makes sense of it.  Zero means "nothing retained".
+	 *
+	 * Not persisted.  A slot restored at startup gets whatever the extension
+	 * has kept across the restart, which is all it can honour anyway.
+	 */
+	uint64		ext_retain_location;
+
+	/*
 	 * This value tracks the last confirmed_flush LSN flushed which is used
 	 * during a shutdown checkpoint to decide if logical's slot data should be
 	 * forcibly flushed or not.
@@ -264,6 +276,18 @@ extern void ReplicationSlotReserveWal(void);
 extern void ReplicationSlotsComputeRequiredXmin(bool already_locked);
 extern void ReplicationSlotsComputeRequiredLSN(void);
 extern XLogRecPtr ReplicationSlotsComputeLogicalRestartLSN(void);
+extern uint64 ReplicationSlotsComputeMinExtRetainLocation(void);
+extern void ReplicationSlotUpdateExtRetainLocation(ReplicationSlot *slot);
+
+/*
+ * Hook for an extension that keeps a log of its own behind logical decoding.
+ * Returns the position of that log which this slot has to retain as of now.
+ * The slot is passed because the answer differs for one synchronised from a
+ * primary: it has decoded nothing here, so it cannot be held to a position
+ * this server has reached.
+ */
+typedef uint64 (*slot_ext_retain_hook_type) (ReplicationSlot *slot);
+extern PGDLLIMPORT slot_ext_retain_hook_type slot_ext_retain_hook;
 extern bool ReplicationSlotsCountDBSlots(Oid dboid, int *nslots, int *nactive);
 extern void ReplicationSlotsDropDBSlots(Oid dboid);
 extern bool InvalidateObsoleteReplicationSlots(ReplicationSlotInvalidationCause cause,

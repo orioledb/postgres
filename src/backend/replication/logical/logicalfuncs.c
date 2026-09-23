@@ -283,6 +283,14 @@ pg_logical_slot_get_changes_guts(FunctionCallInfo fcinfo, bool confirm, bool bin
 		CurrentResourceOwner = old_resowner;
 
 		/*
+		 * Everything up to end_of_wal is decoded when we get here without a
+		 * limit stopping us short, so whatever an extension keeps behind
+		 * decoding only has to be retained from this point on.
+		 */
+		if (ctx->reader->EndRecPtr >= end_of_wal)
+			ReplicationSlotUpdateExtRetainLocation(MyReplicationSlot);
+
+		/*
 		 * Next time, start where we left off. (Hunting things, the family
 		 * business..)
 		 */
