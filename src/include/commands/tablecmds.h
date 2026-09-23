@@ -99,6 +99,28 @@ typedef struct AlteredTableInfo
 	List	   *changedStatisticsOids;	/* OIDs of statistics to rebuild */
 	List	   *changedStatisticsDefs;	/* string definitions of same */
 	List	   *changedStatisticsOwners;	/* owners of same */
+
+	/*
+	 * ALTER TYPE index-rebuild plan (non-rewrite only).
+	 *
+	 * am_rebuild_index_oids holds, for this relation only, the old OID of
+	 * every index queued for recreate by ATPostAlterTypeCleanup, and
+	 * am_rebuild_index_reused holds a parallel list of int flags (1 when
+	 * TryReuseIndex marked the index reusable, 0 otherwise).  They are
+	 * populated by ATPostAlterTypeParse and are the authoritative per-index
+	 * reuse verdicts a table AM's relation_alter_type_rebuild_plan callback
+	 * should consult.  am_rebuild_finish_relid identifies the work-queue entry
+	 * whose AT_PASS_OLD_INDEX commands recreate these catalogs; for a physical
+	 * partition this can be the partitioned parent's relation OID.
+	 * am_rebuild_plan is opaque table-AM private state set by the planning
+	 * callback before the old indexes are deleted and consumed by
+	 * relation_alter_type_rebuild_finish after every recreated index catalog
+	 * entry is visible.  It is NULL when no table-AM-owned batch is active.
+	 */
+	List	   *am_rebuild_index_oids;
+	List	   *am_rebuild_index_reused;
+	Oid			am_rebuild_finish_relid;
+	void	   *am_rebuild_plan;
 } AlteredTableInfo;
 
 

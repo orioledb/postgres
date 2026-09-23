@@ -530,13 +530,16 @@ static void RememberIndexForRebuilding(Oid indoid, AlteredTableInfo *tab);
 static void RememberStatisticsForRebuilding(Oid stxoid, AlteredTableInfo *tab);
 static void ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab,
 								   LOCKMODE lockmode);
-static void ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, Oid ownerId,
-								 char *cmd, List **wqueue, LOCKMODE lockmode,
-								 bool rewrite);
+static void ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId,
+								 Oid ownerId, char *cmd, List **wqueue,
+								 LOCKMODE lockmode, bool rewrite,
+								 List **rebuildTabs);
+static void RememberIndexRebuildVerdict(Oid oldId, bool reused, Oid finishRelid,
+										List **wqueue, List **rebuildTabs);
 static void RebuildConstraintComment(AlteredTableInfo *tab, AlterTablePass pass,
 									 Oid objid, Relation rel, List *domname,
 									 const char *conname);
-static void TryReuseIndex(Oid oldId, IndexStmt *stmt);
+static bool TryReuseIndex(Oid oldId, IndexStmt *stmt);
 static void TryReuseForeignKey(Oid oldId, Constraint *con);
 static ObjectAddress ATExecAlterColumnGenericOptions(Relation rel, const char *colName,
 													 List *options, LOCKMODE lockmode);
@@ -5127,7 +5130,7 @@ ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode,
 	 *
 	 * Wrap the phase-2 body in PG_TRY so the pointer is always cleared, even
 	 * when a subcommand raises an ERROR (longjmp) mid-phase-2: otherwise the
-	 * dangling pointer would be dereenced by a later command's OAT fire via
+	 * dangling pointer would be dereferenced by a later command's OAT fire via
 	 * LookupAlteredTableInfo().
 	 */
 	AlterTablePhase2Wqueue = *wqueue;
@@ -5163,6 +5166,41 @@ ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode,
 				ATExecCmd(wqueue, tab,
 						  lfirst_node(AlterTableCmd, lcmd),
 						  lockmode, pass, context);
+
+			/*
+			 * All index catalog entries recreated by this work-queue entry are
+			 * now visible.  Finish its own table-AM rebuild batch and any batch
+			 * for a partition whose indexes were recreated recursively.
+			 */
+			if (pass == AT_PASS_OLD_INDEX)
+			{
+				ListCell   *lrebuild;
+				bool		finished = false;
+
+				foreach(lrebuild, *wqueue)
+				{
+					AlteredTableInfo *rebuildTab = lfirst(lrebuild);
+					Relation	rebuildRel;
+					bool		close_rel;
+
+					if (rebuildTab->am_rebuild_plan == NULL ||
+						rebuildTab->am_rebuild_finish_relid != tab->relid)
+						continue;
+
+					close_rel = rebuildTab->rel == NULL;
+					rebuildRel = close_rel ?
+						relation_open(rebuildTab->relid, NoLock) :
+						rebuildTab->rel;
+					table_relation_alter_type_rebuild_finish(rebuildRel,
+													 rebuildTab);
+					rebuildTab->am_rebuild_plan = NULL;
+					finished = true;
+					if (close_rel)
+						relation_close(rebuildRel, NoLock);
+				}
+				if (finished)
+					CommandCounterIncrement();
+			}
 
 			/*
 			 * After the ALTER TYPE or SET EXPRESSION pass, do cleanup work
@@ -9225,11 +9263,11 @@ ATExecDropColumn(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			Relation	dropped_rel;
 			AlteredTableInfo *dropped_tab;
 
-			dropped_rel = table_open(dropped_address->objectId, NoLock);
+			dropped_rel = relation_open(dropped_address->objectId, NoLock);
 			dropped_tab = ATGetQueueEntry(wqueue, dropped_rel);
 			ATExecTableAmCmd(dropped_rel, dropped_tab, cmd, cur_pass,
 							 &*dropped_address);
-			table_close(dropped_rel, NoLock);
+			relation_close(dropped_rel, NoLock);
 		}
 		list_free_deep(top_dropped);
 	}
@@ -13933,6 +13971,7 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 	ListCell   *def_item;
 	ListCell   *oid_item;
 	ListCell   *owner_item;
+	List	   *rebuildTabs = NIL;
 
 	/*
 	 * Collect all the constraints and indexes to drop so we can process them
@@ -14007,7 +14046,7 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 
 		ATPostAlterTypeParse(oldId, relid, confrelid, InvalidOid,
 							 (char *) lfirst(def_item),
-							 wqueue, lockmode, tab->rewrite);
+							 wqueue, lockmode, tab->rewrite, &rebuildTabs);
 	}
 	forboth(oid_item, tab->changedIndexOids,
 			def_item, tab->changedIndexDefs)
@@ -14026,7 +14065,7 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 
 		ATPostAlterTypeParse(oldId, relid, InvalidOid, InvalidOid,
 							 (char *) lfirst(def_item),
-							 wqueue, lockmode, tab->rewrite);
+							 wqueue, lockmode, tab->rewrite, &rebuildTabs);
 
 		ObjectAddressSet(obj, RelationRelationId, oldId);
 		add_exact_object_address(&obj, objects);
@@ -14057,7 +14096,7 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 
 		ATPostAlterTypeParse(oldId, relid, InvalidOid, lfirst_oid(owner_item),
 							 (char *) lfirst(def_item),
-							 wqueue, lockmode, tab->rewrite);
+							 wqueue, lockmode, tab->rewrite, &rebuildTabs);
 
 		ObjectAddressSet(obj, StatisticExtRelationId, oldId);
 		add_exact_object_address(&obj, objects);
@@ -14099,7 +14138,31 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 	/*
 	 * It should be okay to use DROP_RESTRICT here, since nothing else should
 	 * be depending on these objects.
+	 *
+	 * Before deleting, let the table AM plan a table-AM-owned rebuild batch
+	 * from the per-object reuse verdicts recorded above.  The AM may claim
+	 * the queued recreations and, when it does, ordinary per-index builds
+	 * during recreation are suppressed; a completion callback fired at the
+	 * end of AT_PASS_OLD_INDEX performs one rebuild pass instead.
 	 */
+	foreach(oid_item, rebuildTabs)
+	{
+		AlteredTableInfo *rebuildTab = lfirst(oid_item);
+		Relation	rel;
+		bool		close_rel;
+
+		if (rebuildTab->am_rebuild_plan != NULL)
+			continue;
+
+		close_rel = rebuildTab->rel == NULL;
+		rel = close_rel ? relation_open(rebuildTab->relid, NoLock) :
+			rebuildTab->rel;
+		table_relation_alter_type_rebuild_plan(rel, rebuildTab);
+		if (close_rel)
+			relation_close(rel, NoLock);
+	}
+	list_free(rebuildTabs);
+
 	performMultipleDeletions(objects, DROP_RESTRICT, PERFORM_DELETION_INTERNAL);
 
 	free_object_addresses(objects);
@@ -14108,6 +14171,49 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 	 * The objects will get recreated during subsequent passes over the work
 	 * queue.
 	 */
+}
+
+/*
+ * Record an index reuse verdict on its table's work-queue entry.  A
+ * partitioned index's verdict applies to every index in its inheritance tree;
+ * physical child batches finish after the parent entry recreates their index
+ * catalogs recursively.
+ */
+static void
+RememberIndexRebuildVerdict(Oid oldId, bool reused, Oid finishRelid,
+							List **wqueue, List **rebuildTabs)
+{
+	List	   *indexOids;
+	ListCell   *lc;
+
+	if (get_rel_relkind(oldId) == RELKIND_PARTITIONED_INDEX)
+		indexOids = find_all_inheritors(oldId, NoLock, NULL);
+	else
+		indexOids = list_make1_oid(oldId);
+
+	foreach(lc, indexOids)
+	{
+		Oid			indexOid = lfirst_oid(lc);
+		Oid			relid = IndexGetRelation(indexOid, false);
+		Relation	rel = relation_open(relid, NoLock);
+		AlteredTableInfo *tab = ATGetQueueEntry(wqueue, rel);
+
+		if (!list_member_oid(tab->am_rebuild_index_oids, indexOid))
+		{
+			tab->am_rebuild_index_oids =
+				lappend_oid(tab->am_rebuild_index_oids, indexOid);
+			tab->am_rebuild_index_reused =
+				lappend_int(tab->am_rebuild_index_reused, reused ? 1 : 0);
+		}
+		if (!OidIsValid(tab->am_rebuild_finish_relid))
+			tab->am_rebuild_finish_relid = finishRelid;
+		else
+			Assert(tab->am_rebuild_finish_relid == finishRelid);
+		*rebuildTabs = list_append_unique_ptr(*rebuildTabs, tab);
+		relation_close(rel, NoLock);
+	}
+
+	list_free(indexOids);
 }
 
 /*
@@ -14121,7 +14227,7 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 static void
 ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, Oid ownerId,
 					 char *cmd, List **wqueue, LOCKMODE lockmode,
-					 bool rewrite)
+					 bool rewrite, List **rebuildTabs)
 {
 	List	   *raw_parsetree_list;
 	List	   *querytree_list;
@@ -14195,12 +14301,22 @@ ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, Oid ownerId,
 		{
 			IndexStmt  *stmt = (IndexStmt *) stm;
 			AlterTableCmd *newcmd;
+			bool		reused = false;
 
 			if (!rewrite)
-				TryReuseIndex(oldId, stmt);
+				reused = TryReuseIndex(oldId, stmt);
 			stmt->reset_default_tblspc = true;
 			/* keep the index's comment */
 			stmt->idxcomment = GetComment(oldId, RelationRelationId, 0);
+
+			/*
+			 * Record this relation's per-object reuse verdict for the
+			 * relation_alter_type_rebuild_plan table-AM callback.  Objects
+			 * belonging to another relation (e.g. a foreign key constraint
+			 * on a referenced table) belong to that relation's queue entry.
+			 */
+			RememberIndexRebuildVerdict(oldId, reused, tab->relid,
+										wqueue, rebuildTabs);
 
 			newcmd = makeNode(AlterTableCmd);
 			newcmd->subtype = AT_ReAddIndex;
@@ -14221,16 +14337,22 @@ ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, Oid ownerId,
 				{
 					IndexStmt  *indstmt;
 					Oid			indoid;
+					bool		reused = false;
 
 					indstmt = castNode(IndexStmt, cmd->def);
 					indoid = get_constraint_index(oldId);
 
 					if (!rewrite)
-						TryReuseIndex(indoid, indstmt);
+						reused = TryReuseIndex(indoid, indstmt);
 					/* keep any comment on the index */
 					indstmt->idxcomment = GetComment(indoid,
 													 RelationRelationId, 0);
 					indstmt->reset_default_tblspc = true;
+
+					/* record the reuse verdict (same relation only) */
+					RememberIndexRebuildVerdict(indoid, reused,
+											 tab->relid, wqueue,
+											 rebuildTabs);
 
 					cmd->subtype = AT_ReAddIndex;
 					tab->subcmds[AT_PASS_OLD_INDEX] =
@@ -14382,8 +14504,9 @@ RebuildConstraintComment(AlteredTableInfo *tab, AlterTablePass pass, Oid objid,
 /*
  * Subroutine for ATPostAlterTypeParse().  Calls out to CheckIndexCompatible()
  * for the real analysis, then mutates the IndexStmt based on that verdict.
+ * Returns true if the index was marked reusable.
  */
-static void
+static bool
 TryReuseIndex(Oid oldId, IndexStmt *stmt)
 {
 	if (CheckIndexCompatible(oldId,
@@ -14445,7 +14568,9 @@ TryReuseIndex(Oid oldId, IndexStmt *stmt)
 			}
 		}
 		index_close(irel, NoLock);
+		return true;
 	}
+	return false;
 }
 
 /*
