@@ -25,6 +25,8 @@
 /* DomainConstraintCache is an opaque struct known only within typcache.c */
 typedef struct DomainConstraintCache DomainConstraintCache;
 
+#define TCFLAGS_CHECKED_DOMAIN_CONSTRAINTS	0x080000
+
 /* TypeCacheEnumData is an opaque struct known only within typcache.c */
 struct TypeCacheEnumData;
 
@@ -210,5 +212,7 @@ typedef void (*load_typcache_tupdesc_hook_type)(TypeCacheEntry *typentry);
 extern PGDLLIMPORT load_typcache_tupdesc_hook_type load_typcache_tupdesc_hook;
 typedef void (*load_enum_cache_data_hook_type)(TypeCacheEntry *tcache);
 extern PGDLLIMPORT load_enum_cache_data_hook_type load_enum_cache_data_hook;
+typedef void (*load_domaintype_info_hook_type)(TypeCacheEntry *typentry);
+extern PGDLLIMPORT load_domaintype_info_hook_type load_domaintype_info_hook;
 
 #endif							/* TYPCACHE_H */
