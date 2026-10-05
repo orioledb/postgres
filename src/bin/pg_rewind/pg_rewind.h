@@ -57,6 +57,7 @@ extern TimeLineHistoryEntry *rewind_parseTimeLineHistory(char *buffer,
 extern void process_extensions(SimpleStringList *extensions,
 							   const char *datadir_target, char *datadir_source,
 							   char *connstr_source, XLogRecPtr startpoint,
+							   XLogRecPtr divergerec,
 							   int tliIndex, XLogRecPtr endpoint,
 							   const char *restoreCommand, const char *argv0,
 							   bool debug);
