@@ -177,7 +177,7 @@ main(int argc, char **argv)
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "cD:nNPRe", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "cD:nNPRe:", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -477,9 +477,9 @@ main(int argc, char **argv)
 
 	if (extensions.head != NULL)
 		process_extensions(&extensions, datadir_target, datadir_source,
-						   connstr_source, chkptrec, lastcommontliIndex,
-						   target_wal_endrec, restore_command, argv[0],
-						   debug);
+						   connstr_source, chkptrec, divergerec,
+						   lastcommontliIndex, target_wal_endrec,
+						   restore_command, argv[0], debug);
 
 	/*
 	 * Collect information about all files in the both data directories.

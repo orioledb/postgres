@@ -22,6 +22,7 @@
 /* signature for pg_rewind extension library rewind function */
 typedef void (*PG_rewind_t) (const char *datadir_target, char *datadir_source,
 							 char *connstr_source, XLogRecPtr startpoint,
+							 XLogRecPtr divergerec,
 							 int tliIndex, XLogRecPtr endpoint,
 							 const char *restoreCommand, const char *argv0,
 							 bool debug);
@@ -79,7 +80,8 @@ expand_dynamic_library_name(const char *argv0, const char *name)
 void
 process_extensions(SimpleStringList *extensions, const char *datadir_target,
 				   char *datadir_source, char *connstr_source,
-				   XLogRecPtr startpoint, int tliIndex, XLogRecPtr endpoint,
+				   XLogRecPtr startpoint, XLogRecPtr divergerec,
+				   int tliIndex, XLogRecPtr endpoint,
 				   const char *restoreCommand, const char *argv0,
 				   bool debug)
 {
@@ -115,7 +117,8 @@ process_extensions(SimpleStringList *extensions, const char *datadir_target,
 		if (showprogress)
 			pg_log_info("performing rewind for '%s' extension", filename);
 		PG_rewind(datadir_target, datadir_source, connstr_source, startpoint,
-				  tliIndex, endpoint, restoreCommand, argv0, debug);
+				  divergerec, tliIndex, endpoint, restoreCommand, argv0,
+				  debug);
 
 		pg_log_debug("loaded library \"%s\"", filename);
 	}
