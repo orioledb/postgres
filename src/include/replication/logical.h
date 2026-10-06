@@ -151,6 +151,13 @@ extern bool filter_by_origin_cb_wrapper(LogicalDecodingContext *ctx, RepOriginId
 extern void ResetLogicalStreamingState(void);
 extern void UpdateDecodingStats(LogicalDecodingContext *ctx);
 
+/*
+ * Hook called once the output plugin startup callback has run.  Lets an
+ * extension override what the plugin chose, e.g. turn off ctx->streaming.
+ */
+typedef void (*logical_decoding_startup_hook_type) (LogicalDecodingContext *ctx);
+extern PGDLLIMPORT logical_decoding_startup_hook_type logical_decoding_startup_hook;
+
 /* GUCs */
 extern PGDLLIMPORT char *output_plugin_libraries_string;
 
