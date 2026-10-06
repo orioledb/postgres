@@ -59,6 +59,9 @@ typedef struct LogicalErrorCallbackState
 /* GUC variables */
 char	   *output_plugin_libraries_string;
 
+/* Hook for extensions to adjust a decoding context after plugin startup */
+logical_decoding_startup_hook_type logical_decoding_startup_hook = NULL;
+
 /* wrappers around output plugin callbacks */
 static void output_plugin_error_callback(void *arg);
 static void startup_cb_wrapper(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
@@ -520,6 +523,11 @@ CreateInitDecodingContext(const char *plugin,
 		startup_cb_wrapper(ctx, &ctx->options, true);
 	MemoryContextSwitchTo(old_context);
 
+	if (logical_decoding_startup_hook)
+	{
+		(*logical_decoding_startup_hook) (ctx);
+	}
+
 	/*
 	 * We allow decoding of prepared transactions when the two_phase is
 	 * enabled at the time of slot creation, or when the two_phase option is
@@ -653,6 +661,11 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 	if (ctx->callbacks.startup_cb != NULL)
 		startup_cb_wrapper(ctx, &ctx->options, false);
 	MemoryContextSwitchTo(old_context);
+
+	if (logical_decoding_startup_hook)
+	{
+		(*logical_decoding_startup_hook) (ctx);
+	}
 
 	/*
 	 * We allow decoding of prepared transactions when the two_phase is
