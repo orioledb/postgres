@@ -152,6 +152,13 @@ extern bool LogicalReplicationSlotHasPendingWal(XLogRecPtr end_of_wal);
 extern XLogRecPtr LogicalSlotAdvanceAndCheckSnapState(XLogRecPtr moveto,
 													  bool *found_consistent_snapshot);
 
+/*
+ * Hook called once the output plugin startup callback has run.  Lets an
+ * extension override what the plugin chose, e.g. turn off ctx->streaming.
+ */
+typedef void (*logical_decoding_startup_hook_type) (LogicalDecodingContext *ctx);
+extern PGDLLIMPORT logical_decoding_startup_hook_type logical_decoding_startup_hook;
+
 /* GUCs */
 extern PGDLLIMPORT char *output_plugin_libraries_string;
 
