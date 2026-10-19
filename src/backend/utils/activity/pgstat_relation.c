@@ -42,7 +42,6 @@ typedef struct TwoPhasePgStatRecord
 } TwoPhasePgStatRecord;
 
 
-static PgStat_TableStatus *pgstat_prep_relation_pending(Oid rel_id, bool isshared);
 static void add_tabstat_xact_level(PgStat_TableStatus *pgstat_info, int nest_level);
 static void ensure_tabstat_xact_level(PgStat_TableStatus *pgstat_info);
 static void save_truncdrop_counters(PgStat_TableXactStatus *trans, bool is_drop);
@@ -914,7 +913,7 @@ pgstat_relation_delete_pending_cb(PgStat_EntryRef *entry_ref)
  * Find or create a PgStat_TableStatus entry for rel. New entry is created and
  * initialized if not exists.
  */
-static PgStat_TableStatus *
+PgStat_TableStatus *
 pgstat_prep_relation_pending(Oid rel_id, bool isshared)
 {
 	PgStat_EntryRef *entry_ref;
