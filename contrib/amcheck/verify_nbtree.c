@@ -315,6 +315,23 @@ bt_index_check_callback(Relation indrel, Relation heaprel, void *state, bool rea
 	bool		heapkeyspace,
 				allequalimage;
 
+	/*
+	 * The index AM may verify the index itself, e.g. when the index storage
+	 * is provided by a table AM rather than by nbtree.
+	 */
+	if (indrel->rd_indam->amverify != NULL)
+	{
+		IndexVerifyOptions options;
+
+		options.parentcheck = readonly;
+		options.heapallindexed = args->heapallindexed;
+		options.rootdescend = args->rootdescend;
+		options.checkunique = args->checkunique;
+
+		indrel->rd_indam->amverify(indrel, heaprel, &options);
+		return;
+	}
+
 	if (!smgrexists(RelationGetSmgr(indrel), MAIN_FORKNUM))
 		ereport(ERROR,
 				(errcode(ERRCODE_INDEX_CORRUPTED),
