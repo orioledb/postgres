@@ -246,6 +246,28 @@ typedef BlockNumber (*amnblocks_function) (Relation indexRelation,
 										   ForkNumber forkNum);
 
 /*
+ * Options for amverify, matching those of contrib/amcheck's
+ * bt_index_check() and bt_index_parent_check().
+ */
+typedef struct IndexVerifyOptions
+{
+	bool		parentcheck;	/* caller holds ShareLock on the index and its
+								 * table, so checks across tree levels are
+								 * safe */
+	bool		heapallindexed; /* check that all table tuples are indexed */
+	bool		rootdescend;	/* re-find each tuple from the root */
+	bool		checkunique;	/* check uniqueness of a unique index */
+} IndexVerifyOptions;
+
+/*
+ * verify index for corruption, reporting it with ereport(ERROR) and
+ * ERRCODE_INDEX_CORRUPTED
+ */
+typedef void (*amverify_function) (Relation indexRelation,
+								   Relation heapRelation,
+								   const IndexVerifyOptions *options);
+
+/*
  * API struct for an index AM.  Note this must be stored in a single palloc'd
  * chunk of memory.
  */
@@ -340,6 +362,8 @@ typedef struct IndexAmRoutine
 
 	/* report number of index blocks, can be NULL */
 	amnblocks_function amnblocks;	/* can be NULL */
+	/* verify index for corruption, used by contrib/amcheck */
+	amverify_function amverify; /* can be NULL */
 } IndexAmRoutine;
 
 

@@ -365,7 +365,25 @@ bt_index_check_internal(Oid indrelid, bool parentcheck, bool heapallindexed,
 	/* Relation suitable for checking as B-Tree? */
 	btree_index_checkable(indrel);
 
-	if (btree_index_mainfork_expected(indrel))
+	if (indrel->rd_indam->amverify != NULL)
+	{
+		/*
+		 * The index AM may verify the index itself, e.g. when the index
+		 * storage is provided by a table AM rather than by nbtree.
+		 */
+		if (btree_index_mainfork_expected(indrel))
+		{
+			IndexVerifyOptions options;
+
+			options.parentcheck = parentcheck;
+			options.heapallindexed = heapallindexed;
+			options.rootdescend = rootdescend;
+			options.checkunique = checkunique;
+
+			indrel->rd_indam->amverify(indrel, heaprel, &options);
+		}
+	}
+	else if (btree_index_mainfork_expected(indrel))
 	{
 		bool		heapkeyspace,
 					allequalimage;
