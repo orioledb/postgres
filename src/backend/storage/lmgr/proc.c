@@ -81,6 +81,8 @@ PGPROC	   *PreparedXactProcs = NULL;
 
 static DeadLockState deadlock_state = DS_NOT_YET_CHECKED;
 
+deadlock_resolve_hook_type deadlock_resolve_hook = NULL;
+
 /* Is a deadlock check pending? */
 static volatile sig_atomic_t got_deadlock_timeout;
 
@@ -1669,7 +1671,8 @@ ProcSleep(LOCALLOCK *locallock)
 								MyProcPid, modename, buf.data, msecs, usecs)));
 			else
 			{
-				Assert(myWaitStatus == PROC_WAIT_STATUS_ERROR);
+				Assert(myWaitStatus == PROC_WAIT_STATUS_ERROR ||
+					   myWaitStatus == PROC_WAIT_STATUS_RESOLVED);
 
 				/*
 				 * Currently, the deadlock checker always kicks its own
@@ -1680,7 +1683,8 @@ ProcSleep(LOCALLOCK *locallock)
 				 * a message if it looks like someone else kicked us off the
 				 * lock.
 				 */
-				if (deadlock_state != DS_HARD_DEADLOCK)
+				if (deadlock_state != DS_HARD_DEADLOCK &&
+					deadlock_state != DS_RESOLVED_DEADLOCK)
 					ereport(LOG,
 							(errmsg("process %d failed to acquire %s on %s after %ld.%03d ms",
 									MyProcPid, modename, buf.data, msecs, usecs),
@@ -1871,6 +1875,16 @@ CheckDeadLock(void)
 
 	if (deadlock_state == DS_HARD_DEADLOCK)
 	{
+		if (deadlock_resolve_hook &&
+			deadlock_resolve_hook(MyProc, MyProc->waitLock))
+		{
+			deadlock_state = DS_RESOLVED_DEADLOCK;
+			Assert(MyProc->waitLock != NULL);
+			RemoveFromWaitQueue(MyProc, LockTagHashCode(&(MyProc->waitLock->tag)));
+			MyProc->waitStatus = PROC_WAIT_STATUS_RESOLVED;
+			goto check_done;
+		}
+
 		/*
 		 * Oops.  We have a deadlock.
 		 *
