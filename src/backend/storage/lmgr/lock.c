@@ -1217,26 +1217,43 @@ LockAcquireExtended(const LOCKTAG *locktag,
 					LOCK_PRINT("LockAcquire: INCONSISTENT", lock, lockmode);
 				}
 				LWLockRelease(partitionLock);
+
 				/*
 				 * We've been removed from the queue without obtaining a lock.
-				 * That's OK, we're going to return LOCKACQUIRE_NOT_AVAIL, but
-				 * need to release a local lock first.
+				 *
+				 * When the deadlock_resolve_hook resolved a false cycle,
+				 * ProcSleep returned PROC_WAIT_STATUS_RESOLVED and
+				 * GrantAwaitedLock was never called, so locallock->nLocks
+				 * was never incremented.  Just remove the locallock.
+				 *
+				 * The normal path gets here after GrantAwaitedLock ran, so
+				 * nLocks was incremented and we need to undo that.
 				 */
-				locallock->nLocks--;
-				for (i = 0; i < locallock->numLockOwners; i++)
+				if (MyProc->waitStatus == PROC_WAIT_STATUS_RESOLVED)
 				{
-					if (locallock->lockOwners[i].owner == owner)
+					if (locallock->nLocks == 0)
+						RemoveLocalLock(locallock);
+				}
+				else
+				{
+					locallock->nLocks--;
+					for (i = 0; i < locallock->numLockOwners; i++)
 					{
-						locallock->lockOwners[i].nLocks--;
-						if (locallock->lockOwners[i].nLocks == 0)
+						if (locallock->lockOwners[i].owner == owner)
 						{
-							ResourceOwnerForgetLock(owner, locallock);
-							locallock->lockOwners[i] = locallock->lockOwners[--locallock->numLockOwners];
+							locallock->lockOwners[i].nLocks--;
+							if (locallock->lockOwners[i].nLocks == 0)
+							{
+								ResourceOwnerForgetLock(owner, locallock);
+								locallock->lockOwners[i] = locallock->lockOwners[--locallock->numLockOwners];
+							}
+							break;
 						}
-						break;
 					}
 				}
 
+				if (locallockp)
+					*locallockp = NULL;
 				return LOCKACQUIRE_NOT_AVAIL;
 			}
 		}
@@ -1997,7 +2014,7 @@ WaitOnLock(LOCALLOCK *locallock, ResourceOwner owner, bool dontWait)
 		 * If dontWait = true, we handle success and failure in the same way
 		 * here. The caller will be able to sort out what has happened.
 		 */
-		if (ProcSleep(locallock, lockMethodTable, dontWait) != PROC_WAIT_STATUS_OK
+		if (ProcSleep(locallock, lockMethodTable, dontWait) == PROC_WAIT_STATUS_ERROR
 			&& !dontWait)
 		{
 
