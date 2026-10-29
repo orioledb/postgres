@@ -513,6 +513,7 @@ typedef enum
 	DS_NO_DEADLOCK,				/* no deadlock detected */
 	DS_SOFT_DEADLOCK,			/* deadlock avoided by queue rearrangement */
 	DS_HARD_DEADLOCK,			/* deadlock, no way out but ERROR */
+	DS_RESOLVED_DEADLOCK,		/* would-be deadlock, resolved by hook */
 	DS_BLOCKED_BY_AUTOVACUUM	/* no deadlock; queue blocked by autovacuum
 								 * worker */
 } DeadLockState;
@@ -611,6 +612,9 @@ extern void RememberSimpleDeadLock(PGPROC *proc1,
 								   LOCK *lock,
 								   PGPROC *proc2);
 extern void InitDeadLockChecking(void);
+
+typedef bool (*deadlock_resolve_hook_type) (PGPROC *proc, LOCK *waitLock);
+extern PGDLLIMPORT deadlock_resolve_hook_type deadlock_resolve_hook;
 
 extern int	LockWaiterCount(const LOCKTAG *locktag);
 
