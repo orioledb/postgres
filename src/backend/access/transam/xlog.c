@@ -5488,7 +5488,6 @@ StartupXLOG(void)
 	XLogRecPtr	missingContrecPtr;
 	TransactionId oldestActiveXID;
 	bool		promoted = false;
-	bool		wasInRecovery;
 
 	/*
 	 * We should have an aux process resource owner to use, and we should not
@@ -6117,8 +6116,6 @@ StartupXLOG(void)
 	 */
 	PreallocXlogFiles(EndOfLog, newTLI);
 
-	wasInRecovery = InRecovery;
-
 	/*
 	 * Okay, we're officially UP.
 	 */
@@ -6199,7 +6196,7 @@ StartupXLOG(void)
 	 */
 	CompleteCommitTsInitialization();
 
-	if (wasInRecovery && after_checkpoint_cleanup_hook)
+	if (after_checkpoint_cleanup_hook)
 		after_checkpoint_cleanup_hook(EndOfLog, 0);
 
 	/*
