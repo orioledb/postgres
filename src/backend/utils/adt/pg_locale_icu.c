@@ -223,8 +223,9 @@ init_pg_locale_icu(pg_locale_t loc, const char *iculocstr,
 				   const char *icurules, bool deterministic,
 				   MemoryContext context)
 {
-	UCollator  *collator;
 #ifdef USE_ICU
+	UCollator  *collator;
+
 	if (loc->info.icu.locale)
 		pfree((void *) loc->info.icu.locale);
 	if (loc->info.icu.ucol)
@@ -247,8 +248,6 @@ init_pg_locale_icu(pg_locale_t loc, const char *iculocstr,
 	ereport(ERROR,
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 			 errmsg("ICU is not supported in this build")));
-
-	return NULL;
 #endif
 }
 
