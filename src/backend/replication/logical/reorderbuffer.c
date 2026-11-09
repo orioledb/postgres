@@ -799,7 +799,8 @@ ReorderBufferProcessPartialChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 	if (ReorderBufferCanStartStreaming(rb) &&
 		!(rbtxn_has_partial_change(toptxn)) &&
 		rbtxn_is_serialized(txn) &&
-		rbtxn_has_streamable_change(toptxn))
+		rbtxn_has_streamable_change(toptxn) &&
+		!rbtxn_is_synthetic(toptxn))
 		ReorderBufferStreamTXN(rb, toptxn);
 }
 
@@ -1842,13 +1843,13 @@ ReorderBufferCheckAndTruncateAbortedTXN(ReorderBuffer *rb, ReorderBufferTXN *txn
 	}
 
 	/*
-	 * An extension that decodes under xids of its own sets this flag: CLOG
-	 * knows nothing about such xids, and the extension aborts the transaction
-	 * itself.  It also covers the real heap xid of a transaction that wrote
-	 * both heap and extension tables, which then keeps its changes until its
-	 * abort record.
+	 * A synthetic xid is unknown to CLOG, which would read it as aborted and
+	 * discard the changes.  The extension aborts such a transaction itself.
+	 * The heap xid of a transaction that wrote both heap and extension
+	 * tables is a real one, so it keeps the check: its status is what tells
+	 * a streamed transaction that it aborted.
 	 */
-	if (txn->txn_flags & RBTXN_DISTR_SKIP_CLEANUP)
+	if (rbtxn_is_synthetic(txn))
 		return false;
 
 	/* Otherwise, check the transaction status using CLOG lookup */
@@ -2354,7 +2355,15 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 			if (streaming || rbtxn_is_prepared(change->txn))
 			{
 				curtxn = change->txn;
-				SetupCheckXidLive(curtxn->xid);
+
+				/*
+				 * A synthetic subtransaction has no status to check, so watch
+				 * the top-level transaction, which it aborts with.
+				 */
+				if (rbtxn_is_synthetic(curtxn))
+					SetupCheckXidLive(txn->xid);
+				else
+					SetupCheckXidLive(curtxn->xid);
 			}
 
 			switch (change->action)
@@ -3937,7 +3946,8 @@ ReorderBufferLargestStreamableTopTXN(ReorderBuffer *rb)
 		/* Don't consider these kinds of transactions for eviction. */
 		if (rbtxn_has_partial_change(txn) ||
 			!rbtxn_has_streamable_change(txn) ||
-			rbtxn_is_aborted(txn))
+			rbtxn_is_aborted(txn) ||
+			rbtxn_is_synthetic(txn))
 			continue;
 
 		/* Find the largest of the eviction candidates. */
