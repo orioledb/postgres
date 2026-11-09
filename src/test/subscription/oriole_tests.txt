@@ -13,6 +13,11 @@ t/010_truncate.pl
 t/011_generated.pl
 t/012_collation.pl
 t/014_binary.pl
+t/015_stream.pl
+t/016_stream_subxact.pl
+t/017_stream_ddl.pl
+t/018_stream_subxact_abort.pl
+t/019_stream_subxact_ddl_abort.pl
 t/020_messages.pl
 t/024_add_drop_pub.pl
 t/025_rep_changes_for_schema.pl
