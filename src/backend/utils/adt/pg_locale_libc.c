@@ -507,7 +507,7 @@ init_pg_locale_libc(pg_locale_t loc, const char *collate,
 	{
 #ifdef WIN32
 		if (GetDatabaseEncoding() == PG_UTF8)
-			result->collate = &collate_methods_libc_win32_utf8;
+			loc->collate = &collate_methods_libc_win32_utf8;
 		else
 #endif
 			loc->collate = &collate_methods_libc;
