@@ -237,6 +237,8 @@ static void ReorderBufferFreeTXN(ReorderBuffer *rb, ReorderBufferTXN *txn);
 static ReorderBufferTXN *ReorderBufferTXNByXid(ReorderBuffer *rb,
 											   TransactionId xid, bool create, bool *is_new,
 											   XLogRecPtr lsn, bool create_as_top);
+static void ReorderBufferMoveSubTXNs(ReorderBufferTXN *txn,
+									 ReorderBufferTXN *subtxn);
 static void ReorderBufferTransferSnapToParent(ReorderBufferTXN *txn,
 											  ReorderBufferTXN *subtxn);
 
@@ -1121,6 +1123,12 @@ ReorderBufferAssignChild(ReorderBuffer *rb, TransactionId xid,
 			 * remove it from there.
 			 */
 			dlist_delete(&subtxn->node);
+
+			/*
+			 * An extension may give the former top-level txn children of its
+			 * own.  Only two levels are supported, so move them up.
+			 */
+			ReorderBufferMoveSubTXNs(txn, subtxn);
 		}
 	}
 
@@ -1140,6 +1148,39 @@ ReorderBufferAssignChild(ReorderBuffer *rb, TransactionId xid,
 
 	/* Verify LSN-ordering invariant */
 	AssertTXNLsnOrder(rb);
+}
+
+/*
+ * ReorderBufferMoveSubTXNs
+ *		Move all subtransactions of subtxn to the top-level txn
+ *
+ * The moved subtransactions have no base snapshot, because only a top-level
+ * txn keeps one.  So it is enough to update their links.
+ *
+ * subtxn->nsubtxns can be larger than the number of entries in its list, so
+ * count the moved ones instead of copying it.
+ */
+static void
+ReorderBufferMoveSubTXNs(ReorderBufferTXN *txn, ReorderBufferTXN *subtxn)
+{
+	dlist_mutable_iter iter;
+
+	dlist_foreach_modify(iter, &subtxn->subtxns)
+	{
+		ReorderBufferTXN *child;
+
+		child = dlist_container(ReorderBufferTXN, node, iter.cur);
+		Assert(child->nsubtxns == 0);
+		Assert(child->base_snapshot == NULL);
+
+		dlist_delete(&child->node);
+		child->toplevel_xid = txn->xid;
+		child->toptxn = txn;
+		dlist_push_tail(&txn->subtxns, &child->node);
+		txn->nsubtxns++;
+	}
+
+	subtxn->nsubtxns = 0;
 }
 
 /*
