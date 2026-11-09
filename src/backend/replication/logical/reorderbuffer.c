@@ -1129,6 +1129,16 @@ ReorderBufferAssignChild(ReorderBuffer *rb, TransactionId xid,
 			 * own.  Only two levels are supported, so move them up.
 			 */
 			ReorderBufferMoveSubTXNs(txn, subtxn);
+
+			/*
+			 * The changes queued so far were accounted to the former
+			 * top-level txn.  Move the total and the flags that decide
+			 * whether the top-level txn can be streamed.
+			 */
+			txn->total_size += subtxn->total_size;
+			subtxn->total_size = 0;
+			txn->txn_flags |= subtxn->txn_flags &
+				(RBTXN_HAS_STREAMABLE_CHANGE | RBTXN_HAS_PARTIAL_CHANGE);
 		}
 	}
 
