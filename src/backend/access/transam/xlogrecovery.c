@@ -1859,22 +1859,6 @@ PerformWalRecovery(void)
 			 * at end of recovery.
 			 */
 
-			/*
-			 * Pass the exact stop-boundary metadata to extensions so they can
-			 * synchronize custom replay state against the record that caused
-			 * recovery to stop.
-			 */
-			if (RecoveryTargetReachedHook != NULL)
-			{
-				RecoveryTargetReachedInfo recoveryTargetReachedInfo;
-
-				recoveryTargetReachedInfo.recoveryStopAfter = recoveryStopAfter;
-				recoveryTargetReachedInfo.recordPtr = xlogreader->ReadRecPtr;
-				recoveryTargetReachedInfo.recordEndPtr = xlogreader->EndRecPtr;
-
-				RecoveryTargetReachedHook(&recoveryTargetReachedInfo);
-			}
-
 			switch (recoveryTargetAction)
 			{
 				case RECOVERY_TARGET_ACTION_SHUTDOWN:
@@ -1888,6 +1872,8 @@ PerformWalRecovery(void)
 					proc_exit(3);
 
 				case RECOVERY_TARGET_ACTION_PAUSE:
+					if (RecoveryPauseSyncHook != NULL)
+						RecoveryPauseSyncHook();
 					SetRecoveryPause(true);
 					recoveryPausesHere(true);
 
@@ -4618,7 +4604,7 @@ GetReplayXlogPtrHookType GetReplayXlogPtrHook = NULL;
 
 RecoveryStopsBeforeHookType RecoveryStopsBeforeHook = NULL;
 
-RecoveryTargetReachedHookType RecoveryTargetReachedHook = NULL;
+RecoveryPauseSyncHookType RecoveryPauseSyncHook = NULL;
 
 /*
  * Get effective latest redo apply position.
