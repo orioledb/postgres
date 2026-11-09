@@ -814,6 +814,22 @@ make_new_heap(Oid OIDOldHeap, Oid NewTableSpace, Oid NewAccessMethod,
 		ReleaseSysCache(tuple);
 	}
 
+	/*
+	 * Give a table AM that manages its own physical storage (e.g. orioledb) a
+	 * chance to prepare the new heap's storage before the caller fills it.
+	 * make_new_heap() is the single chokepoint for all rewrite callers
+	 * (cluster, REFRESH MATERIALIZED VIEW, ALTER TABLE rewrite), so an AM that
+	 * needs, for example, a primary index tree to exist before the native fill
+	 * can create it here.  Heap AM leaves this callback unset (no-op).
+	 */
+	{
+		Relation	newheap;
+
+		newheap = table_open(OIDNewHeap, NoLock);
+		table_relation_begin_heap_rewrite(OldHeap, newheap);
+		table_close(newheap, NoLock);
+	}
+
 	table_close(OldHeap, NoLock);
 
 	return OIDNewHeap;
@@ -1479,6 +1495,23 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 	 */
 	if (is_system_catalog)
 		CacheInvalidateCatalog(OIDOldHeap);
+
+	/*
+	 * Notify a table AM that manages its own physical storage that the relation
+	 * files have been swapped, before PostgreSQL rebuilds the indexes.
+	 */
+	{
+		Relation	oldrel = table_open(OIDOldHeap, NoLock);
+		Relation	newrel = table_open(OIDNewHeap, NoLock);
+
+		table_relation_finish_heap_swap(oldrel, newrel,
+												 swap_toast_by_content,
+													 is_internal, frozenXid,
+													 cutoffMulti,
+													 newrelpersistence);
+		table_close(oldrel, NoLock);
+		table_close(newrel, NoLock);
+	}
 
 	/*
 	 * Rebuild each index on the relation (but not the toast table, which is
