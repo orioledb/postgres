@@ -218,6 +218,13 @@ PgStat_LocalState pgStatLocal;
  */
 bool		pgstat_report_fixed = false;
 
+/*
+ * pgstat_pending_generation increments everytime when a pending stats are
+ * freed.  Anything that holds PgStat_Tablestatus can tell that its pointer
+ * may have gone and should refetch it.
+ */
+uint64		pgstat_pending_generation = 1;
+
 /* ----------
  * Local data
  *
@@ -1332,6 +1339,9 @@ pgstat_delete_pending_entry(PgStat_EntryRef *entry_ref)
 	entry_ref->pending = NULL;
 
 	dlist_delete(&entry_ref->pending_node);
+
+	/* Tell holders of PgStat_TableStatus pointers that this entry is gone.  */
+	pgstat_pending_generation++;
 }
 
 /*

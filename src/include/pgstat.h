@@ -713,6 +713,9 @@ extern void pgstat_report_analyze(Relation rel,
 			(rel)->pgstat_info->counts.blocks_hit++;				\
 	} while (0)
 
+extern PgStat_TableStatus *pgstat_prep_relation_pending(Oid rel_id, bool isshared);
+extern PGDLLIMPORT uint64 pgstat_pending_generation;
+
 extern void pgstat_count_heap_insert(Relation rel, PgStat_Counter n);
 extern void pgstat_count_heap_update(Relation rel, bool hot, bool newpage);
 extern void pgstat_count_heap_delete(Relation rel);
