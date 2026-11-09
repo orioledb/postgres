@@ -188,6 +188,7 @@ typedef struct ReorderBufferChange
 #define RBTXN_HAS_STREAMABLE_CHANGE		0x0100
 #define RBTXN_DISTR_INVAL_OVERFLOWED	0x0200
 #define RBTXN_DISTR_SKIP_CLEANUP		0x0400
+#define RBTXN_DISTR_SYNTHETIC			0x0800
 
 /* Does the transaction have catalog changes? */
 #define rbtxn_has_catalog_changes(txn) \
@@ -255,6 +256,16 @@ typedef struct ReorderBufferChange
 #define rbtxn_distr_inval_overflowed(txn) \
 ( \
 	((txn)->txn_flags & RBTXN_DISTR_INVAL_OVERFLOWED) != 0 \
+)
+
+/*
+ * Is the xid made up by an extension?  Such an xid is unknown to the clog and
+ * the procarray, so its status can't be checked, and the transaction can't be
+ * streamed as a top-level one.
+ */
+#define rbtxn_is_synthetic(txn) \
+( \
+	((txn)->txn_flags & RBTXN_DISTR_SYNTHETIC) != 0 \
 )
 
 /* Is this a top-level transaction? */
