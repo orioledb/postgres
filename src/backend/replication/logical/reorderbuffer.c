@@ -796,7 +796,8 @@ ReorderBufferProcessPartialChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 	if (ReorderBufferCanStartStreaming(rb) &&
 		!(rbtxn_has_partial_change(toptxn)) &&
 		rbtxn_is_serialized(txn) &&
-		rbtxn_has_streamable_change(toptxn))
+		rbtxn_has_streamable_change(toptxn) &&
+		!rbtxn_is_synthetic(toptxn))
 		ReorderBufferStreamTXN(rb, toptxn);
 }
 
@@ -2261,7 +2262,15 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 			if (streaming || rbtxn_prepared(change->txn))
 			{
 				curtxn = change->txn;
-				SetupCheckXidLive(curtxn->xid);
+
+				/*
+				 * A synthetic subtransaction has no status to check, so watch
+				 * the top-level transaction, which it aborts with.
+				 */
+				if (rbtxn_is_synthetic(curtxn))
+					SetupCheckXidLive(txn->xid);
+				else
+					SetupCheckXidLive(curtxn->xid);
 			}
 
 			switch (change->action)
@@ -3806,9 +3815,10 @@ ReorderBufferLargestStreamableTopTXN(ReorderBuffer *rb)
 		/* base_snapshot must be set */
 		Assert(txn->base_snapshot != NULL);
 
+		/* a synthetic top-level txn can only be spilled */
 		if ((largest == NULL || txn->total_size > largest_size) &&
 			(txn->total_size > 0) && !(rbtxn_has_partial_change(txn)) &&
-			rbtxn_has_streamable_change(txn))
+			rbtxn_has_streamable_change(txn) && !rbtxn_is_synthetic(txn))
 		{
 			largest = txn;
 			largest_size = txn->total_size;
