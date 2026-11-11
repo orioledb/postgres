@@ -22,6 +22,7 @@ SUBDIRS = \
 		  test_ddl_deparse \
 		  test_escape \
 		  test_extensions \
+		  test_fmgr_abi \
 		  test_ginpostinglist \
 		  test_integerset \
 		  test_lfind \
