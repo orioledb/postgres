@@ -57,7 +57,7 @@
  * version.  Example: "ACME Postgres/1.2".  Note that the string will appear
  * in a user-facing error message if an ABI mismatch is detected.
  */
-#define FMGR_ABI_EXTRA		"PostgreSQL"
+#define FMGR_ABI_EXTRA		"OrioleDB PostgreSQL"
 
 /*
  * Maximum number of columns in an index.  There is little point in making
