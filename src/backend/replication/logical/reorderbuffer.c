@@ -1777,16 +1777,6 @@ ReorderBufferCheckAndTruncateAbortedTXN(ReorderBuffer *rb, ReorderBufferTXN *txn
 		return false;
 
 	/*
-	 * An extension that decodes under xids of its own sets this flag: CLOG
-	 * knows nothing about such xids, and the extension aborts the transaction
-	 * itself.  It also covers the real heap xid of a transaction that wrote
-	 * both heap and extension tables, which then keeps its changes until its
-	 * abort record.
-	 */
-	if (txn->txn_flags & RBTXN_DISTR_SKIP_CLEANUP)
-		return false;
-
-	/*
 	 * Quick return if the transaction status is already known.
 	 */
 
@@ -1799,6 +1789,16 @@ ReorderBufferCheckAndTruncateAbortedTXN(ReorderBuffer *rb, ReorderBufferTXN *txn
 
 		return true;
 	}
+
+	/*
+	 * An extension that decodes under xids of its own sets this flag: CLOG
+	 * knows nothing about such xids, and the extension aborts the transaction
+	 * itself.  It also covers the real heap xid of a transaction that wrote
+	 * both heap and extension tables, which then keeps its changes until its
+	 * abort record.
+	 */
+	if (txn->txn_flags & RBTXN_DISTR_SKIP_CLEANUP)
+		return false;
 
 	/* Otherwise, check the transaction status using CLOG lookup */
 
