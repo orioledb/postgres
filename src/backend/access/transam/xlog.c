@@ -462,7 +462,7 @@ typedef struct XLogCtlData
 	XLogwrtRqst LogwrtRqst;
 	XLogRecPtr	RedoRecPtr;		/* a recent copy of Insert->RedoRecPtr */
 	FullTransactionId ckptFullXid;	/* nextXid of latest checkpoint */
-	XLogRecPtr	asyncXactLSN;	/* LSN of newest async commit/abort */
+	pg_atomic_uint64 asyncXactLSN;	/* LSN of newest async commit/abort */
 	XLogRecPtr	replicationSlotMinLSN;	/* oldest LSN needed by any slot */
 
 	XLogSegNo	lastRemovedSegNo;	/* latest removed/recycled XLOG segment */
@@ -2621,21 +2621,19 @@ XLogSetAsyncXactLSN(XLogRecPtr asyncXactLSN)
 	XLogRecPtr	WriteRqstPtr = asyncXactLSN;
 	bool		sleeping;
 	bool		wakeup = false;
-	XLogRecPtr	prevAsyncXactLSN;
-
-	SpinLockAcquire(&XLogCtl->info_lck);
-	sleeping = XLogCtl->WalWriterSleeping;
-	prevAsyncXactLSN = XLogCtl->asyncXactLSN;
-	if (XLogCtl->asyncXactLSN < asyncXactLSN)
-		XLogCtl->asyncXactLSN = asyncXactLSN;
-	SpinLockRelease(&XLogCtl->info_lck);
 
 	/*
 	 * If somebody else already called this function with a more aggressive
-	 * LSN, they will have done what we needed (and perhaps more).
+	 * LSN, they will have done what we needed (and perhaps more).  Every
+	 * async commit comes here, so don't take a lock for that.
 	 */
-	if (asyncXactLSN <= prevAsyncXactLSN)
+	if (pg_atomic_read_u64(&XLogCtl->asyncXactLSN) >= asyncXactLSN ||
+		pg_atomic_monotonic_advance_u64(&XLogCtl->asyncXactLSN,
+										asyncXactLSN) > asyncXactLSN)
 		return;
+
+	/* Only a hint: a stale value costs one extra or one missed SetLatch */
+	sleeping = *((volatile bool *) &XLogCtl->WalWriterSleeping);
 
 	/*
 	 * If the WALWriter is sleeping, kick it to make it come out of low-power
@@ -3000,9 +2998,7 @@ XLogBackgroundFlush(void)
 	RefreshXLogWriteResult(LogwrtResult);
 	if (WriteRqst.Write <= LogwrtResult.Flush)
 	{
-		SpinLockAcquire(&XLogCtl->info_lck);
-		WriteRqst.Write = XLogCtl->asyncXactLSN;
-		SpinLockRelease(&XLogCtl->info_lck);
+		WriteRqst.Write = pg_atomic_read_u64(&XLogCtl->asyncXactLSN);
 		flexible = false;		/* ensure it all gets written */
 	}
 
@@ -4980,6 +4976,7 @@ XLOGShmemInit(void)
 	SpinLockInit(&XLogCtl->Insert.insertpos_lck);
 	SpinLockInit(&XLogCtl->info_lck);
 	pg_atomic_init_u64(&XLogCtl->logInsertResult, InvalidXLogRecPtr);
+	pg_atomic_init_u64(&XLogCtl->asyncXactLSN, InvalidXLogRecPtr);
 	pg_atomic_init_u64(&XLogCtl->logWriteResult, InvalidXLogRecPtr);
 	pg_atomic_init_u64(&XLogCtl->logFlushResult, InvalidXLogRecPtr);
 	pg_atomic_init_u64(&XLogCtl->unloggedLSN, InvalidXLogRecPtr);
@@ -9617,6 +9614,13 @@ SetWalWriterSleeping(bool sleeping)
 	SpinLockAcquire(&XLogCtl->info_lck);
 	XLogCtl->WalWriterSleeping = sleeping;
 	SpinLockRelease(&XLogCtl->info_lck);
+
+	/*
+	 * XLogSetAsyncXactLSN() advances asyncXactLSN and then reads this flag
+	 * without the lock; order our flag store before the walwriter's next read
+	 * of asyncXactLSN, or a commit could miss waking it.
+	 */
+	pg_memory_barrier();
 }
 
 void (*RedoShutdownHook) (void) = NULL;
