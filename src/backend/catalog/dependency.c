@@ -1598,7 +1598,29 @@ AcquireDeletionLock(const ObjectAddress *object, int flags)
 		if (flags & PERFORM_DELETION_CONCURRENTLY)
 			LockRelationOid(object->objectId, ShareUpdateExclusiveLock);
 		else
+		{
+			/*
+			 * If this relation is an index, lock the parent table first.
+			 * index_drop() will need this anyway, and since regular queries
+			 * and autovacuum lock tables before their indexes, we risk
+			 * deadlock if we do it the other way around.  This mirrors the
+			 * logic in RangeVarCallbackForDropRelation(), which does the same
+			 * for explicit DROP INDEX but does not cover CASCADE drops that
+			 * arrive through dependency.c.
+			 */
+			char		relkind = get_rel_relkind(object->objectId);
+
+			if (relkind == RELKIND_INDEX ||
+				relkind == RELKIND_PARTITIONED_INDEX)
+			{
+				Oid			heapOid = IndexGetRelation(object->objectId, true);
+
+				if (OidIsValid(heapOid))
+					LockRelationOid(heapOid, AccessExclusiveLock);
+			}
+
 			LockRelationOid(object->objectId, AccessExclusiveLock);
+		}
 	}
 	else if (object->classId == AuthMemRelationId)
 		LockSharedObject(object->classId, object->objectId, 0,
