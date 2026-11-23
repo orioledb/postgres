@@ -11,6 +11,7 @@
 
 #include "catalog/pg_type_d.h"
 #include "common/connect.h"
+#include "common/string.h"
 #include "datapagemap.h"
 #include "file_ops.h"
 #include "filemap.h"
@@ -298,7 +299,16 @@ libpq_traverse_files(rewind_source *source, process_file_callback_t callback)
 		link_target = PQgetvalue(res, i, 3);
 
 		if (link_target[0])
-			type = FILE_TYPE_SYMLINK;
+		{
+			/*
+			 * In-place tablespaces are directories located in pg_tblspc/ with
+			 * relative paths.
+			 */
+			if (is_absolute_path(link_target))
+				type = FILE_TYPE_SYMLINK;
+			else
+				type = FILE_TYPE_DIRECTORY;
+		}
 		else if (isdir)
 			type = FILE_TYPE_DIRECTORY;
 		else
