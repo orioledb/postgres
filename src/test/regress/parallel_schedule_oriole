@@ -66,7 +66,7 @@ test: select_into select_distinct select_implicit select_having subselect union 
 # ----------
 # Another group of parallel tests
 # ----------
-test: gin gist spgist privileges init_privs security_label collate lock object_address groupingsets drop_operator password identity generated_stored generated_virtual join_hash
+test: gin gist spgist privileges init_privs security_label collate lock object_address groupingsets drop_operator password identity generated_stored join_hash
 
 # ----------
 # Additional BRIN tests
@@ -78,7 +78,7 @@ test: brin_bloom brin_multi
 # psql depends on create_am
 # amutils depends on geometry, create_index_spgist, hash_index, brin
 # ----------
-test: create_table_like alter_generic alter_operator misc async dbsize merge misc_functions sysviews tsrf collate.utf8 collate.icu.utf8 incremental_sort create_role
+test: create_table_like alter_generic alter_operator misc async dbsize merge misc_functions sysviews tsrf collate.utf8 collate.icu.utf8 incremental_sort create_role generated_virtual
 
 # collate.linux.utf8 and collate.icu.utf8 tests cannot be run in parallel with each other
 test: rules psql psql_crosstab stats_ext collate.linux.utf8 collate.windows.win1252
