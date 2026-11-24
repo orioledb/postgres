@@ -131,6 +131,7 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->aminsert = NULL;
 	amroutine->aminsertextended = btinsert;
 	amroutine->aminsertcleanup = NULL;
+	amroutine->aminsertmulti = NULL;
 	amroutine->ambulkdelete = btbulkdelete;
 	amroutine->amvacuumcleanup = btvacuumcleanup;
 	amroutine->amcanreturn = btcanreturn;

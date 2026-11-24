@@ -135,6 +135,7 @@ blhandler(PG_FUNCTION_ARGS)
 	amroutine->aminsert = NULL;
 	amroutine->aminsertextended = blinsert;
 	amroutine->aminsertcleanup = NULL;
+	amroutine->aminsertmulti = NULL;
 	amroutine->ambulkdelete = blbulkdelete;
 	amroutine->amvacuumcleanup = blvacuumcleanup;
 	amroutine->amcanreturn = NULL;
