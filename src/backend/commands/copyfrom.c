@@ -24,8 +24,10 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
+#include "access/genam.h"
 #include "access/heapam.h"
 #include "access/htup_details.h"
+#include "access/sysattr.h"
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "access/xlog.h"
@@ -46,6 +48,7 @@
 #include "pgstat.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/fd.h"
+#include "storage/predicate.h"
 #include "tcop/tcopprot.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -302,6 +305,112 @@ CopyMultiInsertInfoIsEmpty(CopyMultiInsertInfo *miinfo)
 }
 
 /*
+ * Try to insert index entries for all slots using the batched path,
+ * fire AFTER ROW INSERT triggers, and clear the slots.
+ *
+ * Returns true if batching was used, false if the caller should fall back
+ * to per-row ExecInsertIndexTuples.  Batching requires every index to
+ * provide aminsertmulti and have no predicate, exclusion constraint, or
+ * deferred unique constraint.  This is all-or-nothing because
+ * ExecInsertIndexTuples handles all indexes at once and has no way to
+ * skip a subset; per-index splitting would require duplicating its logic.
+ *
+ * estate is passed through to aminsertmulti so that expression
+ * indexes can evaluate their expressions via FormIndexDatum.
+ */
+static bool
+CopyTryMultiInsertIndexes(ResultRelInfo *resultRelInfo,
+						  TupleTableSlot **slots, int nslots,
+						  EState *estate, CopyFromState cstate,
+						  uint64 *linenos)
+{
+	Relation	heapRelation = resultRelInfo->ri_RelationDesc;
+	int			numIndices = resultRelInfo->ri_NumIndices;
+	RelationPtr indexDescs = resultRelInfo->ri_IndexRelationDescs;
+	IndexInfo **indexInfoArray = resultRelInfo->ri_IndexRelationInfo;
+	bool		useRowid;
+	Datum	   *tupleidsDatum;
+
+	if (numIndices <= 0)
+		return false;
+
+	for (int idx = 0; idx < numIndices; idx++)
+	{
+		Relation	indexRel = indexDescs[idx];
+		IndexInfo  *indexInfo = indexInfoArray[idx];
+
+		if (indexRel == NULL || !indexInfo->ii_ReadyForInserts)
+			continue;
+		if (!indexRel->rd_indam->aminsertmulti ||
+			indexInfo->ii_Predicate != NIL ||
+			indexInfo->ii_ExclusionOps != NULL ||
+			(indexRel->rd_index->indisunique &&
+			 !indexRel->rd_index->indimmediate))
+			return false;
+	}
+
+	useRowid = (table_get_row_ref_type(heapRelation) == ROW_REF_ROWID);
+	tupleidsDatum = (Datum *) palloc(sizeof(Datum) * nslots);
+	for (int i = 0; i < nslots; i++)
+	{
+		if (useRowid)
+		{
+			bool		isnull;
+
+			tupleidsDatum[i] = slot_getsysattr(slots[i],
+											   RowIdAttributeNumber,
+											   &isnull);
+			Assert(!isnull);
+		}
+		else
+		{
+			Assert(ItemPointerIsValid(&slots[i]->tts_tid));
+			tupleidsDatum[i] = ItemPointerGetDatum(&slots[i]->tts_tid);
+		}
+	}
+
+	for (int idx = 0; idx < numIndices; idx++)
+	{
+		Relation	indexRel = indexDescs[idx];
+		IndexInfo  *indexInfo = indexInfoArray[idx];
+		IndexUniqueCheck checkUnique;
+
+		if (indexRel == NULL || !indexInfo->ii_ReadyForInserts)
+			continue;
+
+		if (!indexRel->rd_index->indisunique)
+			checkUnique = UNIQUE_CHECK_NO;
+		else
+			checkUnique = UNIQUE_CHECK_YES;
+
+		if (!(indexRel->rd_indam->ampredlocks))
+			CheckForSerializableConflictIn(indexRel,
+										   (ItemPointer) NULL,
+										   InvalidBlockNumber);
+
+		indexRel->rd_indam->aminsertmulti(indexRel,
+										  slots, nslots,
+										  tupleidsDatum,
+										  heapRelation,
+										  checkUnique,
+										  indexInfo,
+										  estate);
+	}
+	pfree(tupleidsDatum);
+
+	for (int i = 0; i < nslots; i++)
+	{
+		cstate->cur_lineno = linenos[i];
+		ExecARInsertTriggers(estate, resultRelInfo,
+							 slots[i], NIL,
+							 cstate->transition_capture);
+		ExecClearTuple(slots[i]);
+	}
+
+	return true;
+}
+
+/*
  * Write the tuples stored in 'buffer' out to the table.
  */
 static inline void
@@ -421,6 +530,11 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 						   buffer->bistate);
 		MemoryContextSwitchTo(oldcontext);
 
+		/* Try the batched index insert path. */
+		if (CopyTryMultiInsertIndexes(resultRelInfo, slots, nused,
+									  estate, cstate, buffer->linenos))
+			goto done_insert;
+
 		for (i = 0; i < nused; i++)
 		{
 			/*
@@ -458,6 +572,7 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 
 			ExecClearTuple(slots[i]);
 		}
+done_insert:
 
 		/* Update the row counter and progress of the COPY command */
 		*processed += nused;

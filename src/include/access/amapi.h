@@ -23,7 +23,9 @@ struct PlannerInfo;
 struct IndexPath;
 
 /* Likewise, this file shouldn't depend on execnodes.h. */
+struct EState;
 struct IndexInfo;
+struct TupleTableSlot;
 
 
 /*
@@ -150,6 +152,20 @@ typedef bool (*amdelete_function) (Relation indexRelation,
 								   Datum tupleid,
 								   Relation heapRelation,
 								   struct IndexInfo *indexInfo);
+
+/*
+ * Insert index tuples for a batch of heap rows at once.  estate is the
+ * executor state for evaluating index expressions (may be NULL when no
+ * index in the relation uses expressions).
+ */
+typedef void (*aminsertmulti_function) (Relation indexRelation,
+										struct TupleTableSlot **slots,
+										int nslots,
+										Datum *tupleidsDatum,
+										Relation heapRelation,
+										IndexUniqueCheck checkUnique,
+										struct IndexInfo *indexInfo,
+										struct EState *estate);
 
 /* bulk delete */
 typedef IndexBulkDeleteResult *(*ambulkdelete_function) (IndexVacuumInfo *info,
@@ -307,6 +323,7 @@ typedef struct IndexAmRoutine
 	ambuildempty_function ambuildempty;
 	aminsert_function aminsert;
 	aminsert_extended_function aminsertextended;
+	aminsertmulti_function aminsertmulti;	/* can be NULL */
 	amupdate_function amupdate;
 	amdelete_function amdelete;
 	ambulkdelete_function ambulkdelete;
