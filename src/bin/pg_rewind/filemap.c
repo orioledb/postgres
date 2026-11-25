@@ -94,6 +94,11 @@ static int	final_filemap_cmp(const void *a, const void *b);
 
 static bool check_file_excluded(const char *path, bool is_source);
 
+static bool check_file_excluded_by_extension(const char *path, bool is_source);
+static bool is_extension_dir(const char *path);
+static size_t tablespace_root_length(const char *path);
+static const char *tablespace_relative_path(const char *path);
+
 /*
  * Definition of one element part of an exclusion list, used to exclude
  * contents when rewinding.  "name" is the name of the file or path to
@@ -318,14 +323,42 @@ process_target_file(const char *path, file_type_t type, size_t size,
 					const char *link_target)
 {
 	file_entry_t *entry;
+	bool keep;
 
 	/*
 	 * Do not apply any exclusion filters here.  This has advantage to remove
 	 * from the target data folder all paths which have been filtered out from
 	 * the source data folder when processing the source files.
+	 *
+	 * The exception is the directories that extensions rewind themselves.
+	 * They must be left alone in the target too, unless they are in a
+	 * tablespace that the source does not have: that tablespace is removed
+	 * as a whole.  The source files are already handled, so it is known
+	 * which tablespaces the source has.
 	 */
-	if (check_file_excluded(path, false))
-		return;
+	keep = check_file_excluded_by_extension(path, false);
+	if (!keep && is_extension_dir(path))
+	{
+		entry = lookup_filehash_entry(path);
+		keep = (entry == NULL || !entry->source_exists);
+	}
+
+	if (keep)
+	{
+		size_t rootlen = tablespace_root_length(path);
+		char root [MAXPGPATH];
+
+		if (rootlen == 0)
+			return;
+
+		strlcpy(root, path, rootlen + 1);
+		entry = lookup_filehash_entry(root);
+		if (entry != NULL && entry->source_exists)
+			return;
+
+		pg_log_debug("entry \"%s\" is in a tablespace missing in the source",
+					 path);
+	}
 
 	/*
 	 * Like in process_source_file, pretend that pg_wal is always a directory.
@@ -470,28 +503,83 @@ check_file_excluded(const char *path, bool is_source)
 		}
 	}
 
-	/*
-	 * Exclude extensions directories
-	 */
-	if (extensions_exclude.head != NULL)
+	return check_file_excluded_by_extension(path, is_source);
+}
+
+/*
+ * If the path is in a tablespace, the path like
+ * pg_tblspc/<oid>/<TABLESPACE_VERSION_DIRECTORY>/, return the length of its
+ * "pg_tblspc/<oid>" part.
+ *
+ * Return 0 otherwise.
+ */
+static size_t
+tablespace_root_length(const char *path)
+{
+	const char *versiondir = "/" TABLESPACE_VERSION_DIRECTORY "/";
+	size_t		len = sizeof("pg_tblspc/") - 1;
+	size_t		oidlen;
+
+	if (strncmp(path, "pg_tblspc/", len) != 0)
+		return 0;
+
+	/* The OID part.  */
+	oidlen = strspn(path + len, "0123456789");
+	if (oidlen == 0 ||
+		strncmp(path + len + oidlen, versiondir, strlen(versiondir)) != 0)
+		return 0;
+
+	return len + oidlen;
+}
+
+static const char *
+tablespace_relative_path(const char *path)
+{
+	size_t rootlen = tablespace_root_length(path);
+
+	if (rootlen == 0)
+		return path;
+	return path + rootlen + strlen("/" TABLESPACE_VERSION_DIRECTORY "/");
+}
+
+/*
+ * Is this the path of a directory that an extension rewinds itself (see
+ * extensions_exclude_add())?
+ */
+static bool
+is_extension_dir(const char *path)
+{
+	const char *relpath = tablespace_relative_path(path);
+	SimpleStringListCell *cell;
+
+	for (cell = extensions_exclude.head; cell; cell = cell->next)
 	{
-		SimpleStringListCell *cell;
+		if (strcmp(relpath, cell->val) == 0)
+			return true;
+	}
 
-		for (cell = extensions_exclude.head; cell; cell = cell->next)
+	return false;
+}
+/*
+ * Is this the path of a file in a directory that an extension rewinds itself?
+ *
+ * The directories are relative to the data directory, and are looked for in
+ * each tablespace too, under pg_tblspc/<oid>/<TABLESPACE_VERSION_DIRECTORY>.
+ */
+static bool
+check_file_excluded_by_extension(const char *path, bool is_source)
+{
+	char		localpath[MAXPGPATH];
+	const char *relpath = tablespace_relative_path(path);
+	SimpleStringListCell *cell;
+
+	for (cell = extensions_exclude.head; cell; cell = cell->next)
+	{
+		snprintf(localpath, sizeof(localpath), "%s/", cell->val);
+		if (strstr(relpath, localpath) == relpath)
 		{
-			char	   *exclude_dir = cell->val;
-
-			snprintf(localpath, sizeof(localpath), "%s/", exclude_dir);
-			if (strstr(path, localpath) == path)
-			{
-				if (is_source)
-					pg_log_debug("entry \"%s\" excluded from source file list",
-								 path);
-				else
-					pg_log_debug("entry \"%s\" excluded from target file list",
-								 path);
-				return true;
-			}
+			pg_log_debug("entry \"%s\" excluded from source file list", path);
+			return true;
 		}
 	}
 
