@@ -92,6 +92,7 @@ gisthandler(PG_FUNCTION_ARGS)
 	amroutine->aminsert = NULL;
 	amroutine->aminsertextended = gistinsert;
 	amroutine->aminsertcleanup = NULL;
+	amroutine->aminsertmulti = NULL;
 	amroutine->ambulkdelete = gistbulkdelete;
 	amroutine->amvacuumcleanup = gistvacuumcleanup;
 	amroutine->amcanreturn = gistcanreturn;

@@ -283,6 +283,7 @@ brinhandler(PG_FUNCTION_ARGS)
 	amroutine->aminsert = NULL;
 	amroutine->aminsertextended = brininsert;
 	amroutine->aminsertcleanup = brininsertcleanup;
+	amroutine->aminsertmulti = NULL;
 	amroutine->ambulkdelete = brinbulkdelete;
 	amroutine->amvacuumcleanup = brinvacuumcleanup;
 	amroutine->amcanreturn = NULL;
